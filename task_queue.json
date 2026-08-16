@@ -1,0 +1,27 @@
+[
+  {
+    "id": "task_daily_report_001",
+    "title": "Generate daily JSON report",
+    "command": ["python3", "worker_report.py"],
+    "priority": 1,
+    "depends_on": [],
+    "max_retries": 2
+  },
+  {
+    "id": "task_validate_report_002",
+    "title": "Validate daily JSON report",
+    "command": ["python3", "worker_validate.py"],
+    "priority": 2,
+    "depends_on": ["task_daily_report_001"],
+    "max_retries": 1
+  },
+  {
+    "id": "task_approval_demo_006",
+    "title": "Execute human-approved action",
+    "command": ["python3", "worker_approved_action.py"],
+    "priority": 3,
+    "depends_on": ["task_validate_report_002"],
+    "requires_approval": true,
+    "max_retries": 1
+  }
+]

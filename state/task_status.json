@@ -1,0 +1,58 @@
+{
+  "task_daily_report_001": {
+    "id": "task_daily_report_001",
+    "title": "Generate daily JSON report",
+    "status": "done",
+    "attempt": 1,
+    "started_at": "2026-08-16T20:58:29",
+    "finished_at": "2026-08-16T20:58:29",
+    "output": "Worker completed successfully: output/report.json"
+  },
+  "task_validate_report_002": {
+    "id": "task_validate_report_002",
+    "title": "Validate daily JSON report",
+    "status": "done",
+    "attempt": 1,
+    "started_at": "2026-08-16T20:58:29",
+    "finished_at": "2026-08-16T20:58:29",
+    "output": "Report passed validation."
+  },
+  "task_failure_test_003": {
+    "id": "task_failure_test_003",
+    "title": "Controlled failure and retry test",
+    "status": "failed",
+    "attempt": 3,
+    "started_at": "2026-08-16T21:51:10",
+    "error": "Controlled failure test: this worker is designed to fail.",
+    "finished_at": "2026-08-16T21:51:10"
+  },
+  "task_blocked_test_004": {
+    "id": "task_blocked_test_004",
+    "title": "Task that must be blocked after failed dependency",
+    "status": "blocked",
+    "attempt": 0,
+    "updated_at": "2026-08-16T21:51:10"
+  },
+  "task_approval_demo_005": {
+    "id": "task_approval_demo_005",
+    "title": "Execute human-approved action",
+    "status": "done",
+    "attempt": 1,
+    "started_at": "2026-08-16T22:21:10",
+    "finished_at": "2026-08-16T22:21:10",
+    "output": "Approved action completed: output/approved_action.json"
+  },
+  "task_approval_demo_006": {
+    "id": "task_approval_demo_006",
+    "title": "Execute human-approved action",
+    "status": "done",
+    "attempt": 1,
+    "approval_status": "approved",
+    "updated_at": "2026-08-17T00:44:40",
+    "approved_at": "2026-08-17T00:49:36",
+    "approved_by": "local_terminal_user",
+    "started_at": "2026-08-17T00:49:51",
+    "finished_at": "2026-08-17T00:49:51",
+    "output": "Approved action completed: output/approved_action.json"
+  }
+}

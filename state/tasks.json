@@ -1,0 +1,13 @@
+{
+  "id": "task_daily_report_001",
+  "title": "Generate daily JSON report",
+  "command": [
+    "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+    "worker_report.py"
+  ],
+  "status": "done",
+  "max_retries": 2,
+  "attempt": 1,
+  "finished_at": "2026-08-16T20:34:15",
+  "output": "Worker completed successfully: output/report.json"
+}
