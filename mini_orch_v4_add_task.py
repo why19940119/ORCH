@@ -291,13 +291,7 @@ def show_status():
     print(f"Total tasks in current queue: {len(tasks)}")
 
 
-def add_task(
-    task_id,
-    title,
-    command_text,
-    priority_text,
-    requires_approval=False,
-):
+def add_task(task_id, title, command_text, priority_text):
     tasks = load_json(QUEUE_FILE, [])
 
     if any(task["id"] == task_id for task in tasks):
@@ -323,7 +317,6 @@ def add_task(
         "priority": priority,
         "depends_on": [],
         "max_retries": 1,
-        "requires_approval": requires_approval,
     }
 
     tasks.append(task)
@@ -337,10 +330,7 @@ def add_task(
     print(f"  Command: {command}")
     print(f"  Priority: {priority}")
     print("  Dependencies: none")
-    print(
-        "  Approval required: "
-        + ("yes" if requires_approval else "no")
-    )
+    print("  Approval required: no")
 
 
 def main():
@@ -356,24 +346,12 @@ def main():
         approve_task(sys.argv[2])
         return
 
-    if len(sys.argv) in (6, 7) and sys.argv[1] == "add-task":
-        requires_approval = False
-
-        if len(sys.argv) == 7:
-            if sys.argv[6] != "--approval":
-                print(
-                    "Add task failed: optional flag must be --approval."
-                )
-                return
-
-            requires_approval = True
-
+    if len(sys.argv) == 6 and sys.argv[1] == "add-task":
         add_task(
             sys.argv[2],
             sys.argv[3],
             sys.argv[4],
             sys.argv[5],
-            requires_approval,
         )
         return
 
@@ -382,10 +360,6 @@ def main():
     print("  python3 mini_orch.py status")
     print("  python3 mini_orch.py approve <task_id>")
     print("  python3 mini_orch.py add-task <id> <title> <command> <priority>")
-    print(
-        "  python3 mini_orch.py add-task "
-        "<id> <title> <command> <priority> --approval"
-    )
 
 
 if __name__ == "__main__":

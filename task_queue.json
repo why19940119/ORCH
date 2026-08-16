@@ -47,5 +47,17 @@
     "priority": 4,
     "depends_on": [],
     "max_retries": 1
+  },
+  {
+    "id": "task_approval_note_008",
+    "title": "Create approved Task 008 artifact",
+    "command": [
+      "python3",
+      "worker_approval_note_008.py"
+    ],
+    "priority": 5,
+    "depends_on": [],
+    "max_retries": 1,
+    "requires_approval": true
   }
 ]
