@@ -1,5 +1,4 @@
 import sys
-import shlex
 from datetime import datetime
 from pathlib import Path
 import json
@@ -291,48 +290,6 @@ def show_status():
     print(f"Total tasks in current queue: {len(tasks)}")
 
 
-def add_task(task_id, title, command_text, priority_text):
-    tasks = load_json(QUEUE_FILE, [])
-
-    if any(task["id"] == task_id for task in tasks):
-        print(f"Add task failed: task ID already exists: {task_id}")
-        return
-
-    try:
-        priority = int(priority_text)
-    except ValueError:
-        print("Add task failed: priority must be a whole number.")
-        return
-
-    command = shlex.split(command_text)
-
-    if not command:
-        print("Add task failed: command cannot be empty.")
-        return
-
-    task = {
-        "id": task_id,
-        "title": title,
-        "command": command,
-        "priority": priority,
-        "depends_on": [],
-        "max_retries": 1,
-    }
-
-    tasks.append(task)
-    tasks.sort(key=lambda item: item.get("priority", 999))
-
-    save_json(QUEUE_FILE, tasks)
-
-    print("Task added successfully.")
-    print(f"  ID: {task_id}")
-    print(f"  Title: {title}")
-    print(f"  Command: {command}")
-    print(f"  Priority: {priority}")
-    print("  Dependencies: none")
-    print("  Approval required: no")
-
-
 def main():
     if len(sys.argv) == 1:
         run_queue()
@@ -346,20 +303,10 @@ def main():
         approve_task(sys.argv[2])
         return
 
-    if len(sys.argv) == 6 and sys.argv[1] == "add-task":
-        add_task(
-            sys.argv[2],
-            sys.argv[3],
-            sys.argv[4],
-            sys.argv[5],
-        )
-        return
-
     print("Usage:")
     print("  python3 mini_orch.py")
     print("  python3 mini_orch.py status")
     print("  python3 mini_orch.py approve <task_id>")
-    print("  python3 mini_orch.py add-task <id> <title> <command> <priority>")
 
 
 if __name__ == "__main__":
