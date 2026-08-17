@@ -59,5 +59,19 @@
     "depends_on": [],
     "max_retries": 1,
     "requires_approval": true
+  },
+  {
+    "id": "task_validate_009",
+    "title": "validate task 008 approved artifact",
+    "command": [
+      "python3",
+      "worker_validate_008.py"
+    ],
+    "priority": 6,
+    "depends_on": [
+      "task_approval_note_008"
+    ],
+    "max_retries": 1,
+    "requires_approval": false
   }
 ]

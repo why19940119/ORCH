@@ -297,10 +297,31 @@ def add_task(
     command_text,
     priority_text,
     requires_approval=False,
+    dependencies=None,
 ):
     tasks = load_json(QUEUE_FILE, [])
+    dependencies = dependencies or []
 
-    if any(task["id"] == task_id for task in tasks):
+    if task_id in dependencies:
+        print("Add task failed: a task cannot depend on itself.")
+        return
+
+    existing_ids = {task["id"] for task in tasks}
+
+    missing_dependencies = [
+        dependency
+        for dependency in dependencies
+        if dependency not in existing_ids
+    ]
+
+    if missing_dependencies:
+        print(
+            "Add task failed: dependency task ID does not exist: "
+            + ", ".join(missing_dependencies)
+        )
+        return
+
+    if task_id in existing_ids:
         print(f"Add task failed: task ID already exists: {task_id}")
         return
 
@@ -321,7 +342,7 @@ def add_task(
         "title": title,
         "command": command,
         "priority": priority,
-        "depends_on": [],
+        "depends_on": dependencies,
         "max_retries": 1,
         "requires_approval": requires_approval,
     }
@@ -336,7 +357,10 @@ def add_task(
     print(f"  Title: {title}")
     print(f"  Command: {command}")
     print(f"  Priority: {priority}")
-    print("  Dependencies: none")
+    print(
+        "  Dependencies: "
+        + (", ".join(dependencies) if dependencies else "none")
+    )
     print(
         "  Approval required: "
         + ("yes" if requires_approval else "no")
@@ -356,17 +380,39 @@ def main():
         approve_task(sys.argv[2])
         return
 
-    if len(sys.argv) in (6, 7) and sys.argv[1] == "add-task":
+    if len(sys.argv) >= 6 and sys.argv[1] == "add-task":
         requires_approval = False
+        dependencies = []
+        option_index = 6
 
-        if len(sys.argv) == 7:
-            if sys.argv[6] != "--approval":
-                print(
-                    "Add task failed: optional flag must be --approval."
-                )
-                return
+        while option_index < len(sys.argv):
+            option = sys.argv[option_index]
 
-            requires_approval = True
+            if option == "--approval":
+                requires_approval = True
+                option_index += 1
+                continue
+
+            if option == "--depends-on":
+                if option_index + 1 >= len(sys.argv):
+                    print(
+                        "Add task failed: --depends-on requires a task ID."
+                    )
+                    return
+
+                raw_dependencies = sys.argv[option_index + 1]
+
+                dependencies = [
+                    item.strip()
+                    for item in raw_dependencies.split(",")
+                    if item.strip()
+                ]
+
+                option_index += 2
+                continue
+
+            print(f"Add task failed: unknown option: {option}")
+            return
 
         add_task(
             sys.argv[2],
@@ -374,6 +420,7 @@ def main():
             sys.argv[4],
             sys.argv[5],
             requires_approval,
+            dependencies,
         )
         return
 
@@ -385,6 +432,11 @@ def main():
     print(
         "  python3 mini_orch.py add-task "
         "<id> <title> <command> <priority> --approval"
+    )
+    print(
+        "  python3 mini_orch.py add-task "
+        "<id> <title> <command> <priority> "
+        "--depends-on <task_id[,task_id]>"
     )
 
 
