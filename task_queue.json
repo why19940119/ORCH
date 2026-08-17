@@ -129,5 +129,20 @@
     "max_retries": 1,
     "requires_approval": false,
     "requires_fresh_market_data": true
+  },
+  {
+    "id": "task_market_data_refresh_interface_014",
+    "title": "Revalidate local market snapshot through provider interface",
+    "command": [
+      "python3",
+      "worker_market_data_refresh_interface.py"
+    ],
+    "priority": 14,
+    "depends_on": [
+      "task_validate_market_summary_011"
+    ],
+    "max_retries": 1,
+    "requires_approval": false,
+    "requires_fresh_market_data": false
   }
 ]
