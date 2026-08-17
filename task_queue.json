@@ -99,5 +99,20 @@
     ],
     "max_retries": 1,
     "requires_approval": false
+  },
+  {
+    "id": "task_market_freshness_gate_012",
+    "title": "Evaluate market data freshness gate for alerts and trading",
+    "command": [
+      "python3",
+      "worker_market_freshness_gate.py"
+    ],
+    "priority": 12,
+    "depends_on": [
+      "task_market_summary_010",
+      "task_validate_market_summary_011"
+    ],
+    "max_retries": 1,
+    "requires_approval": false
   }
 ]
