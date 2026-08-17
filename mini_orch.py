@@ -10,7 +10,6 @@ STATE_DIR = Path("state")
 QUEUE_FILE = Path("task_queue.json")
 STATUS_FILE = STATE_DIR / "task_status.json"
 EVENTS_FILE = STATE_DIR / "events.jsonl"
-FRESHNESS_GATE_FILE = Path("output/market_freshness_gate.json")
 
 
 def now():
@@ -68,39 +67,6 @@ def dependencies_completed(task, statuses):
     return True
 
 
-def market_freshness_allowed(task):
-    if not task.get("requires_fresh_market_data", False):
-        return True, ""
-
-    if not FRESHNESS_GATE_FILE.exists():
-        return False, (
-            "Fresh market data is required, but "
-            "market_freshness_gate.json does not exist."
-        )
-
-    try:
-        gate = json.loads(FRESHNESS_GATE_FILE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        return False, (
-            "Fresh market data is required, but the freshness gate "
-            f"artifact is invalid JSON: {error}"
-        )
-
-    gate_is_open = (
-        gate.get("status") == "success"
-        and gate.get("gate_status") == "open"
-        and gate.get("allow_alerting") is True
-        and gate.get("allow_trading") is True
-    )
-
-    if gate_is_open:
-        return True, ""
-
-    reason = gate.get("message", "Freshness gate is not open.")
-
-    return False, f"Fresh market data policy blocked dispatch: {reason}"
-
-
 def run_task(task, statuses):
     task_id = task["id"]
     task_state = get_task_state(task, statuses)
@@ -116,32 +82,6 @@ def run_task(task, statuses):
         save_json(STATUS_FILE, statuses)
 
         write_event("task_blocked", task, "A dependency has not completed.")
-        return
-
-    market_allowed, market_block_reason = market_freshness_allowed(task)
-
-    if not market_allowed:
-        previous_status = task_state.get("status")
-        previous_block_reason = task_state.get("block_reason")
-
-        task_state["status"] = "blocked"
-        task_state["block_reason"] = market_block_reason
-        task_state["blocked_at"] = now()
-        task_state["updated_at"] = now()
-        statuses[task_id] = task_state
-        save_json(STATUS_FILE, statuses)
-
-        if (
-            previous_status != "blocked"
-            or previous_block_reason != market_block_reason
-        ):
-            write_event("task_blocked", task, market_block_reason)
-        else:
-            print(
-                f"[{now()}] task_blocked: {task_id} - "
-                f"{market_block_reason}"
-            )
-
         return
 
     if task.get("requires_approval", False):
@@ -358,7 +298,6 @@ def add_task(
     priority_text,
     requires_approval=False,
     dependencies=None,
-    requires_fresh_market_data=False,
 ):
     tasks = load_json(QUEUE_FILE, [])
     dependencies = dependencies or []
@@ -406,7 +345,6 @@ def add_task(
         "depends_on": dependencies,
         "max_retries": 1,
         "requires_approval": requires_approval,
-        "requires_fresh_market_data": requires_fresh_market_data,
     }
 
     tasks.append(task)
@@ -427,10 +365,6 @@ def add_task(
         "  Approval required: "
         + ("yes" if requires_approval else "no")
     )
-    print(
-        "  Fresh market data required: "
-        + ("yes" if requires_fresh_market_data else "no")
-    )
 
 
 def main():
@@ -449,7 +383,6 @@ def main():
     if len(sys.argv) >= 6 and sys.argv[1] == "add-task":
         requires_approval = False
         dependencies = []
-        requires_fresh_market_data = False
         option_index = 6
 
         while option_index < len(sys.argv):
@@ -457,11 +390,6 @@ def main():
 
             if option == "--approval":
                 requires_approval = True
-                option_index += 1
-                continue
-
-            if option == "--requires-fresh-market-data":
-                requires_fresh_market_data = True
                 option_index += 1
                 continue
 
@@ -493,7 +421,6 @@ def main():
             sys.argv[5],
             requires_approval,
             dependencies,
-            requires_fresh_market_data,
         )
         return
 
@@ -510,11 +437,6 @@ def main():
         "  python3 mini_orch.py add-task "
         "<id> <title> <command> <priority> "
         "--depends-on <task_id[,task_id]>"
-    )
-    print(
-        "  python3 mini_orch.py add-task "
-        "<id> <title> <command> <priority> "
-        "--requires-fresh-market-data"
     )
 
 
