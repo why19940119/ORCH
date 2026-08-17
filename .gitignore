@@ -1,2 +1,9 @@
 __pycache__/
 .DS_Store
+
+# Mini ORCH runtime state, audit logs, generated artifacts, and local backups
+state/events.jsonl
+state/task_status.json
+output/*.json
+*.bak
+__pycache__/

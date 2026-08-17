@@ -73,5 +73,31 @@
     ],
     "max_retries": 1,
     "requires_approval": false
+  },
+  {
+    "id": "task_market_summary_010",
+    "title": "Create read-only stock radar market summary",
+    "command": [
+      "python3",
+      "worker_market_summary.py"
+    ],
+    "priority": 10,
+    "depends_on": [],
+    "max_retries": 1,
+    "requires_approval": false
+  },
+  {
+    "id": "task_validate_market_summary_011",
+    "title": "validate stock radar market summary safety and structure",
+    "command": [
+      "python3",
+      "worker_validate_market_summary.py"
+    ],
+    "priority": 11,
+    "depends_on": [
+      "task_market_summary_010"
+    ],
+    "max_retries": 1,
+    "requires_approval": false
   }
 ]
