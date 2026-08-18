@@ -113,5 +113,29 @@
         "artifact": "output/policy_beta.json"
       }
     ]
+  },
+  {
+    "id": "task_json_policy_demo_012",
+    "title": "Verify JSON field policy blocks invalid artifact state",
+    "command": [
+      "python3",
+      "worker_json_policy_probe.py"
+    ],
+    "priority": 12,
+    "depends_on": [],
+    "max_retries": 1,
+    "requires_approval": false,
+    "requires_policies": [
+      {
+        "id": "artifact-exists",
+        "artifact": "output/json_policy_prerequisite.json"
+      },
+      {
+        "id": "json-field-equals",
+        "artifact": "output/json_policy_prerequisite.json",
+        "field": "status",
+        "equals": "approved"
+      }
+    ]
   }
 ]

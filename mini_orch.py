@@ -114,8 +114,123 @@ def evaluate_artifact_exists(policy):
     }
 
 
+def evaluate_json_field_equals(policy):
+    artifact = policy.get("artifact")
+    field = policy.get("field")
+
+    if not isinstance(artifact, str) or not artifact.strip():
+        return {
+            "status": "blocked",
+            "reason": (
+                "json-field-equals policy requires a non-empty "
+                "artifact path."
+            ),
+        }
+
+    if not isinstance(field, str) or not field.strip():
+        return {
+            "status": "blocked",
+            "artifact": artifact,
+            "reason": (
+                "json-field-equals policy requires a non-empty "
+                "field path."
+            ),
+        }
+
+    if "equals" not in policy:
+        return {
+            "status": "blocked",
+            "artifact": artifact,
+            "reason": (
+                "json-field-equals policy requires an equals value."
+            ),
+        }
+
+    artifact_path = Path(artifact)
+
+    if artifact_path.is_absolute():
+        return {
+            "status": "blocked",
+            "reason": (
+                "json-field-equals policy does not allow absolute paths."
+            ),
+        }
+
+    project_root = Path.cwd().resolve()
+    resolved_path = (project_root / artifact_path).resolve()
+
+    if not resolved_path.is_relative_to(project_root):
+        return {
+            "status": "blocked",
+            "reason": (
+                "json-field-equals policy path escapes the project "
+                "directory."
+            ),
+        }
+
+    if not resolved_path.exists():
+        return {
+            "status": "blocked",
+            "artifact": str(artifact_path),
+            "reason": f"Required JSON artifact does not exist: {artifact_path}",
+        }
+
+    if not resolved_path.is_file():
+        return {
+            "status": "blocked",
+            "artifact": str(artifact_path),
+            "reason": f"Required JSON artifact is not a file: {artifact_path}",
+        }
+
+    try:
+        document = json.loads(
+            resolved_path.read_text(encoding="utf-8")
+        )
+    except json.JSONDecodeError as error:
+        return {
+            "status": "blocked",
+            "artifact": str(artifact_path),
+            "reason": f"Required artifact is invalid JSON: {error}",
+        }
+
+    value = document
+
+    for field_part in field.split("."):
+        if not isinstance(value, dict) or field_part not in value:
+            return {
+                "status": "blocked",
+                "artifact": str(artifact_path),
+                "reason": (
+                    "Required JSON field does not exist: "
+                    f"{field}"
+                ),
+            }
+
+        value = value[field_part]
+
+    if value != policy["equals"]:
+        return {
+            "status": "blocked",
+            "artifact": str(artifact_path),
+            "reason": (
+                f"Required JSON field does not match expected value: "
+                f"{field}"
+            ),
+        }
+
+    return {
+        "status": "allowed",
+        "artifact": str(artifact_path),
+        "reason": (
+            "Required JSON field matches expected value: "
+            f"{field}"
+        ),
+    }
+
+
 POLICY_EVALUATORS = {
     "artifact-exists": evaluate_artifact_exists,
+    "json-field-equals": evaluate_json_field_equals,
 }
 
 
@@ -607,6 +722,45 @@ def main():
                 option_index += 2
                 continue
 
+            if option == "--require-json-field":
+                if option_index + 3 >= len(sys.argv):
+                    print(
+                        "Add task failed: --require-json-field requires "
+                        "<artifact> <field> <expected_json>."
+                    )
+                    return
+
+                artifact_path = sys.argv[option_index + 1]
+                field_path = sys.argv[option_index + 2]
+                expected_json = sys.argv[option_index + 3]
+
+                if Path(artifact_path).is_absolute():
+                    print(
+                        "Add task failed: --require-json-field does not "
+                        "allow absolute paths."
+                    )
+                    return
+
+                try:
+                    expected_value = json.loads(expected_json)
+                except json.JSONDecodeError:
+                    print(
+                        "Add task failed: expected_json must be valid JSON."
+                    )
+                    return
+
+                required_policies.append(
+                    {
+                        "id": "json-field-equals",
+                        "artifact": artifact_path,
+                        "field": field_path,
+                        "equals": expected_value,
+                    }
+                )
+
+                option_index += 4
+                continue
+
             if option == "--depends-on":
                 if option_index + 1 >= len(sys.argv):
                     print(
@@ -657,6 +811,11 @@ def main():
         "  python3 mini_orch.py add-task "
         "<id> <title> <command> <priority> "
         "--require-artifact <relative_file_path>"
+    )
+    print(
+        "  python3 mini_orch.py add-task "
+        "<id> <title> <command> <priority> "
+        "--require-json-field <artifact> <field> <expected_json>"
     )
 
 
