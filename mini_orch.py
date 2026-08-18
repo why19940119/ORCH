@@ -67,6 +67,106 @@ def dependencies_completed(task, statuses):
     return True
 
 
+def evaluate_artifact_exists(policy):
+    artifact = policy.get("artifact")
+
+    if not isinstance(artifact, str) or not artifact.strip():
+        return {
+            "status": "blocked",
+            "reason": "artifact-exists policy requires a non-empty artifact path.",
+        }
+
+    artifact_path = Path(artifact)
+
+    if artifact_path.is_absolute():
+        return {
+            "status": "blocked",
+            "reason": "artifact-exists policy does not allow absolute paths.",
+        }
+
+    project_root = Path.cwd().resolve()
+    resolved_path = (project_root / artifact_path).resolve()
+
+    if not resolved_path.is_relative_to(project_root):
+        return {
+            "status": "blocked",
+            "reason": "artifact-exists policy path escapes the project directory.",
+        }
+
+    if not resolved_path.exists():
+        return {
+            "status": "blocked",
+            "artifact": str(artifact_path),
+            "reason": f"Required artifact does not exist: {artifact_path}",
+        }
+
+    if not resolved_path.is_file():
+        return {
+            "status": "blocked",
+            "artifact": str(artifact_path),
+            "reason": f"Required artifact is not a file: {artifact_path}",
+        }
+
+    return {
+        "status": "allowed",
+        "artifact": str(artifact_path),
+        "reason": "Required artifact exists.",
+    }
+
+
+POLICY_EVALUATORS = {
+    "artifact-exists": evaluate_artifact_exists,
+}
+
+
+def evaluate_required_policies(task):
+    required_policies = task.get("requires_policies", [])
+
+    if not isinstance(required_policies, list):
+        return False, [
+            {
+                "status": "blocked",
+                "reason": "requires_policies must be a list.",
+            }
+        ]
+
+    results = []
+
+    for policy in required_policies:
+        if not isinstance(policy, dict):
+            results.append(
+                {
+                    "status": "blocked",
+                    "reason": "Each policy requirement must be an object.",
+                }
+            )
+            continue
+
+        policy_id = policy.get("id")
+        evaluator = POLICY_EVALUATORS.get(policy_id)
+
+        if evaluator is None:
+            results.append(
+                {
+                    "policy_id": policy_id,
+                    "status": "blocked",
+                    "reason": f"Unknown policy ID: {policy_id}",
+                }
+            )
+            continue
+
+        result = evaluator(policy)
+        result["policy_id"] = policy_id
+        results.append(result)
+
+    allowed = all(
+        result.get("status") == "allowed"
+        for result in results
+    )
+
+    return allowed, results
+
+
 def run_task(task, statuses):
     task_id = task["id"]
     task_state = get_task_state(task, statuses)
@@ -82,6 +182,51 @@ def run_task(task, statuses):
         save_json(STATUS_FILE, statuses)
 
         write_event("task_blocked", task, "A dependency has not completed.")
+        return
+
+    policies_allowed, policy_results = evaluate_required_policies(task)
+
+    if task.get("requires_policies"):
+        task_state["policy_results"] = policy_results
+        task_state["updated_at"] = now()
+        statuses[task_id] = task_state
+        save_json(STATUS_FILE, statuses)
+
+    if not policies_allowed:
+        blocking_result = next(
+            (
+                result
+                for result in policy_results
+                if result.get("status") != "allowed"
+            ),
+            {"reason": "An unknown policy blocked dispatch."},
+        )
+
+        block_reason = (
+            "Required policy blocked dispatch: "
+            + blocking_result.get("reason", "Unknown policy failure.")
+        )
+
+        previous_status = task_state.get("status")
+        previous_block_reason = task_state.get("block_reason")
+
+        task_state["status"] = "blocked"
+        task_state["block_reason"] = block_reason
+        task_state["blocked_at"] = now()
+        task_state["updated_at"] = now()
+        statuses[task_id] = task_state
+        save_json(STATUS_FILE, statuses)
+
+        if (
+            previous_status != "blocked"
+            or previous_block_reason != block_reason
+        ):
+            write_event("task_blocked", task, block_reason)
+        else:
+            print(
+                f"[{now()}] task_blocked: {task_id} - {block_reason}"
+            )
+
         return
 
     if task.get("requires_approval", False):
@@ -284,6 +429,25 @@ def show_status():
         if task_state.get("approved_at"):
             print(f"  Approved at: {task_state['approved_at']}")
 
+        if task_state.get("block_reason"):
+            print(f"  Block reason: {task_state['block_reason']}")
+
+        policy_results = task_state.get("policy_results", [])
+
+        if policy_results:
+            print("  Policies:")
+
+            for result in policy_results:
+                policy_id = result.get("policy_id", "unknown")
+                policy_status = result.get("status", "unknown")
+                print(f"    - {policy_id}: {policy_status}")
+
+                if result.get("artifact"):
+                    print(f"      Artifact: {result['artifact']}")
+
+                if result.get("reason"):
+                    print(f"      Reason: {result['reason']}")
+
         if task_state.get("error"):
             print(f"  Error: {task_state['error']}")
 
@@ -298,9 +462,11 @@ def add_task(
     priority_text,
     requires_approval=False,
     dependencies=None,
+    required_policies=None,
 ):
     tasks = load_json(QUEUE_FILE, [])
     dependencies = dependencies or []
+    required_policies = required_policies or []
 
     if task_id in dependencies:
         print("Add task failed: a task cannot depend on itself.")
@@ -345,6 +511,7 @@ def add_task(
         "depends_on": dependencies,
         "max_retries": 1,
         "requires_approval": requires_approval,
+        "requires_policies": required_policies,
     }
 
     tasks.append(task)
@@ -365,6 +532,17 @@ def add_task(
         "  Approval required: "
         + ("yes" if requires_approval else "no")
     )
+    print(
+        "  Required policies: "
+        + (
+            ", ".join(
+                policy.get("id", "unknown")
+                for policy in required_policies
+            )
+            if required_policies
+            else "none"
+        )
+    )
 
 
 def main():
@@ -383,6 +561,7 @@ def main():
     if len(sys.argv) >= 6 and sys.argv[1] == "add-task":
         requires_approval = False
         dependencies = []
+        required_policies = []
         option_index = 6
 
         while option_index < len(sys.argv):
@@ -391,6 +570,33 @@ def main():
             if option == "--approval":
                 requires_approval = True
                 option_index += 1
+                continue
+
+            if option == "--require-artifact":
+                if option_index + 1 >= len(sys.argv):
+                    print(
+                        "Add task failed: "
+                        "--require-artifact requires a relative file path."
+                    )
+                    return
+
+                artifact_path = sys.argv[option_index + 1]
+
+                if Path(artifact_path).is_absolute():
+                    print(
+                        "Add task failed: "
+                        "--require-artifact does not allow absolute paths."
+                    )
+                    return
+
+                required_policies.append(
+                    {
+                        "id": "artifact-exists",
+                        "artifact": artifact_path,
+                    }
+                )
+
+                option_index += 2
                 continue
 
             if option == "--depends-on":
@@ -421,6 +627,7 @@ def main():
             sys.argv[5],
             requires_approval,
             dependencies,
+            required_policies,
         )
         return
 
@@ -437,6 +644,11 @@ def main():
         "  python3 mini_orch.py add-task "
         "<id> <title> <command> <priority> "
         "--depends-on <task_id[,task_id]>"
+    )
+    print(
+        "  python3 mini_orch.py add-task "
+        "<id> <title> <command> <priority> "
+        "--require-artifact <relative_file_path>"
     )
 
 

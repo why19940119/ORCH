@@ -73,5 +73,23 @@
     ],
     "max_retries": 1,
     "requires_approval": false
+  },
+  {
+    "id": "task_policy_block_demo_010",
+    "title": "Verify generic artifact policy blocks dispatch",
+    "command": [
+      "python3",
+      "worker_policy_dispatch_probe.py"
+    ],
+    "priority": 10,
+    "depends_on": [],
+    "max_retries": 1,
+    "requires_approval": false,
+    "requires_policies": [
+      {
+        "id": "artifact-exists",
+        "artifact": "output/policy_prerequisite.json"
+      }
+    ]
   }
 ]
