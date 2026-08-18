@@ -91,5 +91,27 @@
         "artifact": "output/policy_prerequisite.json"
       }
     ]
+  },
+  {
+    "id": "task_multi_policy_demo_011",
+    "title": "Verify all generic policies must allow dispatch",
+    "command": [
+      "python3",
+      "worker_multi_policy_probe.py"
+    ],
+    "priority": 11,
+    "depends_on": [],
+    "max_retries": 1,
+    "requires_approval": false,
+    "requires_policies": [
+      {
+        "id": "artifact-exists",
+        "artifact": "output/policy_alpha.json"
+      },
+      {
+        "id": "artifact-exists",
+        "artifact": "output/policy_beta.json"
+      }
+    ]
   }
 ]
