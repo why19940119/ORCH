@@ -188,6 +188,11 @@ def run_task(task, statuses):
 
     if task.get("requires_policies"):
         task_state["policy_results"] = policy_results
+
+        if policies_allowed:
+            task_state.pop("block_reason", None)
+            task_state.pop("blocked_at", None)
+
         task_state["updated_at"] = now()
         statuses[task_id] = task_state
         save_json(STATUS_FILE, statuses)
@@ -287,6 +292,9 @@ def run_task(task, statuses):
 
         if result is not None and result.returncode == 0:
             task_state["status"] = "done"
+            task_state.pop("error", None)
+            task_state.pop("block_reason", None)
+            task_state.pop("blocked_at", None)
             task_state["finished_at"] = now()
             task_state["output"] = result.stdout.strip()
             statuses[task_id] = task_state
