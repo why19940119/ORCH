@@ -137,5 +137,67 @@
         "equals": "approved"
       }
     ]
+  },
+  {
+    "id": "task_mock_ai_advisory_013",
+    "title": "Generate deterministic mock AI advisory",
+    "command": [
+      "python3",
+      "worker_mock_ai_advisory.py"
+    ],
+    "priority": 13,
+    "depends_on": [],
+    "max_retries": 1,
+    "requires_approval": false,
+    "requires_policies": []
+  },
+  {
+    "id": "task_validate_ai_advisory_014",
+    "title": "Validate mock AI advisory safety contract",
+    "command": [
+      "python3",
+      "worker_validate_ai_advisory.py"
+    ],
+    "priority": 14,
+    "depends_on": [
+      "task_mock_ai_advisory_013"
+    ],
+    "max_retries": 1,
+    "requires_approval": false,
+    "requires_policies": []
+  },
+  {
+    "id": "task_consume_ai_advisory_015",
+    "title": "Consume validated read-only AI advisory",
+    "command": [
+      "python3",
+      "worker_ai_advisory_consumer.py"
+    ],
+    "priority": 15,
+    "depends_on": [
+      "task_validate_ai_advisory_014"
+    ],
+    "max_retries": 1,
+    "requires_approval": false,
+    "requires_policies": [
+      {
+        "id": "json-field-equals",
+        "artifact": "output/ai_advisory_validation.json",
+        "field": "status",
+        "equals": "success"
+      },
+      {
+        "id": "json-field-equals",
+        "artifact": "output/ai_advisory.json",
+        "field": "mode",
+        "equals": "advisory"
+      },
+      {
+        "id": "json-field-equals",
+        "artifact": "output/ai_advisory.json",
+        "field": "execution_authority",
+        "equals": "none"
+      }
+    ]
   }
 ]
