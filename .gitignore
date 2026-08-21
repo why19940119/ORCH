@@ -13,3 +13,7 @@ artifacts/staging/
 artifacts/objects/
 artifacts/manifests/
 artifacts/latest/
+
+.env
+.env.*
+!.env.example
