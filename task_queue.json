@@ -255,5 +255,31 @@
     "max_retries": 1,
     "requires_approval": false,
     "requires_policies": []
+  },
+  {
+    "id": "task_scoped_snapshot_regression_020",
+    "title": "Run scoped snapshot stale detection regression suite",
+    "command": [
+      "python3",
+      "worker_scoped_snapshot_regression.py"
+    ],
+    "priority": 20,
+    "depends_on": [],
+    "max_retries": 1,
+    "requires_approval": false,
+    "requires_policies": []
+  },
+  {
+    "id": "task_scoped_task_state_regression_021",
+    "title": "Verify scoped task state changes stale snapshots",
+    "command": [
+      "python3",
+      "worker_scoped_task_state_regression.py"
+    ],
+    "priority": 21,
+    "depends_on": [],
+    "max_retries": 1,
+    "requires_approval": false,
+    "requires_policies": []
   }
 ]
