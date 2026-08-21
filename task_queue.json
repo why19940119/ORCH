@@ -281,5 +281,18 @@
     "max_retries": 1,
     "requires_approval": false,
     "requires_policies": []
+  },
+  {
+    "id": "task_review_budget_regression_022",
+    "title": "Verify bounded review deadlock and human escalation",
+    "command": [
+      "python3",
+      "worker_review_budget_regression.py"
+    ],
+    "priority": 22,
+    "depends_on": [],
+    "max_retries": 1,
+    "requires_approval": false,
+    "requires_policies": []
   }
 ]
