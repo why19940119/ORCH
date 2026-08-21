@@ -7,3 +7,9 @@ state/task_status.json
 output/*.json
 *.bak
 __pycache__/
+
+# v0.12 runtime artifact store
+artifacts/staging/
+artifacts/objects/
+artifacts/manifests/
+artifacts/latest/

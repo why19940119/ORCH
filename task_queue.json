@@ -199,5 +199,33 @@
         "equals": "none"
       }
     ]
+  },
+  {
+    "id": "task_publish_manifest_demo_016",
+    "title": "Publish immutable manifest-backed demo artifact",
+    "command": [
+      "python3",
+      "worker_publish_manifest_demo.py"
+    ],
+    "priority": 16,
+    "depends_on": [],
+    "max_retries": 1,
+    "requires_approval": false,
+    "requires_policies": []
+  },
+  {
+    "id": "task_validate_manifest_demo_017",
+    "title": "Validate immutable artifact manifest and latest pointer",
+    "command": [
+      "python3",
+      "worker_validate_manifest_demo.py"
+    ],
+    "priority": 17,
+    "depends_on": [
+      "task_publish_manifest_demo_016"
+    ],
+    "max_retries": 1,
+    "requires_approval": false,
+    "requires_policies": []
   }
 ]
