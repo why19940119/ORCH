@@ -6,6 +6,8 @@ import json
 import subprocess
 import time
 
+from advisory_dispatch import run_advisory_preflight
+
 STATE_DIR = Path("state")
 QUEUE_FILE = Path("task_queue.json")
 STATUS_FILE = STATE_DIR / "task_status.json"
@@ -282,6 +284,44 @@ def evaluate_required_policies(task):
     return allowed, results
 
 
+def evaluate_advisory_preflight(
+    task,
+    task_state,
+    statuses,
+):
+    if not task.get("advisory_preflight"):
+        return True, None
+
+    existing_preflight = task_state.get(
+        "advisory_preflight"
+    )
+
+    try:
+        result = run_advisory_preflight(
+            task,
+            existing=existing_preflight,
+        )
+    except Exception as error:
+        result = {
+            "status": "blocked",
+            "reason": (
+                "Advisory preflight failed: "
+                f"{error}"
+            ),
+            "execution_authority": "none",
+        }
+
+    task_state["advisory_preflight"] = result
+    task_state["updated_at"] = now()
+    statuses[task["id"]] = task_state
+    save_json(STATUS_FILE, statuses)
+
+    if result.get("status") == "allowed":
+        return True, result
+
+    return False, result
+
+
 def run_task(task, statuses):
     task_id = task["id"]
     task_state = get_task_state(task, statuses)
@@ -346,6 +386,43 @@ def run_task(task, statuses):
             print(
                 f"[{now()}] task_blocked: {task_id} - {block_reason}"
             )
+
+        return
+
+    preflight_allowed, preflight_result = (
+        evaluate_advisory_preflight(
+            task,
+            task_state,
+            statuses,
+        )
+    )
+
+    if not preflight_allowed:
+        preflight_status = preflight_result.get(
+            "status",
+            "blocked",
+        )
+
+        preflight_reason = preflight_result.get(
+            "reason",
+            "Advisory preflight blocked dispatch.",
+        )
+
+        task_state["status"] = "blocked"
+        task_state["block_reason"] = (
+            "Advisory preflight blocked dispatch: "
+            f"{preflight_reason}"
+        )
+        task_state["blocked_at"] = now()
+        task_state["updated_at"] = now()
+        statuses[task_id] = task_state
+        save_json(STATUS_FILE, statuses)
+
+        write_event(
+            "task_blocked",
+            task,
+            task_state["block_reason"],
+        )
 
         return
 
