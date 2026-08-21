@@ -1,0 +1,23 @@
+{
+  "registry_version": "1.0",
+  "policies": {
+    "artifact-exists": {
+      "contract_version": "1.0",
+      "required_fields": [
+        "id",
+        "artifact"
+      ],
+      "description": "Requires a project-relative artifact file to exist."
+    },
+    "json-field-equals": {
+      "contract_version": "1.0",
+      "required_fields": [
+        "id",
+        "artifact",
+        "field",
+        "equals"
+      ],
+      "description": "Requires a JSON artifact field to equal an expected JSON value."
+    }
+  }
+}

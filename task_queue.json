@@ -227,5 +227,33 @@
     "max_retries": 1,
     "requires_approval": false,
     "requires_policies": []
+  },
+  {
+    "id": "task_create_scoped_snapshot_demo_018",
+    "title": "Create scoped read-set snapshot demo",
+    "command": [
+      "python3",
+      "worker_create_scoped_snapshot_demo.py"
+    ],
+    "priority": 18,
+    "depends_on": [],
+    "max_retries": 1,
+    "requires_approval": false,
+    "requires_policies": []
+  },
+  {
+    "id": "task_validate_scoped_snapshot_demo_019",
+    "title": "Validate scoped read-set snapshot demo",
+    "command": [
+      "python3",
+      "worker_validate_scoped_snapshot_demo.py"
+    ],
+    "priority": 19,
+    "depends_on": [
+      "task_create_scoped_snapshot_demo_018"
+    ],
+    "max_retries": 1,
+    "requires_approval": false,
+    "requires_policies": []
   }
 ]
