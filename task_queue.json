@@ -294,5 +294,18 @@
     "max_retries": 1,
     "requires_approval": false,
     "requires_policies": []
+  },
+  {
+    "id": "task_advisory_preflight_regression_023",
+    "title": "Verify advisory preflight task binding and stale detection",
+    "command": [
+      "python3",
+      "worker_advisory_preflight_regression.py"
+    ],
+    "priority": 23,
+    "depends_on": [],
+    "max_retries": 1,
+    "requires_approval": false,
+    "requires_policies": []
   }
 ]
