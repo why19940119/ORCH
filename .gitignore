@@ -17,3 +17,5 @@ artifacts/latest/
 .env
 .env.*
 !.env.example
+
+.venv/
