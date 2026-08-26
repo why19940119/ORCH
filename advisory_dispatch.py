@@ -159,6 +159,9 @@ def run_advisory_preflight(task, existing=None):
             "artifact_logical_names"
         ],
         policy_ids=config["policy_ids"],
+        ignore_runtime_state_for_task_ids=[
+            task["id"]
+        ],
     )
 
     advisory_result = request_advisory(task)

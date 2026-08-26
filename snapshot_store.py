@@ -8,6 +8,37 @@ QUEUE_FILE = Path("task_queue.json")
 STATUS_FILE = Path("state/task_status.json")
 POLICY_CONTRACTS_FILE = Path("policy_contracts.json")
 
+RUNTIME_STATE_FIELDS = {
+    "status",
+    "attempt",
+    "started_at",
+    "updated_at",
+    "finished_at",
+    "approval_status",
+    "approved_at",
+    "approved_by",
+    "output",
+    "error",
+    "block_reason",
+    "blocked_at",
+    "advisory_preflight",
+}
+
+
+def project_task_state(
+    task_id,
+    task_state,
+    ignore_runtime_state_for_task_ids,
+):
+    if task_id not in ignore_runtime_state_for_task_ids:
+        return task_state
+
+    return {
+        field: value
+        for field, value in task_state.items()
+        if field not in RUNTIME_STATE_FIELDS
+    }
+
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat(
@@ -139,6 +170,7 @@ def build_scoped_snapshot(
     requested_task_ids,
     artifact_logical_names,
     policy_ids,
+    ignore_runtime_state_for_task_ids=None,
 ):
     if not isinstance(requested_task_ids, list) or not requested_task_ids:
         raise ValueError(
@@ -152,6 +184,26 @@ def build_scoped_snapshot(
 
     if not isinstance(policy_ids, list):
         raise ValueError("policy_ids must be a list.")
+
+    if ignore_runtime_state_for_task_ids is None:
+        ignore_runtime_state_for_task_ids = []
+
+    if not isinstance(
+        ignore_runtime_state_for_task_ids,
+        list,
+    ):
+        raise ValueError(
+            "ignore_runtime_state_for_task_ids must be a list."
+        )
+
+    if not all(
+        isinstance(task_id, str) and task_id
+        for task_id in ignore_runtime_state_for_task_ids
+    ):
+        raise ValueError(
+            "ignore_runtime_state_for_task_ids must contain "
+            "non-empty task IDs."
+        )
 
     tasks = load_json(QUEUE_FILE, [])
     statuses = load_json(STATUS_FILE, {})
@@ -167,21 +219,45 @@ def build_scoped_snapshot(
         requested_task_ids,
     )
 
+    ignored_runtime_state_ids = sorted(
+        set(ignore_runtime_state_for_task_ids)
+    )
+
+    unknown_ignored_runtime_state_ids = [
+        task_id
+        for task_id in ignored_runtime_state_ids
+        if task_id not in resolved_task_ids
+    ]
+
+    if unknown_ignored_runtime_state_ids:
+        raise ValueError(
+            "Ignored runtime-state task is outside snapshot scope: "
+            + ", ".join(unknown_ignored_runtime_state_ids)
+        )
+
     task_fingerprints = {}
 
     for task_id in resolved_task_ids:
         task_definition = tasks_by_id[task_id]
         task_state = statuses.get(task_id, {})
 
+        projected_state = project_task_state(
+            task_id,
+            task_state,
+            ignored_runtime_state_ids,
+        )
+
         task_fingerprints[task_id] = {
             "task_definition_sha256": sha256_value(
                 task_definition
             ),
-            "task_state_sha256": sha256_value(task_state),
+            "task_state_sha256": sha256_value(
+                projected_state
+            ),
             "task_fingerprint": sha256_value(
                 {
                     "task": task_definition,
-                    "state": task_state,
+                    "state": projected_state,
                 }
             ),
         }
@@ -221,6 +297,9 @@ def build_scoped_snapshot(
                 set(artifact_logical_names)
             ),
             "policy_ids": sorted(set(policy_ids)),
+            "ignore_runtime_state_for_task_ids": (
+                ignored_runtime_state_ids
+            ),
         },
         "task_fingerprints": task_fingerprints,
         "artifact_fingerprints": artifact_fingerprints,
@@ -286,6 +365,10 @@ def validate_scoped_snapshot(snapshot):
                 [],
             ),
             policy_ids=scope.get("policy_ids", []),
+            ignore_runtime_state_for_task_ids=scope.get(
+                "ignore_runtime_state_for_task_ids",
+                [],
+            ),
         )
     except (FileNotFoundError, ValueError, json.JSONDecodeError) as error:
         return {
