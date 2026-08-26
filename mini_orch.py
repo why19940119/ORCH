@@ -663,6 +663,7 @@ def add_task(
     requires_approval=False,
     dependencies=None,
     required_policies=None,
+    advisory_preflight=False,
 ):
     tasks = load_json(QUEUE_FILE, [])
     dependencies = dependencies or []
@@ -714,6 +715,12 @@ def add_task(
         "requires_policies": required_policies,
     }
 
+    if advisory_preflight:
+        task["advisory_preflight"] = {
+            "artifact_logical_names": [],
+            "policy_ids": [],
+        }
+
     tasks.append(task)
     tasks.sort(key=lambda item: item.get("priority", 999))
 
@@ -762,12 +769,19 @@ def main():
         requires_approval = False
         dependencies = []
         required_policies = []
+        advisory_preflight = False
         option_index = 6
 
         while option_index < len(sys.argv):
             option = sys.argv[option_index]
 
             if option == "--approval":
+                requires_approval = True
+                option_index += 1
+                continue
+
+            if option == "--advisory-preflight":
+                advisory_preflight = True
                 requires_approval = True
                 option_index += 1
                 continue
@@ -867,6 +881,7 @@ def main():
             requires_approval,
             dependencies,
             required_policies,
+            advisory_preflight=advisory_preflight,
         )
         return
 
@@ -878,6 +893,11 @@ def main():
     print(
         "  python3 mini_orch.py add-task "
         "<id> <title> <command> <priority> --approval"
+    )
+    print(
+        "  python3 mini_orch.py add-task "
+        "<id> <title> <command> <priority> "
+        "--advisory-preflight"
     )
     print(
         "  python3 mini_orch.py add-task "

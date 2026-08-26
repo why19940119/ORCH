@@ -194,7 +194,7 @@ def run_advisory_preflight(task, existing=None):
     )
 
     artifact = publish_staged_artifact(
-        staged_path=staged_path,
+        staging_path=staged_path,
         logical_name=artifact_logical_name(task),
         producer_task_id=task["id"],
         schema_version="1.0",

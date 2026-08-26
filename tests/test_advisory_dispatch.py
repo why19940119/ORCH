@@ -132,6 +132,10 @@ class AdvisoryDispatchTests(unittest.TestCase):
         )
         request_advisory.assert_called_once_with(TASK)
         publish_artifact.assert_called_once()
+        self.assertEqual(
+            publish_artifact.call_args.kwargs["staging_path"],
+            "staging/test.json",
+        )
 
     @patch("advisory_dispatch.publish_staged_artifact")
     @patch("advisory_dispatch.stage_json")
