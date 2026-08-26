@@ -1,9 +1,20 @@
 from collections import Counter, deque
 from pathlib import Path
 import json
+import os
 import re
+import secrets
+import time
 
-from flask import Flask, abort, render_template_string
+from flask import (
+    Flask,
+    abort,
+    render_template_string,
+    request,
+    session,
+)
+
+from orch_chat import ChatProviderError, ask_orch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -19,6 +30,15 @@ MANIFESTS_DIR = ARTIFACTS_ROOT / "manifests"
 LOGICAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 app = Flask(__name__)
+
+app.secret_key = os.getenv(
+    "ORCH_UI_SECRET_KEY",
+    secrets.token_urlsafe(32),
+)
+
+CHAT_MAX_HISTORY = 8
+CHAT_MIN_INTERVAL_SECONDS = 3
+CHAT_SESSIONS = {}
 
 
 BASE_TEMPLATE = """
@@ -249,6 +269,77 @@ BASE_TEMPLATE = """
       padding: 9px 12px;
     }
 
+    .chat-history {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .chat-message {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      max-width: 88%;
+      padding: 12px;
+      white-space: pre-wrap;
+    }
+
+    .chat-user {
+      align-self: flex-end;
+      background: #17365d;
+    }
+
+    .chat-assistant {
+      align-self: flex-start;
+      background: var(--panel-2);
+    }
+
+    .chat-meta {
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 7px;
+      text-transform: uppercase;
+    }
+
+    textarea,
+    select {
+      background: #0b1422;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      color: var(--text);
+      font: inherit;
+      padding: 10px;
+      width: 100%;
+    }
+
+    textarea {
+      min-height: 105px;
+      resize: vertical;
+    }
+
+    button {
+      background: var(--blue);
+      border: 0;
+      border-radius: 7px;
+      color: #071321;
+      cursor: pointer;
+      font-weight: 700;
+      margin-top: 10px;
+      padding: 10px 15px;
+    }
+
+    button:hover {
+      background: #82c4ff;
+    }
+
+    .chat-error {
+      background: #4a2323;
+      border-left: 3px solid var(--red);
+      color: #ffc1c1;
+      margin-bottom: 14px;
+      padding: 10px 12px;
+    }
+
     code {
       background: #0b1422;
       border: 1px solid #23344a;
@@ -281,6 +372,9 @@ BASE_TEMPLATE = """
       </a>
       <a href="/artifacts" class="{{ 'active' if active == 'artifacts' }}">
         Artifacts
+      </a>
+      <a href="/chat" class="{{ 'active' if active == 'chat' }}">
+        Chat
       </a>
     </nav>
   </header>
@@ -401,6 +495,116 @@ def advisory_view(state):
             "execution_authority"
         ),
     }
+
+
+def build_chat_context():
+    statuses = load_statuses()
+
+    tasks = []
+
+    for task in load_tasks()[:30]:
+        view = task_view(task, statuses)
+        state = view["state"]
+        advisory = advisory_view(state)
+
+        tasks.append(
+            {
+                "id": view["id"],
+                "title": view["title"],
+                "priority": view["priority"],
+                "status": view["status"],
+                "attempt": view["attempt"],
+                "requires_approval": (
+                    view["requires_approval"]
+                ),
+                "approval_status": state.get(
+                    "approval_status"
+                ),
+                "block_reason": state.get(
+                    "block_reason"
+                ),
+                "policy_results": [
+                    {
+                        "policy_id": result.get(
+                            "policy_id"
+                        ),
+                        "status": result.get("status"),
+                        "reason": result.get("reason"),
+                    }
+                    for result in state.get(
+                        "policy_results",
+                        [],
+                    )
+                ],
+                "advisory": (
+                    {
+                        "status": advisory["status"],
+                        "recommended_action": advisory[
+                            "recommended_action"
+                        ],
+                        "confidence": advisory[
+                            "confidence"
+                        ],
+                        "artifact_id": advisory[
+                            "artifact_id"
+                        ],
+                        "snapshot_fingerprint": advisory[
+                            "snapshot_fingerprint"
+                        ],
+                        "execution_authority": advisory[
+                            "execution_authority"
+                        ],
+                    }
+                    if advisory
+                    else None
+                ),
+            }
+        )
+
+    events = []
+
+    for event in load_events(20):
+        events.append(
+            {
+                "timestamp": event.get("timestamp"),
+                "event": event.get("event"),
+                "task_id": event.get("task_id"),
+                "message": event.get("message"),
+            }
+        )
+
+    return {
+        "context_version": "1.0",
+        "scope": "read_only_operator_summary",
+        "tasks": tasks,
+        "latest_events": events,
+        "limitations": [
+            "No raw artifact payloads are included.",
+            "No environment variables are included.",
+            "No API keys are included.",
+            "No command execution authority exists.",
+        ],
+    }
+
+
+def get_chat_session():
+    chat_id = session.get("chat_id")
+
+    if not chat_id:
+        chat_id = secrets.token_urlsafe(16)
+        session["chat_id"] = chat_id
+
+    return CHAT_SESSIONS.setdefault(chat_id, [])
+
+
+def get_csrf_token():
+    token = session.get("csrf_token")
+
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["csrf_token"] = token
+
+    return token
 
 
 def artifact_views():
@@ -892,6 +1096,205 @@ def artifact_detail(logical_name):
         logical_name=logical_name,
         pointer=pointer,
         manifest=manifest,
+    )
+
+
+@app.route("/chat", methods=["GET", "POST"])
+def chat_page():
+    history = get_chat_session()
+    csrf_token = get_csrf_token()
+    error = None
+
+    if request.method == "POST":
+        submitted_token = request.form.get(
+            "csrf_token",
+            "",
+        )
+
+        if not secrets.compare_digest(
+            csrf_token,
+            submitted_token,
+        ):
+            abort(400)
+
+        question = request.form.get("question", "").strip()
+        mode = request.form.get("mode", "general")
+
+        if mode not in {"general", "orch_context"}:
+            abort(400)
+
+        last_chat_at = session.get("last_chat_at", 0)
+
+        if (
+            time.time() - last_chat_at
+            < CHAT_MIN_INTERVAL_SECONDS
+        ):
+            error = (
+                "Please wait a few seconds before sending "
+                "another chat request."
+            )
+        else:
+            try:
+                context = (
+                    build_chat_context()
+                    if mode == "orch_context"
+                    else {}
+                )
+
+                result = ask_orch(
+                    question=question,
+                    mode=mode,
+                    context=context,
+                    history=history,
+                )
+
+                chat = result["chat"]
+
+                history.append(
+                    {
+                        "role": "user",
+                        "content": question,
+                        "mode": mode,
+                    }
+                )
+
+                history.append(
+                    {
+                        "role": "assistant",
+                        "content": chat["answer"],
+                        "mode": mode,
+                        "metadata": {
+                            "provider": result["provider"],
+                            "model": result[
+                                "response_model"
+                            ],
+                            "response_id": result[
+                                "response_id"
+                            ],
+                            "referenced_task_ids": chat[
+                                "referenced_task_ids"
+                            ],
+                            "referenced_artifact_ids": chat[
+                                "referenced_artifact_ids"
+                            ],
+                            "limitations": chat[
+                                "limitations"
+                            ],
+                            "execution_authority": chat[
+                                "execution_authority"
+                            ],
+                        },
+                    }
+                )
+
+                del history[:-CHAT_MAX_HISTORY]
+                session["last_chat_at"] = time.time()
+
+            except ChatProviderError as error_value:
+                error = str(error_value)
+
+    chat_template = """
+      <h2>ORCH Chat</h2>
+      <p class="subtitle">
+        Advisory-only chat. It cannot approve, run, retry, create,
+        modify, delete, or dispatch any ORCH task.
+      </p>
+
+      <div class="section">
+        <div class="warning">
+          Chat execution authority is permanently <code>none</code>.
+          Each submitted question creates at most one OpenRouter
+          request. Chat history stays only in this running UI process.
+        </div>
+      </div>
+
+      {% if error %}
+        <div class="chat-error">{{ error }}</div>
+      {% endif %}
+
+      <div class="section">
+        <h3>Conversation</h3>
+
+        {% if history %}
+          <div class="chat-history">
+            {% for message in history %}
+              <div class="chat-message chat-{{ message.role }}">
+                <div class="chat-meta">
+                  {{ message.role }}
+                  {% if message.mode %}
+                    · {{ message.mode }}
+                  {% endif %}
+                </div>
+
+                {{ message.content }}
+
+                {% if message.role == 'assistant'
+                      and message.metadata %}
+                  <div class="chat-meta" style="margin-top: 10px;">
+                    {{ message.metadata.provider }}
+                    · {{ message.metadata.model }}
+                    · authority:
+                    {{ message.metadata.execution_authority }}
+                  </div>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty">
+            Start a read-only conversation with ORCH Chat.
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="section">
+        <h3>Ask a Question</h3>
+
+        <form method="post" action="/chat">
+          <input
+            type="hidden"
+            name="csrf_token"
+            value="{{ csrf_token }}"
+          >
+
+          <label for="mode">Mode</label>
+          <select id="mode" name="mode">
+            <option value="general">
+              General Chat
+            </option>
+            <option value="orch_context" selected>
+              ORCH Context Chat
+            </option>
+          </select>
+
+          <p class="subtitle" style="margin-top: 10px;">
+            ORCH Context Chat receives only an allowlisted summary of
+            task state, policy results, advisory metadata, and recent
+            events. It does not receive API keys, environment
+            variables, raw artifact payloads, or write authority.
+          </p>
+
+          <label for="question">Question</label>
+          <textarea
+            id="question"
+            name="question"
+            maxlength="800"
+            required
+            placeholder="Example: Why are there currently blocked tasks?"
+          ></textarea>
+
+          <button type="submit">Ask ORCH Chat</button>
+        </form>
+      </div>
+    """
+
+    return render_page(
+        "Chat",
+        "chat",
+        chat_template,
+        history=history,
+        csrf_token=csrf_token,
+        error=error,
     )
 
 

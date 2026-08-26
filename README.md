@@ -399,3 +399,46 @@ The next work should prioritize consolidation rather than more features:
 4. Add a durable secret-management strategy.
 5. Add richer operator status views and audit reporting.
 ```
+
+## ORCH Chat
+
+ORCH includes a local browser chat panel:
+
+```bash
+python orch_ui.py
+```
+
+Open:
+
+```text
+http://127.0.0.1:5050/chat
+```
+
+Available modes:
+
+```text
+General Chat
+→ General OpenRouter Mistral conversation
+
+ORCH Context Chat
+→ Read-only task, policy, advisory, artifact metadata,
+  snapshot summary, and latest-event context
+```
+
+Chat safety boundary:
+
+```text
+execution_authority = none
+no approve action
+no queue run action
+no retry action
+no task creation
+no policy modification
+no artifact deletion
+no connector write action
+no API key exposure
+```
+
+Each click on `Ask ORCH Chat` creates at most one OpenRouter request.
+Chat history exists only in the running local Flask process and is
+cleared when the UI server stops.
