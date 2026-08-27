@@ -66,17 +66,17 @@ BASE_TEMPLATE = """
   <title>{{ title }} · ORCH Operator Console</title>
   <style>
     :root {
-      --bg: #0b1220;
-      --panel: #121d2e;
-      --panel-2: #18263b;
-      --text: #e7edf5;
-      --muted: #9eb0c5;
-      --line: #2c3d55;
-      --blue: #4ca8ff;
+      --bg: #120c1d;
+      --panel: #1b1329;
+      --panel-2: #251a38;
+      --text: #f0e9f8;
+      --muted: #b9aacb;
+      --line: #49365f;
+      --blue: #bd8cff;
       --green: #47d18c;
       --yellow: #ffcd57;
       --red: #ff7777;
-      --purple: #bf8cff;
+      --purple: #d3a8ff;
     }
 
     * { box-sizing: border-box; }
@@ -90,7 +90,7 @@ BASE_TEMPLATE = """
     }
 
     header {
-      background: #0e1929;
+      background: #171020;
       border-bottom: 1px solid var(--line);
       padding: 18px 28px;
     }
@@ -282,6 +282,211 @@ BASE_TEMPLATE = """
       padding: 9px 12px;
     }
 
+    .chat-page {
+      max-width: 960px;
+    }
+
+    .chat-hero {
+      align-items: flex-start;
+      display: flex;
+      gap: 18px;
+      justify-content: space-between;
+      margin-bottom: 18px;
+    }
+
+    .chat-eyebrow {
+      color: var(--blue);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .7px;
+      margin: 0 0 7px;
+      text-transform: uppercase;
+    }
+
+    .chat-hero h2 {
+      margin-bottom: 7px;
+    }
+
+    .chat-hero .subtitle {
+      margin: 0;
+      max-width: 650px;
+    }
+
+    .chat-status {
+      align-items: center;
+      background: #153d2d;
+      border: 1px solid #276346;
+      border-radius: 999px;
+      color: var(--green);
+      display: inline-flex;
+      flex: 0 0 auto;
+      font-size: 11px;
+      font-weight: 700;
+      gap: 7px;
+      padding: 7px 10px;
+      text-transform: uppercase;
+    }
+
+    .chat-status-dot {
+      background: var(--green);
+      border-radius: 50%;
+      height: 7px;
+      width: 7px;
+    }
+
+    .chat-page .section {
+      padding: 16px;
+    }
+
+    .chat-page .warning {
+      background: #1e2733;
+      border: 1px solid #45566d;
+      border-left: 3px solid var(--yellow);
+      border-radius: 7px;
+      color: #d7e0ec;
+      line-height: 1.45;
+      padding: 9px 11px;
+    }
+
+    .chat-page .chat-history {
+      gap: 16px;
+      margin-bottom: 0;
+    }
+
+    .chat-page .chat-message {
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      max-width: 82%;
+      padding: 0;
+    }
+
+    .chat-page .chat-message-inner {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px 13px;
+    }
+
+    .chat-page .chat-user .chat-message-inner {
+      background: #17365d;
+      border-color: #285486;
+    }
+
+    .chat-page .chat-assistant .chat-message-inner {
+      background: var(--panel-2);
+    }
+
+    .chat-page .chat-meta {
+      align-items: center;
+      display: flex;
+      font-size: 11px;
+      gap: 7px;
+      margin-bottom: 8px;
+    }
+
+    .chat-page .chat-role {
+      color: var(--muted);
+      font-weight: 700;
+      letter-spacing: .4px;
+      text-transform: uppercase;
+    }
+
+    .chat-page .chat-mode {
+      background: #263b55;
+      border-radius: 999px;
+      color: #a9d2ff;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 7px;
+      text-transform: uppercase;
+    }
+
+    .chat-page .chat-content {
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+
+    .chat-page .chat-assistant-meta {
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+      margin-top: 10px;
+      padding-top: 9px;
+    }
+
+    .chat-page .chat-copy {
+      background: transparent;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      color: var(--muted);
+      float: right;
+      font-size: 11px;
+      margin: 9px 0 0 8px;
+      padding: 5px 7px;
+    }
+
+    .chat-page .chat-copy:hover {
+      background: #213149;
+      color: var(--text);
+    }
+
+    .chat-page .chat-composer {
+      margin-bottom: 0;
+    }
+
+    .chat-page .composer-grid {
+      align-items: end;
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 180px 1fr auto;
+    }
+
+    .chat-page .composer-field label {
+      color: var(--muted);
+      display: block;
+      font-size: 11px;
+      font-weight: 700;
+      margin: 0 0 6px;
+      text-transform: uppercase;
+    }
+
+    .chat-page textarea {
+      min-height: 76px;
+    }
+
+    .chat-page .composer-submit {
+      margin: 0;
+      min-height: 42px;
+      white-space: nowrap;
+    }
+
+    .chat-page .composer-help {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      margin: 10px 0 0;
+    }
+
+    @media (max-width: 720px) {
+      .chat-hero {
+        flex-direction: column;
+      }
+
+      .chat-page .chat-message {
+        max-width: 94%;
+      }
+
+      .chat-page .composer-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .chat-page .composer-submit {
+        width: 100%;
+      }
+    }
+
     .chat-history {
       display: flex;
       flex-direction: column;
@@ -299,7 +504,7 @@ BASE_TEMPLATE = """
 
     .chat-user {
       align-self: flex-end;
-      background: #17365d;
+      background: #3d2860;
     }
 
     .chat-assistant {
@@ -316,7 +521,7 @@ BASE_TEMPLATE = """
 
     textarea,
     select {
-      background: #0b1422;
+      background: #120c1d;
       border: 1px solid var(--line);
       border-radius: 7px;
       color: var(--text);
@@ -362,6 +567,133 @@ BASE_TEMPLATE = """
       padding: 2px 5px;
     }
 
+    /* v0.16a.1.4 Chat refinement */
+    .chat-page {
+      margin: 0 auto;
+      max-width: 840px;
+    }
+
+    .chat-hero {
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      flex-wrap: wrap;
+      padding-bottom: 18px;
+    }
+
+    .chat-status {
+      background: #2c1d43;
+      border-color: #65477e;
+      color: #dcb8ff;
+    }
+
+    .chat-status-dot {
+      background: #c591ff;
+      box-shadow: 0 0 10px #c591ff;
+    }
+
+    .chat-page .section {
+      background: rgba(27, 19, 41, .88);
+      border-color: var(--line);
+      box-shadow: 0 14px 36px rgba(5, 2, 12, .18);
+    }
+
+    .chat-page .warning {
+      background: #21172f;
+      border-color: #59406e;
+      border-left-color: #c591ff;
+      color: #ded1ec;
+    }
+
+    .chat-page .chat-history {
+      gap: 18px;
+    }
+
+    .chat-page .chat-message {
+      max-width: 68%;
+    }
+
+    .chat-page .chat-message-inner {
+      border-radius: 16px;
+      padding: 13px 14px;
+    }
+
+    .chat-page .chat-user .chat-message-inner {
+      background: linear-gradient(145deg, #4b3073, #362353);
+      border-color: #75539b;
+    }
+
+    .chat-page .chat-assistant .chat-message-inner {
+      background: #21172f;
+      border-color: #4a365f;
+    }
+
+    .chat-page .chat-content {
+      font-size: 14px;
+      line-height: 1.62;
+    }
+
+    .chat-page .chat-mode {
+      background: #4b3570;
+      color: #e0c4ff;
+    }
+
+    .chat-page .chat-copy {
+      border-color: #5b4370;
+      color: #cbb8dc;
+    }
+
+    .chat-page .chat-copy:hover {
+      background: #38264e;
+      color: #fff;
+    }
+
+    .chat-page .chat-composer {
+      border-color: #5a4071;
+      position: sticky;
+      bottom: 12px;
+    }
+
+    .chat-page .composer-grid {
+      grid-template-columns: 155px minmax(0, 1fr) auto;
+    }
+
+    .chat-page textarea,
+    .chat-page select {
+      background: #130d20;
+      border-color: #59406e;
+    }
+
+    .chat-page textarea:focus,
+    .chat-page select:focus {
+      border-color: #bd8cff;
+      box-shadow: 0 0 0 3px rgba(189, 140, 255, .15);
+      outline: 0;
+    }
+
+    .chat-page .composer-submit {
+      background: linear-gradient(135deg, #c18cff, #9764d4);
+      color: #160d21;
+    }
+
+    .chat-page .composer-submit:hover {
+      background: linear-gradient(135deg, #d5afff, #ad7ae8);
+    }
+
+    .chat-page .composer-submit:disabled {
+      cursor: wait;
+      opacity: .72;
+    }
+
+    @media (max-width: 720px) {
+      .chat-page .chat-message {
+        max-width: 86%;
+      }
+
+      .chat-page .chat-composer {
+        position: static;
+      }
+    }
+
     @media (max-width: 720px) {
       main { padding: 20px 14px; }
       .kv { grid-template-columns: 1fr; }
@@ -394,6 +726,56 @@ BASE_TEMPLATE = """
   <main>
     {{ body|safe }}
   </main>
+  <script>
+    document.addEventListener("click", async function(event) {
+      const button = event.target.closest("[data-copy-message]");
+      if (!button || !navigator.clipboard) return;
+
+      const message = button
+        .closest(".chat-message-inner")
+        .querySelector(".chat-content").innerText;
+
+      try {
+        await navigator.clipboard.writeText(message);
+        button.textContent = "Copied";
+        window.setTimeout(function() {
+          button.textContent = "Copy";
+        }, 1600);
+      } catch (error) {
+        button.textContent = "Copy failed";
+      }
+    });
+    const chatForm = document.getElementById("chat-form");
+    const chatQuestion = document.getElementById("question");
+
+    if (chatForm && chatQuestion) {
+      chatQuestion.addEventListener("keydown", function(event) {
+        if (
+          event.key === "Enter" &&
+          !event.shiftKey &&
+          !event.isComposing
+        ) {
+          event.preventDefault();
+          if (chatForm.reportValidity()) {
+            const submitButton = chatForm.querySelector(
+              'button[type="submit"]'
+            );
+            submitButton.disabled = true;
+            submitButton.textContent = "Thinking…";
+            chatForm.requestSubmit();
+          }
+        }
+      });
+
+      chatForm.addEventListener("submit", function() {
+        const submitButton = chatForm.querySelector(
+          'button[type="submit"]'
+        );
+        submitButton.disabled = true;
+        submitButton.textContent = "Thinking…";
+      });
+    }
+  </script>
 </body>
 </html>
 """
@@ -1332,19 +1714,28 @@ def chat_page():
                     session["last_chat_at"] = time.time()
 
     chat_template = """
-      <h2>ORCH Chat</h2>
-      <p class="subtitle">
-        Advisory-only chat. It cannot approve, run, retry, create,
-        modify, delete, or dispatch any ORCH task.
-      </p>
-
-      <div class="section">
-        <div class="warning">
-          Chat execution authority is permanently <code>none</code>.
-          Each submitted question creates at most one OpenRouter
-          request. Chat history stays only in this running UI process.
+      <div class="chat-page">
+        <div class="chat-hero">
+          <div>
+            <p class="chat-eyebrow">ORCH Operator Console</p>
+            <h2>ORCH Chat</h2>
+            <p class="subtitle">
+              Ask about task state, policies, advisory metadata, and
+              recent events.
+            </p>
+          </div>
+          <div class="chat-status">
+            <span class="chat-status-dot"></span>
+            Advisory only
+          </div>
         </div>
-      </div>
+
+        <div class="section">
+          <div class="warning">
+            Read-only context · execution authority:
+            <code>none</code> · one model request per submitted question
+          </div>
+        </div>
 
       {% if error %}
         <div class="chat-error">{{ error }}</div>
@@ -1357,28 +1748,35 @@ def chat_page():
           <div class="chat-history">
             {% for message in history %}
               <div class="chat-message chat-{{ message.role }}">
-                <div class="chat-meta">
-                  {{ message.role }}
-                  {% if message.mode %}
-                    · {{ message.mode }}
+                <div class="chat-message-inner">
+                  <div class="chat-meta">
+                    <span class="chat-role">{{ message.role }}</span>
+                    {% if message.mode %}
+                      <span class="chat-mode">{{ message.mode }}</span>
+                    {% endif %}
+                  </div>
+
+                  <div class="chat-content">{{ message.content }}</div>
+
+                  {% if message.role == 'assistant'
+                        and message.metadata %}
+                    <button
+                      class="chat-copy"
+                      type="button"
+                      data-copy-message
+                    >
+                      Copy
+                    </button>
+                    <div class="chat-assistant-meta">
+                      {{ message.metadata.provider }}
+                      · {{ message.metadata.model }}
+                      · authority:
+                      {{ message.metadata.execution_authority }}
+                      · audit:
+                      {{ message.metadata.audit_artifact_id }}
+                    </div>
                   {% endif %}
                 </div>
-
-                {{ message.content }}
-
-                {% if message.role == 'assistant'
-                      and message.metadata %}
-                  <div class="chat-meta" style="margin-top: 10px;">
-                    {{ message.metadata.provider }}
-                    · {{ message.metadata.model }}
-                    · authority:
-                    {{ message.metadata.execution_authority }}
-                    · audit:
-                    {{ message.metadata.audit_artifact_id }}
-                    · daily cost:
-                    {{ message.metadata.daily_cost_usd }}
-                  </div>
-                {% endif %}
               </div>
             {% endfor %}
           </div>
@@ -1389,44 +1787,49 @@ def chat_page():
         {% endif %}
       </div>
 
-      <div class="section">
-        <h3>Ask a Question</h3>
+      <div class="section chat-composer">
+        <h3>Ask ORCH Chat</h3>
 
-        <form method="post" action="/chat">
+        <form id="chat-form" method="post" action="/chat">
           <input
             type="hidden"
             name="csrf_token"
             value="{{ csrf_token }}"
           >
 
-          <label for="mode">Mode</label>
-          <select id="mode" name="mode">
-            <option value="general">
-              General Chat
-            </option>
-            <option value="orch_context" selected>
-              ORCH Context Chat
-            </option>
-          </select>
+          <div class="composer-grid">
+            <div class="composer-field">
+              <label for="mode">Mode</label>
+              <select id="mode" name="mode">
+                <option value="general">General Chat</option>
+                <option value="orch_context" selected>
+                  ORCH Context
+                </option>
+              </select>
+            </div>
 
-          <p class="subtitle" style="margin-top: 10px;">
-            ORCH Context Chat receives only an allowlisted summary of
-            task state, policy results, advisory metadata, and recent
-            events. It does not receive API keys, environment
-            variables, raw artifact payloads, or write authority.
+            <div class="composer-field">
+              <label for="question">Question</label>
+              <textarea
+                id="question"
+                name="question"
+                maxlength="800"
+                required
+                placeholder="Example: Why are there currently blocked tasks?"
+              ></textarea>
+            </div>
+
+            <button class="composer-submit" type="submit">
+              Ask ORCH Chat
+            </button>
+          </div>
+
+          <p class="composer-help">
+            ORCH Context uses an allowlisted summary only; it never
+            receives secrets, raw artifact payloads, or write authority.
           </p>
-
-          <label for="question">Question</label>
-          <textarea
-            id="question"
-            name="question"
-            maxlength="800"
-            required
-            placeholder="Example: Why are there currently blocked tasks?"
-          ></textarea>
-
-          <button type="submit">Ask ORCH Chat</button>
         </form>
+      </div>
       </div>
     """
 
