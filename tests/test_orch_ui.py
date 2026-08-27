@@ -77,11 +77,39 @@ class OrchChatProviderTests(unittest.TestCase):
         CHAT_SESSIONS.clear()
         self.client = app.test_client()
 
+    @patch("orch_ui.publish_chat_audit_artifact")
+    @patch("orch_ui.settle_chat_budget")
+    @patch("orch_ui.reserve_chat_budget")
     @patch("orch_ui.ask_orch")
     def test_valid_chat_request_uses_provider_once(
         self,
         mock_ask_orch,
+        mock_reserve_budget,
+        mock_settle_budget,
+        mock_publish_audit,
     ):
+        mock_reserve_budget.return_value = (
+            "reservation-test-001"
+        )
+
+        mock_settle_budget.return_value = {
+            "daily_totals": {
+                "request_count": 1,
+                "total_tokens": 0,
+                "total_cost_usd": 0,
+            },
+            "session_totals": {
+                "request_count": 1,
+                "total_tokens": 0,
+                "total_cost_usd": 0,
+            },
+            "limits": {},
+        }
+
+        mock_publish_audit.return_value = {
+            "artifact_id": "artifact_chat_audit_test",
+        }
+
         mock_ask_orch.return_value = {
             "provider": "openrouter",
             "requested_model": (
@@ -130,6 +158,14 @@ class OrchChatProviderTests(unittest.TestCase):
         )
 
         mock_ask_orch.assert_called_once()
+        mock_reserve_budget.assert_called_once()
+        mock_settle_budget.assert_called_once()
+        mock_publish_audit.assert_called_once()
+
+        self.assertIn(
+            b"artifact_chat_audit_test",
+            response.data,
+        )
 
         call_kwargs = mock_ask_orch.call_args.kwargs
 
@@ -142,3 +178,29 @@ class OrchChatProviderTests(unittest.TestCase):
             call_kwargs["mode"],
             "general",
         )
+
+
+class OrchUiHostValidationTests(unittest.TestCase):
+    def setUp(self):
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+
+    def test_untrusted_host_is_rejected(self):
+        response = self.client.get(
+            "/tasks",
+            headers={
+                "Host": "evil.example",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_loopback_host_is_allowed(self):
+        response = self.client.get(
+            "/tasks",
+            headers={
+                "Host": "127.0.0.1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)

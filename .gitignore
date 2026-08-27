@@ -19,3 +19,6 @@ artifacts/latest/
 !.env.example
 
 .venv/
+state/.chat_budget.lock
+state/chat_budget.json
+state/chat_usage.jsonl

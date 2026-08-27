@@ -14,7 +14,19 @@ from flask import (
     session,
 )
 
-from orch_chat import ChatProviderError, ask_orch
+from orch_chat import (
+    ChatProviderError,
+    ask_orch,
+    estimate_chat_request_tokens,
+)
+from chat_security import (
+    ChatBudgetError,
+    publish_chat_audit_artifact,
+    release_chat_budget,
+    reserve_chat_budget,
+    settle_chat_budget,
+    sha256_value,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -35,6 +47,11 @@ app.secret_key = os.getenv(
     "ORCH_UI_SECRET_KEY",
     secrets.token_urlsafe(32),
 )
+
+app.config["TRUSTED_HOSTS"] = [
+    "127.0.0.1",
+    "localhost",
+]
 
 CHAT_MAX_HISTORY = 8
 CHAT_MIN_INTERVAL_SECONDS = 3
@@ -497,12 +514,24 @@ def advisory_view(state):
     }
 
 
+def compact_text(value, maximum_length):
+    if not isinstance(value, str):
+        return None
+
+    value = value.strip()
+
+    if len(value) <= maximum_length:
+        return value
+
+    return value[:maximum_length - 1] + "…"
+
+
 def build_chat_context():
     statuses = load_statuses()
 
     tasks = []
 
-    for task in load_tasks()[:30]:
+    for task in load_tasks()[:4]:
         view = task_view(task, statuses)
         state = view["state"]
         advisory = advisory_view(state)
@@ -510,7 +539,10 @@ def build_chat_context():
         tasks.append(
             {
                 "id": view["id"],
-                "title": view["title"],
+                "title": compact_text(
+                    view["title"],
+                    60,
+                ),
                 "priority": view["priority"],
                 "status": view["status"],
                 "attempt": view["attempt"],
@@ -520,8 +552,9 @@ def build_chat_context():
                 "approval_status": state.get(
                     "approval_status"
                 ),
-                "block_reason": state.get(
-                    "block_reason"
+                "block_reason": compact_text(
+                    state.get("block_reason"),
+                    80,
                 ),
                 "policy_results": [
                     {
@@ -529,12 +562,11 @@ def build_chat_context():
                             "policy_id"
                         ),
                         "status": result.get("status"),
-                        "reason": result.get("reason"),
                     }
                     for result in state.get(
                         "policy_results",
                         [],
-                    )
+                    )[:2]
                 ],
                 "advisory": (
                     {
@@ -548,9 +580,6 @@ def build_chat_context():
                         "artifact_id": advisory[
                             "artifact_id"
                         ],
-                        "snapshot_fingerprint": advisory[
-                            "snapshot_fingerprint"
-                        ],
                         "execution_authority": advisory[
                             "execution_authority"
                         ],
@@ -563,13 +592,16 @@ def build_chat_context():
 
     events = []
 
-    for event in load_events(20):
+    for event in load_events(3):
         events.append(
             {
                 "timestamp": event.get("timestamp"),
                 "event": event.get("event"),
                 "task_id": event.get("task_id"),
-                "message": event.get("message"),
+                "message": compact_text(
+                    event.get("message"),
+                    120,
+                ),
             }
         )
 
@@ -1134,11 +1166,31 @@ def chat_page():
                 "another chat request."
             )
         else:
+            reservation_id = None
+
             try:
                 context = (
                     build_chat_context()
                     if mode == "orch_context"
                     else {}
+                )
+
+                session_id_sha256 = sha256_value(
+                    session["chat_id"]
+                )
+
+                estimated_tokens = (
+                    estimate_chat_request_tokens(
+                        question=question,
+                        mode=mode,
+                        context=context,
+                        history=history,
+                    )
+                )
+
+                reservation_id = reserve_chat_budget(
+                    session_id_sha256,
+                    reserved_tokens=estimated_tokens,
                 )
 
                 result = ask_orch(
@@ -1148,50 +1200,104 @@ def chat_page():
                     history=history,
                 )
 
-                chat = result["chat"]
-
-                history.append(
-                    {
-                        "role": "user",
-                        "content": question,
-                        "mode": mode,
-                    }
-                )
-
-                history.append(
-                    {
-                        "role": "assistant",
-                        "content": chat["answer"],
-                        "mode": mode,
-                        "metadata": {
-                            "provider": result["provider"],
-                            "model": result[
-                                "response_model"
-                            ],
-                            "response_id": result[
-                                "response_id"
-                            ],
-                            "referenced_task_ids": chat[
-                                "referenced_task_ids"
-                            ],
-                            "referenced_artifact_ids": chat[
-                                "referenced_artifact_ids"
-                            ],
-                            "limitations": chat[
-                                "limitations"
-                            ],
-                            "execution_authority": chat[
-                                "execution_authority"
-                            ],
-                        },
-                    }
-                )
-
-                del history[:-CHAT_MAX_HISTORY]
-                session["last_chat_at"] = time.time()
+            except ChatBudgetError as error_value:
+                error = str(error_value)
 
             except ChatProviderError as error_value:
+                if reservation_id:
+                    release_chat_budget(reservation_id)
+
                 error = str(error_value)
+
+            except Exception:
+                if reservation_id:
+                    release_chat_budget(reservation_id)
+
+                error = (
+                    "Chat request failed before an answer "
+                    "could be safely recorded."
+                )
+
+            else:
+                try:
+                    chat = result["chat"]
+
+                    audit_artifact = (
+                        publish_chat_audit_artifact(
+                            session_id_sha256=session_id_sha256,
+                            turn_number=(
+                                len(history) // 2
+                            ) + 1,
+                            mode=mode,
+                            question=question,
+                            answer=chat["answer"],
+                            provider_result=result,
+                            context=context,
+                        )
+                    )
+
+                    budget = settle_chat_budget(
+                        reservation_id=reservation_id,
+                        provider_result=result,
+                        session_id_sha256=(
+                            session_id_sha256
+                        ),
+                    )
+
+                except Exception:
+                    if reservation_id:
+                        release_chat_budget(reservation_id)
+
+                    error = (
+                        "Chat answer was not displayed because "
+                        "its audit record could not be completed."
+                    )
+
+                else:
+                    history.append(
+                        {
+                            "role": "user",
+                            "content": question,
+                            "mode": mode,
+                        }
+                    )
+
+                    history.append(
+                        {
+                            "role": "assistant",
+                            "content": chat["answer"],
+                            "mode": mode,
+                            "metadata": {
+                                "provider": result["provider"],
+                                "model": result[
+                                    "response_model"
+                                ],
+                                "response_id": result[
+                                    "response_id"
+                                ],
+                                "referenced_task_ids": chat[
+                                    "referenced_task_ids"
+                                ],
+                                "referenced_artifact_ids": chat[
+                                    "referenced_artifact_ids"
+                                ],
+                                "audit_artifact_id": (
+                                    audit_artifact[
+                                        "artifact_id"
+                                    ]
+                                ),
+                                "daily_cost_usd": budget[
+                                    "daily_totals"
+                                ]["total_cost_usd"],
+                                "execution_authority": chat[
+                                    "execution_authority"
+                                ],
+                            },
+                        }
+                    )
+
+                    del history[:-CHAT_MAX_HISTORY]
+                    session["last_chat_at"] = time.time()
 
     chat_template = """
       <h2>ORCH Chat</h2>
@@ -1235,6 +1341,10 @@ def chat_page():
                     · {{ message.metadata.model }}
                     · authority:
                     {{ message.metadata.execution_authority }}
+                    · audit:
+                    {{ message.metadata.audit_artifact_id }}
+                    · daily cost:
+                    {{ message.metadata.daily_cost_usd }}
                   </div>
                 {% endif %}
               </div>
