@@ -510,6 +510,28 @@ def advisory_view(state):
     }
 
 
+TASK_ID_REFERENCE_PATTERN = re.compile(
+    r"\btask_[A-Za-z0-9_-]+\b"
+)
+
+
+def extract_task_id_references(question):
+    if not isinstance(question, str):
+        return []
+
+    seen = set()
+    task_ids = []
+
+    for task_id in TASK_ID_REFERENCE_PATTERN.findall(
+        question
+    ):
+        if task_id not in seen:
+            seen.add(task_id)
+            task_ids.append(task_id)
+
+    return task_ids
+
+
 def compact_text(value, maximum_length):
     if not isinstance(value, str):
         return None
@@ -522,91 +544,139 @@ def compact_text(value, maximum_length):
     return value[:maximum_length - 1] + "…"
 
 
-def build_chat_context():
-    statuses = load_statuses()
-
-    tasks = []
-
-    for task in load_tasks()[:4]:
-        view = task_view(task, statuses)
-        state = view["state"]
-        advisory = advisory_view(state)
-
-        tasks.append(
-            {
-                "id": view["id"],
-                "title": compact_text(
-                    view["title"],
-                    60,
-                ),
-                "priority": view["priority"],
-                "status": view["status"],
-                "attempt": view["attempt"],
-                "requires_approval": (
-                    view["requires_approval"]
-                ),
-                "approval_status": state.get(
-                    "approval_status"
-                ),
-                "block_reason": compact_text(
-                    state.get("block_reason"),
-                    80,
-                ),
-                "policy_results": [
-                    {
-                        "policy_id": result.get(
-                            "policy_id"
-                        ),
-                        "status": result.get("status"),
-                    }
-                    for result in state.get(
-                        "policy_results",
-                        [],
-                    )[:2]
-                ],
-                "advisory": (
-                    {
-                        "status": advisory["status"],
-                        "recommended_action": advisory[
-                            "recommended_action"
-                        ],
-                        "confidence": advisory[
-                            "confidence"
-                        ],
-                        "artifact_id": advisory[
-                            "artifact_id"
-                        ],
-                        "execution_authority": advisory[
-                            "execution_authority"
-                        ],
-                    }
-                    if advisory
-                    else None
-                ),
-            }
-        )
-
-    events = []
-
-    for event in load_events(3):
-        events.append(
-            {
-                "timestamp": event.get("timestamp"),
-                "event": event.get("event"),
-                "task_id": event.get("task_id"),
-                "message": compact_text(
-                    event.get("message"),
-                    120,
-                ),
-            }
-        )
+def chat_task_summary(task, statuses):
+    view = task_view(task, statuses)
+    state = view["state"]
+    advisory = advisory_view(state)
 
     return {
-        "context_version": "1.0",
+        "id": view["id"],
+        "title": compact_text(view["title"], 120),
+        "priority": view["priority"],
+        "status": view["status"],
+        "attempt": view["attempt"],
+        "requires_approval": view["requires_approval"],
+        "approval_status": state.get("approval_status"),
+        "block_reason": compact_text(
+            state.get("block_reason"),
+            240,
+        ),
+        "policy_results": [
+            {
+                "policy_id": result.get("policy_id"),
+                "status": result.get("status"),
+                "reason": compact_text(
+                    result.get("reason"),
+                    240,
+                ),
+            }
+            for result in state.get(
+                "policy_results",
+                [],
+            )
+        ],
+        "advisory": (
+            {
+                "status": advisory["status"],
+                "recommended_action": advisory[
+                    "recommended_action"
+                ],
+                "confidence": advisory["confidence"],
+                "artifact_id": advisory["artifact_id"],
+                "snapshot_fingerprint": advisory[
+                    "snapshot_fingerprint"
+                ],
+                "execution_authority": advisory[
+                    "execution_authority"
+                ],
+            }
+            if advisory
+            else None
+        ),
+    }
+
+
+def build_chat_context(question=""):
+    statuses = load_statuses()
+    source_tasks = load_tasks()
+    requested_task_ids = extract_task_id_references(question)
+    task_by_id = {
+        task.get("id"): task
+        for task in source_tasks
+        if isinstance(task.get("id"), str)
+    }
+
+    matching_tasks = [
+        chat_task_summary(task_by_id[task_id], statuses)
+        for task_id in requested_task_ids
+        if task_id in task_by_id
+    ]
+
+    resolved_task_ids = [
+        task["id"]
+        for task in matching_tasks
+    ]
+
+    unresolved_task_ids = [
+        task_id
+        for task_id in requested_task_ids
+        if task_id not in task_by_id
+    ]
+
+    tasks = [
+        chat_task_summary(task, statuses)
+        for task in source_tasks
+        if task.get("id") not in resolved_task_ids
+    ][:12]
+
+    source_events = load_events(100)
+
+    matching_events = [
+        {
+            "timestamp": event.get("timestamp"),
+            "event": event.get("event"),
+            "task_id": event.get("task_id"),
+            "message": compact_text(
+                event.get("message"),
+                240,
+            ),
+        }
+        for event in source_events
+        if event.get("task_id") in resolved_task_ids
+    ][:10]
+
+    latest_events = [
+        {
+            "timestamp": event.get("timestamp"),
+            "event": event.get("event"),
+            "task_id": event.get("task_id"),
+            "message": compact_text(
+                event.get("message"),
+                160,
+            ),
+        }
+        for event in source_events[:10]
+    ]
+
+    return {
+        "context_version": "1.1",
         "scope": "read_only_operator_summary",
+        "task_lookup": {
+            "lookup_type": (
+                "exact_task_id"
+                if requested_task_ids
+                else "summary_only"
+            ),
+            "requested_task_ids": requested_task_ids,
+            "resolved_task_ids": resolved_task_ids,
+            "unresolved_task_ids": unresolved_task_ids,
+            "matching_tasks": matching_tasks,
+            "matching_events": matching_events,
+        },
         "tasks": tasks,
-        "latest_events": events,
+        "latest_events": latest_events,
         "limitations": [
+            "Task lookup uses exact task_id matches only.",
             "No raw artifact payloads are included.",
             "No environment variables are included.",
             "No API keys are included.",
@@ -1164,7 +1234,7 @@ def chat_page():
         else:
             try:
                 context = (
-                    build_chat_context()
+                    build_chat_context(question)
                     if mode == "orch_context"
                     else {}
                 )

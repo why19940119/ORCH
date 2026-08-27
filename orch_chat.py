@@ -130,6 +130,15 @@ When a user asks for an operational action, explain that this chat
 has no execution authority and direct them to the existing terminal
 or future payload-locked approval flow.
 
+In ORCH Context Chat, task_lookup is the authoritative result for
+any task_id explicitly mentioned in USER_QUESTION. When
+resolved_task_ids is non-empty, answer from matching_tasks and
+matching_events, and include those exact IDs in referenced_task_ids.
+When unresolved_task_ids is non-empty, state that ORCH found no
+matching task for those IDs; do not infer a status from the question,
+chat history, generic task summaries, or latest_events. Do not let
+latest_events contradict an exact task lookup result.
+
 Return exactly one JSON object with no Markdown or extra fields:
 
 {

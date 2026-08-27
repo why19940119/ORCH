@@ -1,7 +1,12 @@
 import unittest
 from unittest.mock import patch
 
-from orch_ui import CHAT_SESSIONS, app
+from orch_ui import (
+    CHAT_SESSIONS,
+    app,
+    build_chat_context,
+    extract_task_id_references,
+)
 
 
 class OrchUiTests(unittest.TestCase):
@@ -183,3 +188,105 @@ class OrchUiHostValidationTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+
+
+class TaskAwareChatContextTests(unittest.TestCase):
+    @patch("orch_ui.load_events")
+    @patch("orch_ui.load_statuses")
+    @patch("orch_ui.load_tasks")
+    def test_exact_task_lookup_injects_task_and_events(
+        self,
+        mock_load_tasks,
+        mock_load_statuses,
+        mock_load_events,
+    ):
+        mock_load_tasks.return_value = [
+            {
+                "id": "task_other_001",
+                "title": "Other task",
+                "priority": 9,
+            },
+            {
+                "id": "task_exact_013",
+                "title": "Exact lookup task",
+                "priority": 1,
+                "requires_approval": True,
+            },
+        ]
+
+        mock_load_statuses.return_value = {
+            "task_exact_013": {
+                "status": "done",
+                "attempt": 1,
+                "approval_status": "approved",
+                "policy_results": [
+                    {
+                        "policy_id": "policy_demo",
+                        "status": "pass",
+                        "reason": "Policy passed.",
+                    }
+                ],
+            }
+        }
+
+        mock_load_events.return_value = [
+            {
+                "timestamp": "2026-08-27T12:00:00Z",
+                "event": "task_completed",
+                "task_id": "task_exact_013",
+                "message": "Exact task completed.",
+            },
+            {
+                "timestamp": "2026-08-27T11:00:00Z",
+                "event": "task_created",
+                "task_id": "task_other_001",
+                "message": "Other task created.",
+            },
+        ]
+
+        context = build_chat_context(
+            "What happened to task_exact_013?"
+        )
+
+        lookup = context["task_lookup"]
+
+        self.assertEqual(
+            lookup["lookup_type"],
+            "exact_task_id",
+        )
+        self.assertEqual(
+            lookup["resolved_task_ids"],
+            ["task_exact_013"],
+        )
+        self.assertEqual(
+            lookup["matching_tasks"][0]["status"],
+            "done",
+        )
+        self.assertEqual(
+            lookup["matching_events"][0]["event"],
+            "task_completed",
+        )
+        self.assertEqual(
+            context["tasks"][0]["id"],
+            "task_other_001",
+        )
+
+    def test_unknown_task_id_is_reported_unresolved(self):
+        context = build_chat_context(
+            "Check task_missing_404 and task_missing_404."
+        )
+
+        self.assertEqual(
+            extract_task_id_references(
+                "task_missing_404 task_missing_404"
+            ),
+            ["task_missing_404"],
+        )
+        self.assertEqual(
+            context["task_lookup"]["unresolved_task_ids"],
+            ["task_missing_404"],
+        )
+        self.assertEqual(
+            context["task_lookup"]["resolved_task_ids"],
+            [],
+        )
