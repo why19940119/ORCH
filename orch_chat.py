@@ -189,37 +189,6 @@ Return exactly one JSON object with no Markdown or extra fields:
     return messages
 
 
-def estimate_chat_request_tokens(
-    question,
-    mode,
-    context,
-    history,
-):
-    messages = build_messages(
-        question,
-        mode,
-        context,
-        history,
-    )
-
-    message_bytes = len(
-        json.dumps(
-            messages,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    )
-
-    max_completion_tokens = 400
-    protocol_safety_tokens = 128
-
-    return (
-        message_bytes
-        + max_completion_tokens
-        + protocol_safety_tokens
-    )
-
-
 def ask_orch(question, mode, context, history):
     if not isinstance(question, str):
         raise ChatProviderError(
@@ -249,7 +218,6 @@ def ask_orch(question, mode, context, history):
             history,
         ),
         "temperature": 0.2,
-        "max_tokens": 400,
         "stream": False,
         "response_format": {
             "type": "json_object",

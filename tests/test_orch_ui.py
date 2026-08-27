@@ -78,34 +78,14 @@ class OrchChatProviderTests(unittest.TestCase):
         self.client = app.test_client()
 
     @patch("orch_ui.publish_chat_audit_artifact")
-    @patch("orch_ui.settle_chat_budget")
-    @patch("orch_ui.reserve_chat_budget")
+    @patch("orch_ui.record_chat_usage")
     @patch("orch_ui.ask_orch")
     def test_valid_chat_request_uses_provider_once(
         self,
         mock_ask_orch,
-        mock_reserve_budget,
-        mock_settle_budget,
+        mock_record_usage,
         mock_publish_audit,
     ):
-        mock_reserve_budget.return_value = (
-            "reservation-test-001"
-        )
-
-        mock_settle_budget.return_value = {
-            "daily_totals": {
-                "request_count": 1,
-                "total_tokens": 0,
-                "total_cost_usd": 0,
-            },
-            "session_totals": {
-                "request_count": 1,
-                "total_tokens": 0,
-                "total_cost_usd": 0,
-            },
-            "limits": {},
-        }
-
         mock_publish_audit.return_value = {
             "artifact_id": "artifact_chat_audit_test",
         }
@@ -158,8 +138,7 @@ class OrchChatProviderTests(unittest.TestCase):
         )
 
         mock_ask_orch.assert_called_once()
-        mock_reserve_budget.assert_called_once()
-        mock_settle_budget.assert_called_once()
+        mock_record_usage.assert_called_once()
         mock_publish_audit.assert_called_once()
 
         self.assertIn(

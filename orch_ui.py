@@ -17,14 +17,10 @@ from flask import (
 from orch_chat import (
     ChatProviderError,
     ask_orch,
-    estimate_chat_request_tokens,
 )
 from chat_security import (
-    ChatBudgetError,
     publish_chat_audit_artifact,
-    release_chat_budget,
-    reserve_chat_budget,
-    settle_chat_budget,
+    record_chat_usage,
     sha256_value,
 )
 
@@ -1166,8 +1162,6 @@ def chat_page():
                 "another chat request."
             )
         else:
-            reservation_id = None
-
             try:
                 context = (
                     build_chat_context()
@@ -1179,20 +1173,6 @@ def chat_page():
                     session["chat_id"]
                 )
 
-                estimated_tokens = (
-                    estimate_chat_request_tokens(
-                        question=question,
-                        mode=mode,
-                        context=context,
-                        history=history,
-                    )
-                )
-
-                reservation_id = reserve_chat_budget(
-                    session_id_sha256,
-                    reserved_tokens=estimated_tokens,
-                )
-
                 result = ask_orch(
                     question=question,
                     mode=mode,
@@ -1200,19 +1180,10 @@ def chat_page():
                     history=history,
                 )
 
-            except ChatBudgetError as error_value:
-                error = str(error_value)
-
             except ChatProviderError as error_value:
-                if reservation_id:
-                    release_chat_budget(reservation_id)
-
                 error = str(error_value)
 
             except Exception:
-                if reservation_id:
-                    release_chat_budget(reservation_id)
-
                 error = (
                     "Chat request failed before an answer "
                     "could be safely recorded."
@@ -1236,18 +1207,12 @@ def chat_page():
                         )
                     )
 
-                    budget = settle_chat_budget(
-                        reservation_id=reservation_id,
+                    record_chat_usage(
                         provider_result=result,
-                        session_id_sha256=(
-                            session_id_sha256
-                        ),
+                        session_id_sha256=session_id_sha256,
                     )
 
                 except Exception:
-                    if reservation_id:
-                        release_chat_budget(reservation_id)
-
                     error = (
                         "Chat answer was not displayed because "
                         "its audit record could not be completed."
@@ -1286,9 +1251,6 @@ def chat_page():
                                         "artifact_id"
                                     ]
                                 ),
-                                "daily_cost_usd": budget[
-                                    "daily_totals"
-                                ]["total_cost_usd"],
                                 "execution_authority": chat[
                                     "execution_authority"
                                 ],
