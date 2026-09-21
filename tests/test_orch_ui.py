@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -184,6 +187,17 @@ class OrchChatUiTests(unittest.TestCase):
             "/chat",
             data={
                 "csrf_token": "invalid",
+                "mode": "general",
+                "question": "Hello",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_chat_route_rejects_missing_csrf(self):
+        response = self.client.post(
+            "/chat",
+            data={
                 "mode": "general",
                 "question": "Hello",
             },
@@ -405,4 +419,37 @@ class TaskAwareChatContextTests(unittest.TestCase):
         self.assertEqual(
             context["task_lookup"]["resolved_task_ids"],
             [],
+        )
+
+
+class OrchUiSecretAndCookieTests(unittest.TestCase):
+    def test_session_cookie_flags(self):
+        self.assertIs(app.config["SESSION_COOKIE_HTTPONLY"], True)
+        self.assertEqual(
+            app.config["SESSION_COOKIE_SAMESITE"],
+            "Lax",
+        )
+        self.assertIs(app.config["SESSION_COOKIE_SECURE"], False)
+
+    def test_secret_key_comes_from_env(self):
+        expected = "unit-test-orch-ui-secret-key"
+        env = os.environ.copy()
+        env["ORCH_UI_SECRET_KEY"] = expected
+        code = (
+            "import orch_ui; "
+            "assert orch_ui.app.secret_key == "
+            + repr(expected)
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            result.stderr,
         )

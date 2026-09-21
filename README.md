@@ -402,6 +402,11 @@ The next work should prioritize consolidation rather than more features:
 
 ## ORCH Chat
 
+Durable browser sessions need a stable Flask secret. Set
+`ORCH_UI_SECRET_KEY` in the environment (see `.env.example`).
+If unset, ORCH uses an ephemeral per-process secret and sessions
+reset on restart.
+
 ORCH includes a local browser chat panel:
 
 ```bash

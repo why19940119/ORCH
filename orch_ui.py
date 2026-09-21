@@ -4,6 +4,7 @@ import json
 import os
 import re
 import secrets
+import sys
 import time
 
 from flask import (
@@ -39,10 +40,21 @@ LOGICAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 app = Flask(__name__)
 
-app.secret_key = os.getenv(
-    "ORCH_UI_SECRET_KEY",
-    secrets.token_urlsafe(32),
-)
+_secret = os.getenv("ORCH_UI_SECRET_KEY")
+if _secret:
+    app.secret_key = _secret
+else:
+    app.secret_key = secrets.token_urlsafe(32)
+    print(
+        "WARNING: ORCH_UI_SECRET_KEY unset; "
+        "using ephemeral process secret "
+        "(sessions will not survive restart).",
+        file=sys.stderr,
+    )
+
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = False
 
 app.config["TRUSTED_HOSTS"] = [
     "127.0.0.1",
