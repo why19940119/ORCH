@@ -124,6 +124,35 @@ class TaskStatusAndComposerUiTests(unittest.TestCase):
             source,
         )
 
+        desktop_grid = (
+            "grid-template-columns: minmax(150px, 190px) "
+            "minmax(0, 1fr) auto;"
+        )
+        desktop_idx = source.index(desktop_grid)
+        after_desktop = source[desktop_idx:]
+        media_marker = "@media (max-width: 720px)"
+        self.assertIn(media_marker, after_desktop)
+        media_idx = after_desktop.index(media_marker)
+        media_tail = after_desktop[media_idx:]
+        # Last composer-grid column rule under a 720px media must be 1fr
+        # so the narrow layout wins the cascade over the desktop grid.
+        narrow_rule = (
+            ".chat-page .composer-grid {"
+            + chr(10)
+            + "        grid-template-columns: 1fr;"
+        )
+        self.assertIn(narrow_rule, media_tail)
+        last_grid_1fr = media_tail.rfind(
+            "grid-template-columns: 1fr;"
+        )
+        last_grid_minmax = media_tail.rfind(
+            "grid-template-columns: minmax("
+        )
+        self.assertGreater(last_grid_1fr, -1)
+        self.assertTrue(
+            last_grid_minmax == -1 or last_grid_1fr > last_grid_minmax
+        )
+
     def test_chat_keyboard_contract_is_preserved(self):
         source = Path("orch_ui.py").read_text(encoding="utf-8")
 

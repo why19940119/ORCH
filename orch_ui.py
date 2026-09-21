@@ -466,14 +466,6 @@ BASE_TEMPLATE = """
       .chat-page .chat-message {
         max-width: 94%;
       }
-
-      .chat-page .composer-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .chat-page .composer-submit {
-        width: 100%;
-      }
     }
 
     .chat-history {
@@ -687,6 +679,14 @@ BASE_TEMPLATE = """
 
       .chat-page .chat-composer {
         position: static;
+      }
+
+      .chat-page .composer-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .chat-page .composer-submit {
+        width: 100%;
       }
     }
 
