@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from orch_ui import (
@@ -43,6 +44,92 @@ class OrchUiTests(unittest.TestCase):
         )
 
         self.assertEqual(post_routes, ["/chat"])
+
+
+class TaskStatusAndComposerUiTests(unittest.TestCase):
+    def setUp(self):
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+
+    def test_tasks_render_all_distinct_status_badge_classes(self):
+        statuses = [
+            "todo",
+            "running",
+            "retrying",
+            "waiting_approval",
+            "approved",
+            "done",
+            "blocked",
+            "failed",
+        ]
+        tasks = [
+            {
+                "id": f"task_status_{status}",
+                "title": f"{status} task",
+                "priority": index,
+            }
+            for index, status in enumerate(statuses, start=1)
+        ]
+        task_states = {
+            task["id"]: {"status": status}
+            for task, status in zip(tasks, statuses)
+        }
+
+        with patch("orch_ui.load_tasks", return_value=tasks), patch(
+            "orch_ui.load_statuses",
+            return_value=task_states,
+        ):
+            response = self.client.get("/tasks")
+
+        self.assertEqual(response.status_code, 200)
+        for status in statuses:
+            self.assertIn(
+                f'class="badge {status}"'.encode(),
+                response.data,
+            )
+
+    def test_status_and_composer_css_contract(self):
+        source = Path("orch_ui.py").read_text(encoding="utf-8")
+
+        for status in [
+            "todo",
+            "retrying",
+            "waiting_approval",
+            "approved",
+            "blocked",
+            "failed",
+        ]:
+            self.assertIn(f"    .{status}", source)
+
+        self.assertIn(
+            ".chat-page .chat-composer {",
+            source,
+        )
+        self.assertIn(
+            "background: var(--panel);",
+            source,
+        )
+        self.assertIn("z-index: 50;", source)
+        self.assertIn(
+            "box-shadow: 0 -8px 24px rgba(5, 2, 12, .45);",
+            source,
+        )
+        self.assertIn(
+            ".chat-page .composer-grid {",
+            source,
+        )
+        self.assertIn(
+            "grid-template-columns: minmax(150px, 190px) "
+            "minmax(0, 1fr) auto;",
+            source,
+        )
+
+    def test_chat_keyboard_contract_is_preserved(self):
+        source = Path("orch_ui.py").read_text(encoding="utf-8")
+
+        self.assertIn('event.key === "Enter"', source)
+        self.assertIn("!event.shiftKey", source)
+        self.assertIn("event.preventDefault();", source)
 
 
 if __name__ == "__main__":

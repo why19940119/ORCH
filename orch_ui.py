@@ -217,18 +217,18 @@ BASE_TEMPLATE = """
       text-transform: uppercase;
     }
 
-    .done { background: #153d2d; color: var(--green); }
-    .todo { background: #263b55; color: #a9d2ff; }
-    .running { background: #25395a; color: var(--blue); }
-    .retrying { background: #4a3d16; color: var(--yellow); }
+    .done { background: #153d2d; color: #75e7ad; }
+    .todo { background: #29303e; color: #c2cad6; }
+    .running { background: #2c3657; color: #a9c8ff; }
+    .retrying { background: #4a3b16; color: #ffdc70; }
     .waiting_approval {
-      background: #4a3d16;
-      color: var(--yellow);
+      background: #573216;
+      color: #ffd18a;
     }
-    .approved { background: #263b55; color: #a9d2ff; }
-    .blocked { background: #4a2323; color: var(--red); }
-    .failed { background: #4a2323; color: var(--red); }
-    .unknown { background: #303948; color: var(--muted); }
+    .approved { background: #173d31; color: #77e7b0; }
+    .blocked { background: #34263f; color: #d8b9f1; }
+    .failed { background: #4c2330; color: #ff9eaa; }
+    .unknown { background: #303040; color: var(--muted); }
 
     .kv {
       display: grid;
@@ -430,17 +430,6 @@ BASE_TEMPLATE = """
     .chat-page .chat-copy:hover {
       background: #213149;
       color: var(--text);
-    }
-
-    .chat-page .chat-composer {
-      margin-bottom: 0;
-    }
-
-    .chat-page .composer-grid {
-      align-items: end;
-      display: grid;
-      gap: 10px;
-      grid-template-columns: 180px 1fr auto;
     }
 
     .chat-page .composer-field label {
@@ -648,13 +637,20 @@ BASE_TEMPLATE = """
     }
 
     .chat-page .chat-composer {
+      background: var(--panel);
       border-color: #5a4071;
+      box-shadow: 0 -8px 24px rgba(5, 2, 12, .45);
+      margin-bottom: 0;
       position: sticky;
       bottom: 12px;
+      z-index: 50;
     }
 
     .chat-page .composer-grid {
-      grid-template-columns: 155px minmax(0, 1fr) auto;
+      align-items: end;
+      display: grid;
+      gap: 10px;
+      grid-template-columns: minmax(150px, 190px) minmax(0, 1fr) auto;
     }
 
     .chat-page textarea,
