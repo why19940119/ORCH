@@ -169,6 +169,61 @@ class TaskStatusAndComposerUiTests(unittest.TestCase):
         self.assertIn("!event.shiftKey", source)
         self.assertIn("event.preventDefault();", source)
 
+    def test_chat_loading_and_scroll_hooks(self):
+        source = Path("orch_ui.py").read_text(encoding="utf-8")
+
+        self.assertIn('id="chat-pending"', source)
+        self.assertIn("data-chat-pending", source)
+        self.assertIn("data-chat-submit-pending", source)
+        self.assertIn("setChatPending", source)
+        self.assertIn("Thinking…", source)
+        self.assertIn("chatQuestion.readOnly = true", source)
+        self.assertIn('classList.add("is-pending")', source)
+        self.assertIn("scrollIntoView", source)
+        self.assertIn('aria-busy", "true"', source)
+
+    def test_chat_bubble_and_metadata_css_contract(self):
+        source = Path("orch_ui.py").read_text(encoding="utf-8")
+        nl = chr(10)
+
+        message_rule = (
+            ".chat-page .chat-message {"
+            + nl
+            + "      background: transparent;"
+            + nl
+            + "      border: 0;"
+            + nl
+            + "      max-width: 78%;"
+            + nl
+            + "      padding: 0;"
+            + nl
+            + "      white-space: normal;"
+        )
+        self.assertIn(message_rule, source)
+
+        content_rule = (
+            ".chat-page .chat-content {"
+            + nl
+            + "      font-size: 14px;"
+            + nl
+            + "      line-height: 1.5;"
+            + nl
+            + "      margin: 0;"
+            + nl
+            + "      overflow-wrap: anywhere;"
+            + nl
+            + "      white-space: pre-wrap;"
+        )
+        self.assertIn(content_rule, source)
+        self.assertIn("width: fit-content;", source)
+        self.assertIn(".chat-page .chat-assistant-meta {", source)
+        self.assertIn("chat-meta-label", source)
+        self.assertIn("chat-meta-value", source)
+        self.assertIn(
+            '<span class="chat-meta-label">audit</span>',
+            source,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

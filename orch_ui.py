@@ -607,17 +607,18 @@ BASE_TEMPLATE = """
       padding: 2px 5px;
     }
 
-    /* v0.16a.1.4 Chat refinement */
+    /* v0.16a.1.11 Grok-inspired chat UX polish */
     .chat-page {
       margin: 0 auto;
-      max-width: 840px;
+      max-width: 760px;
     }
 
     .chat-hero {
       align-items: center;
-      border-bottom: 1px solid var(--line);
+      border-bottom: 1px solid rgba(90, 64, 113, .45);
       flex-wrap: wrap;
-      padding-bottom: 18px;
+      margin-bottom: 14px;
+      padding-bottom: 14px;
     }
 
     .chat-status {
@@ -632,29 +633,77 @@ BASE_TEMPLATE = """
     }
 
     .chat-page .section {
-      background: rgba(27, 19, 41, .88);
-      border-color: var(--line);
-      box-shadow: 0 14px 36px rgba(5, 2, 12, .18);
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+      margin-bottom: 12px;
+      padding: 0;
+    }
+
+    .chat-page .section.chat-composer {
+      background: rgba(27, 19, 41, .96);
+      border: 1px solid #5a4071;
+      border-radius: 16px;
+      box-shadow: 0 -8px 24px rgba(5, 2, 12, .45);
+      margin-bottom: 0;
+      padding: 12px 14px 14px;
     }
 
     .chat-page .warning {
-      background: #21172f;
-      border-color: #59406e;
-      border-left-color: #c591ff;
-      color: #ded1ec;
+      background: rgba(33, 23, 47, .72);
+      border: 1px solid rgba(89, 64, 110, .55);
+      border-left: 3px solid rgba(197, 145, 255, .55);
+      border-radius: 10px;
+      color: #cbbddc;
+      font-size: 12px;
+      margin-bottom: 4px;
+      padding: 8px 10px;
+    }
+
+    .chat-page .chat-thread-title {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .5px;
+      margin: 0 0 10px;
+      text-transform: uppercase;
     }
 
     .chat-page .chat-history {
-      gap: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 8px;
     }
 
     .chat-page .chat-message {
-      max-width: 68%;
+      background: transparent;
+      border: 0;
+      max-width: 78%;
+      padding: 0;
+      white-space: normal;
+    }
+
+    .chat-page .chat-user {
+      align-self: flex-end;
+      max-width: 78%;
+      width: fit-content;
+    }
+
+    .chat-page .chat-assistant {
+      align-self: flex-start;
+      max-width: 88%;
+      width: 100%;
     }
 
     .chat-page .chat-message-inner {
-      border-radius: 16px;
-      padding: 13px 14px;
+      align-items: stretch;
+      border: 1px solid transparent;
+      border-radius: 14px;
+      display: flex;
+      flex-direction: column;
+      padding: 8px 12px;
     }
 
     .chat-page .chat-user .chat-message-inner {
@@ -663,23 +712,79 @@ BASE_TEMPLATE = """
     }
 
     .chat-page .chat-assistant .chat-message-inner {
-      background: #21172f;
-      border-color: #4a365f;
+      background: #1c1428;
+      border-color: #3f2f52;
+    }
+
+    .chat-page .chat-meta {
+      align-items: center;
+      display: flex;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+
+    .chat-page .chat-role {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .35px;
+      text-transform: uppercase;
+    }
+
+    .chat-page .chat-mode {
+      background: rgba(75, 53, 112, .55);
+      border-radius: 999px;
+      color: #c9b0e4;
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: .2px;
+      padding: 2px 6px;
+      text-transform: uppercase;
     }
 
     .chat-page .chat-content {
       font-size: 14px;
-      line-height: 1.62;
+      line-height: 1.5;
+      margin: 0;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
     }
 
-    .chat-page .chat-mode {
-      background: #4b3570;
-      color: #e0c4ff;
+    .chat-page .chat-assistant-meta {
+      background: rgba(12, 8, 18, .35);
+      border: 1px solid rgba(74, 54, 95, .55);
+      border-radius: 8px;
+      color: var(--muted);
+      display: grid;
+      font-size: 11px;
+      gap: 3px 10px;
+      grid-template-columns: auto 1fr;
+      line-height: 1.35;
+      margin-top: 8px;
+      padding: 7px 9px;
+      white-space: normal;
+    }
+
+    .chat-page .chat-meta-label {
+      color: #9a86b0;
+      font-weight: 600;
+    }
+
+    .chat-page .chat-meta-value {
+      color: #c8b7d8;
+      overflow-wrap: anywhere;
     }
 
     .chat-page .chat-copy {
-      border-color: #5b4370;
+      align-self: flex-end;
+      background: transparent;
+      border: 1px solid #5b4370;
+      border-radius: 6px;
       color: #cbb8dc;
+      float: none;
+      font-size: 11px;
+      margin: 8px 0 0;
+      padding: 4px 8px;
     }
 
     .chat-page .chat-copy:hover {
@@ -688,13 +793,14 @@ BASE_TEMPLATE = """
     }
 
     .chat-page .chat-composer {
-      background: var(--panel);
-      border-color: #5a4071;
-      box-shadow: 0 -8px 24px rgba(5, 2, 12, .45);
-      margin-bottom: 0;
+      bottom: 10px;
       position: sticky;
-      bottom: 12px;
       z-index: 50;
+    }
+
+    .chat-page .chat-composer h3 {
+      font-size: 13px;
+      margin: 0 0 8px;
     }
 
     .chat-page .composer-grid {
@@ -710,6 +816,10 @@ BASE_TEMPLATE = """
       border-color: #59406e;
     }
 
+    .chat-page textarea {
+      min-height: 56px;
+    }
+
     .chat-page textarea:focus,
     .chat-page select:focus {
       border-color: #bd8cff;
@@ -720,6 +830,9 @@ BASE_TEMPLATE = """
     .chat-page .composer-submit {
       background: linear-gradient(135deg, #c18cff, #9764d4);
       color: #160d21;
+      margin: 0;
+      min-height: 42px;
+      white-space: nowrap;
     }
 
     .chat-page .composer-submit:hover {
@@ -731,13 +844,51 @@ BASE_TEMPLATE = """
       opacity: .72;
     }
 
+    .chat-page .chat-pending {
+      align-items: center;
+      color: #dcb8ff;
+      display: flex;
+      font-size: 12px;
+      gap: 8px;
+      margin: 10px 0 0;
+    }
+
+    .chat-page .chat-pending[hidden] {
+      display: none;
+    }
+
+    .chat-page .chat-pending-spinner {
+      animation: chat-spin .8s linear infinite;
+      border: 2px solid rgba(197, 145, 255, .25);
+      border-radius: 50%;
+      border-top-color: #c591ff;
+      height: 12px;
+      width: 12px;
+    }
+
+    @keyframes chat-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    #chat-form.is-pending select {
+      opacity: .72;
+      pointer-events: none;
+    }
+
+    #chat-form.is-pending textarea {
+      opacity: .85;
+    }
+
     @media (max-width: 720px) {
-      .chat-page .chat-message {
-        max-width: 86%;
+      .chat-page .chat-message,
+      .chat-page .chat-user,
+      .chat-page .chat-assistant {
+        max-width: 94%;
       }
 
       .chat-page .chat-composer {
-        position: static;
+        bottom: 0;
+        position: sticky;
       }
 
       .chat-page .composer-grid {
@@ -803,6 +954,28 @@ BASE_TEMPLATE = """
     const chatForm = document.getElementById("chat-form");
     const chatQuestion = document.getElementById("question");
 
+    function setChatPending() {
+      if (!chatForm) return;
+      const submitButton = chatForm.querySelector(
+        'button[type="submit"]'
+      );
+      const pending = document.getElementById("chat-pending");
+
+      chatForm.classList.add("is-pending");
+      chatForm.setAttribute("aria-busy", "true");
+      if (chatQuestion) {
+        chatQuestion.readOnly = true;
+      }
+      if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.textContent = "Thinking…";
+        submitButton.setAttribute("data-chat-submit-pending", "1");
+      }
+      if (pending) {
+        pending.hidden = false;
+      }
+    }
+
     if (chatForm && chatQuestion) {
       chatQuestion.addEventListener("keydown", function(event) {
         if (
@@ -811,23 +984,28 @@ BASE_TEMPLATE = """
           !event.isComposing
         ) {
           event.preventDefault();
+          if (chatForm.classList.contains("is-pending")) {
+            return;
+          }
           if (chatForm.reportValidity()) {
-            const submitButton = chatForm.querySelector(
-              'button[type="submit"]'
-            );
-            submitButton.disabled = true;
-            submitButton.textContent = "Thinking…";
+            setChatPending();
             chatForm.requestSubmit();
           }
         }
       });
 
       chatForm.addEventListener("submit", function() {
-        const submitButton = chatForm.querySelector(
-          'button[type="submit"]'
-        );
-        submitButton.disabled = true;
-        submitButton.textContent = "Thinking…";
+        setChatPending();
+      });
+    }
+
+    const lastMessage = document.querySelector(
+      ".chat-history .chat-message:last-child"
+    );
+    if (lastMessage) {
+      lastMessage.scrollIntoView({
+        block: "end",
+        behavior: "smooth",
       });
     }
   </script>
@@ -1831,11 +2009,11 @@ def chat_page():
         <div class="chat-error">{{ error }}</div>
       {% endif %}
 
-      <div class="section">
-        <h3>Conversation</h3>
+      <div class="section chat-thread">
+        <p class="chat-thread-title">Conversation</p>
 
         {% if history %}
-          <div class="chat-history">
+          <div class="chat-history" id="chat-history">
             {% for message in history %}
               <div class="chat-message chat-{{ message.role }}">
                 <div class="chat-message-inner">
@@ -1850,6 +2028,16 @@ def chat_page():
 
                   {% if message.role == 'assistant'
                         and message.metadata %}
+                    <div class="chat-assistant-meta">
+                      <span class="chat-meta-label">provider</span>
+                      <span class="chat-meta-value">{{ message.metadata.provider }}</span>
+                      <span class="chat-meta-label">model</span>
+                      <span class="chat-meta-value">{{ message.metadata.model }}</span>
+                      <span class="chat-meta-label">authority</span>
+                      <span class="chat-meta-value">{{ message.metadata.execution_authority }}</span>
+                      <span class="chat-meta-label">audit</span>
+                      <span class="chat-meta-value">{{ message.metadata.audit_artifact_id }}</span>
+                    </div>
                     <button
                       class="chat-copy"
                       type="button"
@@ -1857,14 +2045,6 @@ def chat_page():
                     >
                       Copy
                     </button>
-                    <div class="chat-assistant-meta">
-                      {{ message.metadata.provider }}
-                      · {{ message.metadata.model }}
-                      · authority:
-                      {{ message.metadata.execution_authority }}
-                      · audit:
-                      {{ message.metadata.audit_artifact_id }}
-                    </div>
                   {% endif %}
                 </div>
               </div>
@@ -1913,6 +2093,18 @@ def chat_page():
               Ask ORCH Chat
             </button>
           </div>
+
+          <p
+            id="chat-pending"
+            class="chat-pending"
+            data-chat-pending
+            hidden
+            role="status"
+            aria-live="polite"
+          >
+            <span class="chat-pending-spinner" aria-hidden="true"></span>
+            Waiting for advisory reply…
+          </p>
 
           <p class="composer-help">
             ORCH Context uses an allowlisted summary only; it never
