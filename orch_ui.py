@@ -1095,6 +1095,34 @@ def get_csrf_token():
     return token
 
 
+
+def resolve_contained_artifact_path(path_value):
+    """Resolve a pointer path and require it under ARTIFACTS_ROOT.
+
+    Rejects empty values, ``../`` traversal, absolute paths outside
+    the artifact tree, and sibling project paths (for example ``.env``).
+    """
+    if not isinstance(path_value, str) or not path_value.strip():
+        raise ValueError("missing artifact path")
+
+    raw = Path(path_value)
+    artifacts_root = ARTIFACTS_ROOT.resolve()
+
+    if raw.is_absolute():
+        candidate = raw.resolve()
+    else:
+        candidate = (PROJECT_ROOT / raw).resolve()
+
+    try:
+        candidate.relative_to(artifacts_root)
+    except ValueError as error:
+        raise ValueError(
+            "artifact path escapes ARTIFACTS_ROOT"
+        ) from error
+
+    return candidate
+
+
 def artifact_views():
     if not LATEST_DIR.exists():
         return []
@@ -1535,10 +1563,17 @@ def artifact_detail(logical_name):
         abort(404)
 
     pointer = load_json(pointer_path, {})
-    manifest_path = PROJECT_ROOT / pointer.get(
-        "manifest_path",
-        "",
-    )
+
+    try:
+        manifest_path = resolve_contained_artifact_path(
+            pointer.get("manifest_path", ""),
+        )
+    except ValueError:
+        abort(404)
+
+    if not manifest_path.is_file():
+        abort(404)
+
     manifest = load_json(manifest_path, {})
 
     detail_template = """

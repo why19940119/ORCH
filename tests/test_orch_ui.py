@@ -1,15 +1,19 @@
 import os
 import subprocess
 import sys
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from orch_ui import (
+    ARTIFACTS_ROOT,
     CHAT_SESSIONS,
+    PROJECT_ROOT,
     app,
     build_chat_context,
     extract_task_id_references,
+    resolve_contained_artifact_path,
 )
 
 
@@ -453,3 +457,60 @@ class OrchUiSecretAndCookieTests(unittest.TestCase):
             0,
             result.stderr,
         )
+
+
+class ArtifactRootContainmentTests(unittest.TestCase):
+    def test_accepts_path_under_artifacts_root(self):
+        relative = "artifacts/manifests/safe_manifest.json"
+        resolved = resolve_contained_artifact_path(relative)
+        self.assertEqual(
+            resolved,
+            (PROJECT_ROOT / relative).resolve(),
+        )
+        self.assertTrue(
+            str(resolved).startswith(
+                str(ARTIFACTS_ROOT.resolve())
+            )
+        )
+
+    def test_rejects_parent_traversal(self):
+        with self.assertRaises(ValueError):
+            resolve_contained_artifact_path(
+                "artifacts/../.env.example"
+            )
+
+    def test_rejects_absolute_path_outside_artifacts(self):
+        outsider = (PROJECT_ROOT / ".env.example").resolve()
+        with self.assertRaises(ValueError):
+            resolve_contained_artifact_path(str(outsider))
+
+    def test_rejects_sibling_outside_artifacts(self):
+        with self.assertRaises(ValueError):
+            resolve_contained_artifact_path("orch_ui.py")
+
+    def test_artifact_detail_rejects_escaping_pointer(self):
+        client = app.test_client()
+        pointer = {
+            "logical_name": "escape_probe",
+            "artifact_id": "artifact_escape_probe",
+            "manifest_path": "../.env.example",
+            "content_sha256": "sha256:test",
+            "updated_at_utc": "2026-09-21T00:00:00+00:00",
+        }
+        pointer_path = (
+            ARTIFACTS_ROOT / "latest" / "escape_probe.json"
+        )
+        ARTIFACTS_ROOT.joinpath("latest").mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        pointer_path.write_text(
+            json.dumps(pointer),
+            encoding="utf-8",
+        )
+        try:
+            response = client.get("/artifacts/escape_probe")
+            self.assertEqual(response.status_code, 404)
+        finally:
+            if pointer_path.exists():
+                pointer_path.unlink()
