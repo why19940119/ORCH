@@ -181,10 +181,13 @@ class TaskStatusAndComposerUiTests(unittest.TestCase):
         self.assertIn("data-chat-submit-pending", source)
         self.assertIn("setChatPending", source)
         self.assertIn("Thinking…", source)
-        self.assertIn("chatQuestion.readOnly = true", source)
+        self.assertIn("chatQuestion.readOnly = on", source)
         self.assertIn('classList.add("is-pending")', source)
         self.assertIn("scrollIntoView", source)
         self.assertIn('aria-busy", "true"', source)
+        self.assertIn("submitChatAjax", source)
+        self.assertIn('formData.set("format", "json")', source)
+        self.assertIn("appendChatBubble", source)
 
     def test_chat_bubble_and_metadata_css_contract(self):
         source = Path("orch_ui.py").read_text(encoding="utf-8")
@@ -507,6 +510,129 @@ class OrchChatProviderTests(unittest.TestCase):
             call_kwargs["mode"],
             "general",
         )
+
+
+
+class OrchChatModeAndAjaxTests(unittest.TestCase):
+    def setUp(self):
+        app.config["TESTING"] = True
+        CHAT_SESSIONS.clear()
+        self.client = app.test_client()
+
+    def _mock_result(self, answer="General answer."):
+        return {
+            "provider": "openrouter",
+            "requested_model": "mistralai/mistral-medium-3.1",
+            "response_model": "mistralai/mistral-medium-3.1",
+            "response_id": "chat-test-ajax-001",
+            "usage": {"total_tokens": 0, "cost": 0},
+            "chat": {
+                "answer": answer,
+                "referenced_task_ids": [],
+                "referenced_artifact_ids": [],
+                "limitations": ["No execution authority."],
+                "execution_authority": "none",
+            },
+        }
+
+    @patch("orch_ui.publish_chat_audit_artifact")
+    @patch("orch_ui.record_chat_usage")
+    @patch("orch_ui.ask_orch")
+    def test_last_chat_mode_checks_matching_radio(
+        self,
+        mock_ask_orch,
+        mock_record_usage,
+        mock_publish_audit,
+    ):
+        mock_publish_audit.return_value = {
+            "artifact_id": "artifact_chat_audit_mode",
+        }
+        mock_ask_orch.return_value = self._mock_result()
+
+        self.client.get("/chat")
+        with self.client.session_transaction() as sess:
+            csrf_token = sess["csrf_token"]
+
+        response = self.client.post(
+            "/chat",
+            data={
+                "csrf_token": csrf_token,
+                "mode": "general",
+                "question": "Ping",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertRegex(html, r'value="general"\s+checked')
+        self.assertNotRegex(
+            html,
+            r'value="orch_context"\s+checked',
+        )
+        with self.client.session_transaction() as sess:
+            self.assertEqual(sess.get("last_chat_mode"), "general")
+
+    @patch("orch_ui.publish_chat_audit_artifact")
+    @patch("orch_ui.record_chat_usage")
+    @patch("orch_ui.ask_orch")
+    def test_json_chat_turn_returns_payload_without_html(
+        self,
+        mock_ask_orch,
+        mock_record_usage,
+        mock_publish_audit,
+    ):
+        mock_publish_audit.return_value = {
+            "artifact_id": "artifact_chat_audit_json",
+        }
+        mock_ask_orch.return_value = self._mock_result(
+            "JSON answer body."
+        )
+
+        self.client.get("/chat")
+        with self.client.session_transaction() as sess:
+            csrf_token = sess["csrf_token"]
+
+        response = self.client.post(
+            "/chat",
+            data={
+                "csrf_token": csrf_token,
+                "mode": "general",
+                "question": "JSON please",
+                "format": "json",
+            },
+            headers={
+                "Accept": "application/json",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["mode"], "general")
+        self.assertEqual(payload["user"]["content"], "JSON please")
+        self.assertEqual(
+            payload["assistant"]["content"],
+            "JSON answer body.",
+        )
+        self.assertEqual(
+            payload["assistant"]["metadata"][
+                "execution_authority"
+            ],
+            "none",
+        )
+        self.assertNotIn(b"<!doctype html>", response.data)
+
+    def test_json_chat_requires_csrf(self):
+        response = self.client.post(
+            "/chat",
+            data={
+                "mode": "general",
+                "question": "Nope",
+                "format": "json",
+            },
+            headers={"Accept": "application/json"},
+        )
+        self.assertEqual(response.status_code, 400)
+
 
 
 class OrchUiHostValidationTests(unittest.TestCase):

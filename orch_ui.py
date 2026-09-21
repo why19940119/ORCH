@@ -11,6 +11,7 @@ import time
 from flask import (
     Flask,
     abort,
+    jsonify,
     redirect,
     render_template_string,
     request,
@@ -1536,28 +1537,229 @@ BASE_TEMPLATE = """
     const chatForm = document.getElementById("chat-form");
     const chatQuestion = document.getElementById("question");
 
-    function setChatPending() {
+    function chatLabel(name, fallback) {
+      if (!chatForm) return fallback;
+      return chatForm.getAttribute("data-label-" + name) || fallback;
+    }
+
+    function setChatPending(pendingOn) {
       if (!chatForm) return;
       const submitButton = chatForm.querySelector(
         'button[type="submit"]'
       );
       const pending = document.getElementById("chat-pending");
+      const on = pendingOn !== false;
 
-      chatForm.classList.add("is-pending");
-      chatForm.setAttribute("aria-busy", "true");
+      if (on) {
+        chatForm.classList.add("is-pending");
+        chatForm.setAttribute("aria-busy", "true");
+      } else {
+        chatForm.classList.remove("is-pending");
+        chatForm.removeAttribute("aria-busy");
+      }
       if (chatQuestion) {
-        chatQuestion.readOnly = true;
+        chatQuestion.readOnly = on;
       }
       if (submitButton) {
-        submitButton.disabled = true;
-        submitButton.textContent = (
-          submitButton.getAttribute("data-label-thinking")
-          || "Thinking…"
-        );
-        submitButton.setAttribute("data-chat-submit-pending", "1");
+        submitButton.disabled = on;
+        submitButton.textContent = on
+          ? (submitButton.getAttribute("data-label-thinking") || "Thinking…")
+          : (submitButton.getAttribute("data-label-ask") || "Send");
+        if (on) {
+          submitButton.setAttribute("data-chat-submit-pending", "1");
+        } else {
+          submitButton.removeAttribute("data-chat-submit-pending");
+        }
       }
       if (pending) {
-        pending.hidden = false;
+        pending.hidden = !on;
+      }
+    }
+
+    function ensureChatHistory() {
+      let history = document.getElementById("chat-history");
+      const empty = document.getElementById("chat-empty");
+      if (!history) {
+        const thread = document.querySelector(".chat-thread");
+        if (!thread) return null;
+        history = document.createElement("div");
+        history.className = "chat-history";
+        history.id = "chat-history";
+        thread.insertBefore(history, empty || null);
+      }
+      history.hidden = false;
+      if (empty) empty.hidden = true;
+      return history;
+    }
+
+    function appendChatBubble(message) {
+      const history = ensureChatHistory();
+      if (!history || !message) return;
+
+      const wrap = document.createElement("div");
+      wrap.className = "chat-message chat-" + message.role;
+
+      const inner = document.createElement("div");
+      inner.className = "chat-message-inner";
+
+      const meta = document.createElement("div");
+      meta.className = "chat-meta";
+      const role = document.createElement("span");
+      role.className = "chat-role";
+      role.textContent = message.role === "assistant"
+        ? chatLabel("role-assistant", "assistant")
+        : chatLabel("role-user", "user");
+      meta.appendChild(role);
+      if (message.mode) {
+        const mode = document.createElement("span");
+        mode.className = "chat-mode";
+        mode.textContent = message.mode === "orch_context"
+          ? chatLabel("mode-orch", "ORCH Context")
+          : chatLabel("mode-general", "General Chat");
+        meta.appendChild(mode);
+      }
+      inner.appendChild(meta);
+
+      const content = document.createElement("div");
+      content.className = "chat-content";
+      content.textContent = message.content || "";
+      inner.appendChild(content);
+
+      if (message.role === "assistant" && message.metadata) {
+        const actions = document.createElement("div");
+        actions.className = "chat-message-actions";
+        const copyBtn = document.createElement("button");
+        copyBtn.className = "chat-copy";
+        copyBtn.type = "button";
+        copyBtn.setAttribute("data-copy-message", "");
+        copyBtn.setAttribute(
+          "data-label-copy",
+          chatLabel("copy", "Copy")
+        );
+        copyBtn.setAttribute(
+          "data-label-copied",
+          chatLabel("copied", "Copied")
+        );
+        copyBtn.setAttribute(
+          "data-label-copy-failed",
+          chatLabel("copy-failed", "Copy failed")
+        );
+        copyBtn.textContent = chatLabel("copy", "Copy");
+        actions.appendChild(copyBtn);
+        inner.appendChild(actions);
+
+        const details = document.createElement("details");
+        details.className = "chat-meta-details";
+        const summary = document.createElement("summary");
+        summary.textContent = chatLabel("meta-details", "Details");
+        details.appendChild(summary);
+        const grid = document.createElement("div");
+        grid.className = "chat-assistant-meta";
+        const pairs = [
+          [chatLabel("meta-provider", "provider"), message.metadata.provider],
+          [chatLabel("meta-model", "model"), message.metadata.model],
+          [chatLabel("meta-authority", "authority"), message.metadata.execution_authority],
+          [chatLabel("meta-audit", "audit"), message.metadata.audit_artifact_id],
+        ];
+        pairs.forEach(function(pair) {
+          const label = document.createElement("span");
+          label.className = "chat-meta-label";
+          label.textContent = pair[0];
+          const value = document.createElement("span");
+          value.className = "chat-meta-value";
+          value.textContent = pair[1] == null ? "" : String(pair[1]);
+          grid.appendChild(label);
+          grid.appendChild(value);
+        });
+        details.appendChild(grid);
+        inner.appendChild(details);
+      }
+
+      wrap.appendChild(inner);
+      history.appendChild(wrap);
+      wrap.scrollIntoView({ block: "end", behavior: "smooth" });
+    }
+
+    function showChatError(message) {
+      let box = document.getElementById("chat-live-error");
+      if (!box) {
+        box = document.createElement("div");
+        box.id = "chat-live-error";
+        box.className = "chat-error";
+        const thread = document.querySelector(".chat-thread");
+        if (thread && thread.parentNode) {
+          thread.parentNode.insertBefore(box, thread);
+        } else if (chatForm) {
+          chatForm.parentNode.insertBefore(box, chatForm);
+        }
+      }
+      box.hidden = false;
+      box.textContent = message || chatLabel("error-failed", "Chat request failed.");
+    }
+
+    function clearChatError() {
+      const box = document.getElementById("chat-live-error");
+      if (box) {
+        box.hidden = true;
+        box.textContent = "";
+      }
+    }
+
+    async function submitChatAjax(event) {
+      if (event) event.preventDefault();
+      if (!chatForm || chatForm.classList.contains("is-pending")) {
+        return;
+      }
+      if (!chatForm.reportValidity()) {
+        return;
+      }
+
+      clearChatError();
+      setChatPending(true);
+
+      const formData = new FormData(chatForm);
+      formData.set("format", "json");
+
+      try {
+        const response = await fetch(chatForm.getAttribute("action") || "/chat", {
+          method: "POST",
+          body: formData,
+          headers: {
+            "Accept": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+          },
+          credentials: "same-origin",
+        });
+
+        let payload = null;
+        const contentType = response.headers.get("content-type") || "";
+        if (contentType.indexOf("application/json") !== -1) {
+          payload = await response.json();
+        }
+
+        if (!response.ok || !payload || payload.ok !== true) {
+          const errText = (payload && payload.error)
+            || chatLabel("error-failed", "Chat request failed.");
+          showChatError(errText);
+          setChatPending(false);
+          return;
+        }
+
+        appendChatBubble(payload.user);
+        appendChatBubble(payload.assistant);
+        if (chatQuestion) {
+          chatQuestion.value = "";
+        }
+        if (payload.mode) {
+          const radio = chatForm.querySelector(
+            'input[name="mode"][value="' + payload.mode + '"]'
+          );
+          if (radio) radio.checked = true;
+        }
+        setChatPending(false);
+      } catch (error) {
+        showChatError(chatLabel("error-failed", "Chat request failed."));
+        setChatPending(false);
       }
     }
 
@@ -1569,18 +1771,16 @@ BASE_TEMPLATE = """
           !event.isComposing
         ) {
           event.preventDefault();
-          if (chatForm.classList.contains("is-pending")) {
-            return;
-          }
-          if (chatForm.reportValidity()) {
-            setChatPending();
-            chatForm.requestSubmit();
-          }
+          submitChatAjax();
         }
       });
 
-      chatForm.addEventListener("submit", function() {
-        setChatPending();
+      chatForm.addEventListener("submit", function(event) {
+        if (!window.fetch) {
+          setChatPending(true);
+          return;
+        }
+        submitChatAjax(event);
       });
     }
 
@@ -2635,6 +2835,18 @@ def chat_page():
     csrf_token = get_csrf_token()
     t = ui_strings(get_locale())
     error = None
+    json_turn = None
+
+    def wants_json_response():
+        if request.form.get("format") == "json":
+            return True
+        if request.args.get("format") == "json":
+            return True
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            accept = (request.headers.get("Accept") or "").lower()
+            if "application/json" in accept:
+                return True
+        return False
 
     if request.method == "POST":
         submitted_token = request.form.get(
@@ -2654,6 +2866,7 @@ def chat_page():
         if mode not in {"general", "orch_context"}:
             abort(400)
 
+        session["last_chat_mode"] = mode
         last_chat_at = session.get("last_chat_at", 0)
 
         if (
@@ -2713,47 +2926,75 @@ def chat_page():
                     error = t["err_chat_audit"]
 
                 else:
-                    history.append(
-                        {
-                            "role": "user",
-                            "content": question,
-                            "mode": mode,
-                        }
-                    )
+                    user_message = {
+                        "role": "user",
+                        "content": question,
+                        "mode": mode,
+                    }
+                    assistant_message = {
+                        "role": "assistant",
+                        "content": chat["answer"],
+                        "mode": mode,
+                        "metadata": {
+                            "provider": result["provider"],
+                            "model": result[
+                                "response_model"
+                            ],
+                            "response_id": result[
+                                "response_id"
+                            ],
+                            "referenced_task_ids": chat[
+                                "referenced_task_ids"
+                            ],
+                            "referenced_artifact_ids": chat[
+                                "referenced_artifact_ids"
+                            ],
+                            "audit_artifact_id": (
+                                audit_artifact[
+                                    "artifact_id"
+                                ]
+                            ),
+                            "execution_authority": chat[
+                                "execution_authority"
+                            ],
+                        },
+                    }
 
-                    history.append(
-                        {
-                            "role": "assistant",
-                            "content": chat["answer"],
-                            "mode": mode,
-                            "metadata": {
-                                "provider": result["provider"],
-                                "model": result[
-                                    "response_model"
-                                ],
-                                "response_id": result[
-                                    "response_id"
-                                ],
-                                "referenced_task_ids": chat[
-                                    "referenced_task_ids"
-                                ],
-                                "referenced_artifact_ids": chat[
-                                    "referenced_artifact_ids"
-                                ],
-                                "audit_artifact_id": (
-                                    audit_artifact[
-                                        "artifact_id"
-                                    ]
-                                ),
-                                "execution_authority": chat[
-                                    "execution_authority"
-                                ],
-                            },
-                        }
-                    )
+                    history.append(user_message)
+                    history.append(assistant_message)
 
                     del history[:-CHAT_MAX_HISTORY]
                     session["last_chat_at"] = time.time()
+                    json_turn = {
+                        "user": user_message,
+                        "assistant": assistant_message,
+                        "mode": mode,
+                    }
+
+        if wants_json_response():
+            if error:
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": error,
+                        "mode": session.get(
+                            "last_chat_mode",
+                            "orch_context",
+                        ),
+                    }
+                ), 400
+            return jsonify(
+                {
+                    "ok": True,
+                    "mode": json_turn["mode"],
+                    "user": json_turn["user"],
+                    "assistant": json_turn["assistant"],
+                }
+            )
+
+    chat_mode = session.get("last_chat_mode", "orch_context")
+    if chat_mode not in {"general", "orch_context"}:
+        chat_mode = "orch_context"
 
     chat_template = """
       <div class="chat-page">
@@ -2776,77 +3017,102 @@ def chat_page():
         </div>
 
       {% if error %}
-        <div class="chat-error">{{ error }}</div>
+        <div class="chat-error" id="chat-live-error">{{ error }}</div>
+      {% else %}
+        <div class="chat-error" id="chat-live-error" hidden></div>
       {% endif %}
 
       <div class="section chat-thread">
         <p class="chat-thread-title">{{ t.chat_conversation }}</p>
 
-        {% if history %}
-          <div class="chat-history" id="chat-history">
-            {% for message in history %}
-              <div class="chat-message chat-{{ message.role }}">
-                <div class="chat-message-inner">
-                  <div class="chat-meta">
-                    <span class="chat-role">
-                      {% if message.role == 'assistant' %}
-                        {{ t.role_assistant }}
+        <div
+          class="chat-history"
+          id="chat-history"
+          {% if not history %}hidden{% endif %}
+        >
+          {% for message in history %}
+            <div class="chat-message chat-{{ message.role }}">
+              <div class="chat-message-inner">
+                <div class="chat-meta">
+                  <span class="chat-role">
+                    {% if message.role == 'assistant' %}
+                      {{ t.role_assistant }}
+                    {% else %}
+                      {{ t.role_user }}
+                    {% endif %}
+                  </span>
+                  {% if message.mode %}
+                    <span class="chat-mode">
+                      {% if message.mode == 'orch_context' %}
+                        {{ t.mode_orch_context }}
                       {% else %}
-                        {{ t.role_user }}
+                        {{ t.mode_general }}
                       {% endif %}
                     </span>
-                    {% if message.mode %}
-                      <span class="chat-mode">
-                        {% if message.mode == 'orch_context' %}
-                          {{ t.mode_orch_context }}
-                        {% else %}
-                          {{ t.mode_general }}
-                        {% endif %}
-                      </span>
-                    {% endif %}
-                  </div>
-
-                  <div class="chat-content">{{ message.content }}</div>
-
-                  {% if message.role == 'assistant'
-                        and message.metadata %}
-                    <div class="chat-message-actions">
-                      <button
-                        class="chat-copy"
-                        type="button"
-                        data-copy-message
-                        data-label-copy="{{ t.chat_copy }}"
-                        data-label-copied="{{ t.chat_copied }}"
-                        data-label-copy-failed="{{ t.chat_copy_failed }}"
-                      >
-                        {{ t.chat_copy }}
-                      </button>
-                    </div>
-                    <details class="chat-meta-details">
-                      <summary>{{ t.chat_meta_details }}</summary>
-                      <div class="chat-assistant-meta">
-                        <span class="chat-meta-label">{{ t.meta_provider }}</span>
-                        <span class="chat-meta-value">{{ message.metadata.provider }}</span>
-                        <span class="chat-meta-label">{{ t.meta_model }}</span>
-                        <span class="chat-meta-value">{{ message.metadata.model }}</span>
-                        <span class="chat-meta-label">{{ t.meta_authority }}</span>
-                        <span class="chat-meta-value">{{ message.metadata.execution_authority }}</span>
-                        <span class="chat-meta-label">{{ t.meta_audit }}</span>
-                        <span class="chat-meta-value">{{ message.metadata.audit_artifact_id }}</span>
-                      </div>
-                    </details>
                   {% endif %}
                 </div>
+
+                <div class="chat-content">{{ message.content }}</div>
+
+                {% if message.role == 'assistant'
+                      and message.metadata %}
+                  <div class="chat-message-actions">
+                    <button
+                      class="chat-copy"
+                      type="button"
+                      data-copy-message
+                      data-label-copy="{{ t.chat_copy }}"
+                      data-label-copied="{{ t.chat_copied }}"
+                      data-label-copy-failed="{{ t.chat_copy_failed }}"
+                    >
+                      {{ t.chat_copy }}
+                    </button>
+                  </div>
+                  <details class="chat-meta-details">
+                    <summary>{{ t.chat_meta_details }}</summary>
+                    <div class="chat-assistant-meta">
+                      <span class="chat-meta-label">{{ t.meta_provider }}</span>
+                      <span class="chat-meta-value">{{ message.metadata.provider }}</span>
+                      <span class="chat-meta-label">{{ t.meta_model }}</span>
+                      <span class="chat-meta-value">{{ message.metadata.model }}</span>
+                      <span class="chat-meta-label">{{ t.meta_authority }}</span>
+                      <span class="chat-meta-value">{{ message.metadata.execution_authority }}</span>
+                      <span class="chat-meta-label">{{ t.meta_audit }}</span>
+                      <span class="chat-meta-value">{{ message.metadata.audit_artifact_id }}</span>
+                    </div>
+                  </details>
+                {% endif %}
               </div>
-            {% endfor %}
-          </div>
-        {% else %}
-          <div class="empty">{{ t.chat_empty }}</div>
-        {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+
+        <div
+          class="empty"
+          id="chat-empty"
+          {% if history %}hidden{% endif %}
+        >{{ t.chat_empty }}</div>
       </div>
 
       <div class="section chat-composer">
-        <form id="chat-form" method="post" action="/chat">
+        <form
+          id="chat-form"
+          method="post"
+          action="/chat"
+          data-label-role-user="{{ t.role_user }}"
+          data-label-role-assistant="{{ t.role_assistant }}"
+          data-label-mode-general="{{ t.mode_general }}"
+          data-label-mode-orch="{{ t.mode_orch_context }}"
+          data-label-copy="{{ t.chat_copy }}"
+          data-label-copied="{{ t.chat_copied }}"
+          data-label-copy-failed="{{ t.chat_copy_failed }}"
+          data-label-meta-details="{{ t.chat_meta_details }}"
+          data-label-meta-provider="{{ t.meta_provider }}"
+          data-label-meta-model="{{ t.meta_model }}"
+          data-label-meta-authority="{{ t.meta_authority }}"
+          data-label-meta-audit="{{ t.meta_audit }}"
+          data-label-error-failed="{{ t.err_chat_failed }}"
+        >
           <input
             type="hidden"
             name="csrf_token"
@@ -2856,7 +3122,12 @@ def chat_page():
           <div class="composer-grid">
             <div class="mode-seg" role="group" aria-label="{{ t.chat_mode_label }}">
               <label>
-                <input type="radio" name="mode" value="general">
+                <input
+                  type="radio"
+                  name="mode"
+                  value="general"
+                  {% if chat_mode == 'general' %}checked{% endif %}
+                >
                 <span>{{ t.mode_general }}</span>
               </label>
               <label>
@@ -2864,7 +3135,7 @@ def chat_page():
                   type="radio"
                   name="mode"
                   value="orch_context"
-                  checked
+                  {% if chat_mode == 'orch_context' %}checked{% endif %}
                 >
                 <span>{{ t.mode_orch_context }}</span>
               </label>
@@ -2915,7 +3186,9 @@ def chat_page():
         history=history,
         csrf_token=csrf_token,
         error=error,
+        chat_mode=chat_mode,
     )
+
 
 
 if __name__ == "__main__":
