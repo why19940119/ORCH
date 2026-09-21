@@ -1,1 +1,1 @@
-temporary
+file:///tmp/ca_only_content.txt
