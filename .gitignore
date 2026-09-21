@@ -20,3 +20,6 @@ artifacts/latest/
 
 .venv/
 state/chat_usage.jsonl
+
+# v0.17.0 chat uploads (contained locally)
+uploads/
