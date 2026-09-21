@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +14,7 @@ from orch_ui import (
     app,
     build_chat_context,
     extract_task_id_references,
+    load_local_dotenv,
     resolve_contained_artifact_path,
 )
 
@@ -514,3 +516,63 @@ class ArtifactRootContainmentTests(unittest.TestCase):
         finally:
             if pointer_path.exists():
                 pointer_path.unlink()
+
+
+class LocalDotenvTests(unittest.TestCase):
+    def test_loads_missing_keys_from_dotenv(self):
+        key = "ORCH_DOTENV_PROBE_LOAD"
+        os.environ.pop(key, None)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text(
+                f"{key}=from-dotenv-file\n",
+                encoding="utf-8",
+            )
+            load_local_dotenv(env_file)
+
+        self.assertEqual(os.environ.get(key), "from-dotenv-file")
+        os.environ.pop(key, None)
+
+    def test_does_not_override_existing_environ(self):
+        key = "ORCH_DOTENV_PROBE_OVERRIDE"
+        os.environ[key] = "from-process-env"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text(
+                f"{key}=from-dotenv-file\n",
+                encoding="utf-8",
+            )
+            load_local_dotenv(env_file)
+
+        self.assertEqual(os.environ.get(key), "from-process-env")
+        os.environ.pop(key, None)
+
+    def test_secret_key_can_come_from_dotenv_file(self):
+        expected = "dotenv-ui-secret-for-unit-test"
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            env_file = project / ".env"
+            env_file.write_text(
+                f"ORCH_UI_SECRET_KEY={expected}\n",
+                encoding="utf-8",
+            )
+            code = (
+                "from pathlib import Path\n"
+                "import orch_ui\n"
+                "orch_ui.load_local_dotenv(Path(%r))\n"
+                "import os\n"
+                "assert os.environ.get('ORCH_UI_SECRET_KEY') == %r\n"
+            ) % (str(env_file), expected)
+            env = os.environ.copy()
+            env.pop("ORCH_UI_SECRET_KEY", None)
+            result = subprocess.run(
+                [sys.executable, "-c", code],
+                cwd=str(Path(__file__).resolve().parents[1]),
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)

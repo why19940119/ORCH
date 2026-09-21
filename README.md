@@ -410,10 +410,9 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-export ORCH_UI_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-# Optional chat provider (existing advisory/chat path):
-# export OPENROUTER_API_KEY='your-key'
-# export OPENROUTER_MODEL='mistralai/mistral-medium-3.1'
+cp .env.example .env
+# Edit .env once: set ORCH_UI_SECRET_KEY and optional OPENROUTER_API_KEY.
+# Already-exported shell variables still win over .env.
 
 python orch_ui.py
 ```
@@ -425,6 +424,14 @@ http://127.0.0.1:5050
 ```
 
 Chat lives at `http://127.0.0.1:5050/chat`.
+
+## Local .env
+
+Copy `.env.example` to `.env` and fill placeholders once. On startup,
+`orch_ui.py` loads `.env` for any keys not already set in the process
+environment. `.env` is gitignored. Never commit real keys; ORCH never
+prints secret values.
+
 
 Durable browser sessions need a stable Flask secret. Set
 `ORCH_UI_SECRET_KEY` in the environment (see `.env.example`).

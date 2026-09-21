@@ -38,6 +38,53 @@ MANIFESTS_DIR = ARTIFACTS_ROOT / "manifests"
 
 LOGICAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
+def load_local_dotenv(env_path=None):
+    """Load KEY=VALUE pairs from a project ``.env`` if present.
+
+    Already-set environment variables are never overridden.
+    Values are never printed.
+    """
+    path = Path(env_path) if env_path is not None else (
+        PROJECT_ROOT / ".env"
+    )
+
+    if not path.is_file():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+
+        if not line or line.startswith("#"):
+            continue
+
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+
+        if not key or not key.isidentifier():
+            continue
+
+        if key in os.environ:
+            continue
+
+        value = value.strip()
+
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {
+            '"',
+            "'",
+        }:
+            value = value[1:-1]
+
+        os.environ[key] = value
+
+
+load_local_dotenv()
+
 app = Flask(__name__)
 
 _secret = os.getenv("ORCH_UI_SECRET_KEY")
