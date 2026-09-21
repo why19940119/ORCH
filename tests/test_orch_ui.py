@@ -14,9 +14,11 @@ from orch_ui import (
     app,
     build_chat_context,
     extract_task_id_references,
+    get_locale,
     load_local_dotenv,
     resolve_contained_artifact_path,
 )
+from ui_i18n import DEFAULT_LOCALE, SUPPORTED_LOCALES, ui_strings
 
 
 class OrchUiTests(unittest.TestCase):
@@ -45,14 +47,15 @@ class OrchUiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
 
-    def test_ui_post_routes_are_chat_only(self):
+    def test_ui_post_routes_are_chat_or_locale(self):
         post_routes = sorted(
             rule.rule
             for rule in app.url_map.iter_rules()
             if "POST" in rule.methods
+            and not rule.rule.startswith("/static")
         )
 
-        self.assertEqual(post_routes, ["/chat"])
+        self.assertEqual(post_routes, ["/chat", "/locale"])
 
 
 class TaskStatusAndComposerUiTests(unittest.TestCase):
@@ -220,9 +223,86 @@ class TaskStatusAndComposerUiTests(unittest.TestCase):
         self.assertIn("chat-meta-label", source)
         self.assertIn("chat-meta-value", source)
         self.assertIn(
-            '<span class="chat-meta-label">audit</span>',
+            'class="chat-meta-label">{{ t.meta_audit }}</span>',
             source,
         )
+
+
+
+class LocaleUiTests(unittest.TestCase):
+    def setUp(self):
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+
+    def test_default_locale_is_zh_hant(self):
+        self.assertEqual(DEFAULT_LOCALE, "zh-Hant")
+        response = self.client.get("/")
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('lang="zh-Hant"', html)
+        self.assertIn(ui_strings("zh-Hant")["nav_dashboard"], html)
+        self.assertIn("繁體中文", html)
+
+    def test_switching_locale_updates_key_strings(self):
+        import re
+
+        home = self.client.get("/")
+        match = re.search(
+            r'name="csrf_token" value="([^"]+)"',
+            home.get_data(as_text=True),
+        )
+        self.assertIsNotNone(match)
+        token = match.group(1)
+
+        switched = self.client.post(
+            "/locale",
+            data={
+                "csrf_token": token,
+                "locale": "en",
+                "next": "/",
+            },
+            follow_redirects=True,
+        )
+        html = switched.get_data(as_text=True)
+        self.assertEqual(switched.status_code, 200, html[:300])
+        self.assertIn('lang="en"', html)
+        self.assertIn("Dashboard", html)
+        self.assertIn(ui_strings("en")["operator_boundary"], html)
+
+        hans = self.client.post(
+            "/locale",
+            data={
+                "csrf_token": token,
+                "locale": "zh-Hans",
+                "next": "/chat",
+            },
+            follow_redirects=True,
+        )
+        chat_html = hans.get_data(as_text=True)
+        self.assertEqual(hans.status_code, 200, chat_html[:300])
+        self.assertIn(ui_strings("zh-Hans")["chat_ask"], chat_html)
+        self.assertIn('lang="zh-Hans"', chat_html)
+
+    def test_invalid_locale_is_rejected(self):
+        home = self.client.get("/")
+        token = home.get_data(as_text=True).split(
+            'name="csrf_token" value="'
+        )[1].split('"', 1)[0]
+
+        response = self.client.post(
+            "/locale",
+            data={
+                "csrf_token": token,
+                "locale": "not-a-locale",
+                "next": "/",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            set(SUPPORTED_LOCALES),
+            {"zh-Hant", "zh-Hans", "en"},
+        )
+
 
 
 if __name__ == "__main__":
@@ -238,8 +318,9 @@ class OrchChatUiTests(unittest.TestCase):
         response = self.client.get("/chat")
 
         self.assertEqual(response.status_code, 200)
+        # Default locale is Traditional Chinese.
         self.assertIn(
-            b"ORCH Chat",
+            "ORCH 對話".encode(),
             response.data,
         )
 
@@ -615,9 +696,11 @@ class LocalDotenvTests(unittest.TestCase):
             )
             code = (
                 "from pathlib import Path\n"
-                "import orch_ui\n"
-                "orch_ui.load_local_dotenv(Path(%r))\n"
                 "import os\n"
+                "os.environ.pop('ORCH_UI_SECRET_KEY', None)\n"
+                "import orch_ui\n"
+                "os.environ.pop('ORCH_UI_SECRET_KEY', None)\n"
+                "orch_ui.load_local_dotenv(Path(%r))\n"
                 "assert os.environ.get('ORCH_UI_SECRET_KEY') == %r\n"
             ) % (str(env_file), expected)
             env = os.environ.copy()

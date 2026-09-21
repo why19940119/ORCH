@@ -10,9 +10,19 @@ import time
 from flask import (
     Flask,
     abort,
+    redirect,
     render_template_string,
     request,
     session,
+)
+
+from ui_i18n import (
+    DEFAULT_LOCALE,
+    LOCALE_LABELS,
+    SUPPORTED_LOCALES,
+    html_lang_for,
+    normalize_locale,
+    ui_strings,
 )
 
 from orch_chat import (
@@ -115,7 +125,7 @@ CHAT_SESSIONS = {}
 
 BASE_TEMPLATE = """
 <!doctype html>
-<html lang="en">
+<html lang="{{ html_lang }}">
 <head>
   <meta charset="utf-8">
   <meta
@@ -900,6 +910,63 @@ BASE_TEMPLATE = """
       }
     }
 
+
+    .lang-switch {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-left: auto;
+    }
+
+    .lang-switch-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .4px;
+      text-transform: uppercase;
+    }
+
+    .lang-switch form {
+      display: inline;
+      margin: 0;
+    }
+
+    .lang-switch button {
+      background: transparent;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 600;
+      margin: 0;
+      padding: 5px 9px;
+    }
+
+    .lang-switch button:hover {
+      background: #213149;
+      color: var(--text);
+    }
+
+    .lang-switch button.active {
+      background: #3d2860;
+      border-color: #75539b;
+      color: #e8d4ff;
+    }
+
+    header {
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    header nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 10px;
+    }
+
     @media (max-width: 720px) {
       main { padding: 20px 14px; }
       .kv { grid-template-columns: 1fr; }
@@ -910,24 +977,41 @@ BASE_TEMPLATE = """
 </head>
 <body>
   <header>
-    <h1>ORCH · Local Operator Console</h1>
+    <h1>{{ t.brand }}</h1>
     <nav>
       <a href="/" class="{{ 'active' if active == 'dashboard' }}">
-        Dashboard
+        {{ t.nav_dashboard }}
       </a>
       <a href="/tasks" class="{{ 'active' if active == 'tasks' }}">
-        Tasks
+        {{ t.nav_tasks }}
       </a>
       <a href="/events" class="{{ 'active' if active == 'events' }}">
-        Events
+        {{ t.nav_events }}
       </a>
       <a href="/artifacts" class="{{ 'active' if active == 'artifacts' }}">
-        Artifacts
+        {{ t.nav_artifacts }}
       </a>
       <a href="/chat" class="{{ 'active' if active == 'chat' }}">
-        Chat
+        {{ t.nav_chat }}
       </a>
     </nav>
+    <div class="lang-switch" aria-label="{{ t.lang_label }}">
+      <span class="lang-switch-label">{{ t.lang_label }}</span>
+      {% for code, label in locale_choices %}
+        <form method="post" action="/locale">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="locale" value="{{ code }}">
+          <input type="hidden" name="next" value="{{ next_path }}">
+          <button
+            type="submit"
+            class="{{ 'active' if locale == code else '' }}"
+            {% if locale == code %}aria-current="true"{% endif %}
+          >
+            {{ label }}
+          </button>
+        </form>
+      {% endfor %}
+    </div>
   </header>
   <main>
     {{ body|safe }}
@@ -940,15 +1024,18 @@ BASE_TEMPLATE = """
       const message = button
         .closest(".chat-message-inner")
         .querySelector(".chat-content").innerText;
+      const labelCopy = button.getAttribute("data-label-copy") || "Copy";
+      const labelCopied = button.getAttribute("data-label-copied") || "Copied";
+      const labelFailed = button.getAttribute("data-label-copy-failed") || "Copy failed";
 
       try {
         await navigator.clipboard.writeText(message);
-        button.textContent = "Copied";
+        button.textContent = labelCopied;
         window.setTimeout(function() {
-          button.textContent = "Copy";
+          button.textContent = labelCopy;
         }, 1600);
       } catch (error) {
-        button.textContent = "Copy failed";
+        button.textContent = labelFailed;
       }
     });
     const chatForm = document.getElementById("chat-form");
@@ -968,7 +1055,10 @@ BASE_TEMPLATE = """
       }
       if (submitButton) {
         submitButton.disabled = true;
-        submitButton.textContent = "Thinking…";
+        submitButton.textContent = (
+          submitButton.getAttribute("data-label-thinking")
+          || "Thinking…"
+        );
         submitButton.setAttribute("data-chat-submit-pending", "1");
       }
       if (pending) {
@@ -1314,10 +1404,22 @@ def get_csrf_token():
     token = session.get("csrf_token")
 
     if not token:
-        token = secrets.token_urlsafe(32)
+        token = secrets.token_urlsafe(24)
         session["csrf_token"] = token
 
     return token
+
+
+def get_locale():
+    return normalize_locale(session.get("locale")) or DEFAULT_LOCALE
+
+
+def safe_next_path(value):
+    if not value or not isinstance(value, str):
+        return "/"
+    if not value.startswith("/") or value.startswith("//"):
+        return "/"
+    return value
 
 
 
@@ -1377,9 +1479,23 @@ def artifact_views():
 
 
 def render_page(title, active, body_template, **context):
+    locale = get_locale()
+    t = ui_strings(locale)
+    csrf_token = get_csrf_token()
+    locale_choices = [
+        (code, LOCALE_LABELS[code])
+        for code in SUPPORTED_LOCALES
+    ]
+
+    body_context = {
+        **context,
+        "t": t,
+        "locale": locale,
+        "csrf_token": context.get("csrf_token", csrf_token),
+    }
     body = render_template_string(
         body_template,
-        **context,
+        **body_context,
     )
 
     return render_template_string(
@@ -1387,7 +1503,33 @@ def render_page(title, active, body_template, **context):
         title=title,
         active=active,
         body=body,
+        t=t,
+        locale=locale,
+        html_lang=html_lang_for(locale),
+        csrf_token=csrf_token,
+        locale_choices=locale_choices,
+        next_path=safe_next_path(request.path),
     )
+
+
+@app.post("/locale")
+def set_locale():
+    csrf_token = get_csrf_token()
+    submitted = request.form.get("csrf_token", "")
+
+    if (
+        not submitted
+        or len(submitted) != len(csrf_token)
+        or not secrets.compare_digest(csrf_token, submitted)
+    ):
+        abort(400)
+
+    locale = normalize_locale(request.form.get("locale", ""))
+    if locale is None:
+        abort(400)
+
+    session["locale"] = locale
+    return redirect(safe_next_path(request.form.get("next", "/")))
 
 
 @app.get("/")
@@ -1401,35 +1543,34 @@ def dashboard():
 
     counts = Counter(view["status"] for view in views)
 
+    t = ui_strings(get_locale())
     dashboard_template = """
-      <h2>Dashboard</h2>
-      <p class="subtitle">
-        Read-only local view of ORCH task state and audit evidence.
-      </p>
+      <h2>{{ t.title_dashboard }}</h2>
+      <p class="subtitle">{{ t.dash_subtitle }}</p>
 
       <div class="grid">
         <div class="card">
-          <span class="metric-label">Total Tasks</span>
+          <span class="metric-label">{{ t.metric_total }}</span>
           <span class="metric-value">{{ views|length }}</span>
         </div>
         <div class="card">
-          <span class="metric-label">Done</span>
+          <span class="metric-label">{{ t.metric_done }}</span>
           <span class="metric-value">{{ counts.get('done', 0) }}</span>
         </div>
         <div class="card">
-          <span class="metric-label">Waiting Approval</span>
+          <span class="metric-label">{{ t.metric_waiting }}</span>
           <span class="metric-value">
             {{ counts.get('waiting_approval', 0) }}
           </span>
         </div>
         <div class="card">
-          <span class="metric-label">Blocked</span>
+          <span class="metric-label">{{ t.metric_blocked }}</span>
           <span class="metric-value">
             {{ counts.get('blocked', 0) }}
           </span>
         </div>
         <div class="card">
-          <span class="metric-label">Failed</span>
+          <span class="metric-label">{{ t.metric_failed }}</span>
           <span class="metric-value">
             {{ counts.get('failed', 0) }}
           </span>
@@ -1437,15 +1578,12 @@ def dashboard():
       </div>
 
       <div class="section">
-        <h3>Operator Boundary</h3>
-        <div class="warning">
-          This UI is read-only. It has no approve, run, retry,
-          delete, command-input, connector-write, or AI-call action.
-        </div>
+        <h3>{{ t.operator_boundary }}</h3>
+        <div class="warning">{{ t.operator_warning }}</div>
       </div>
 
       <div class="section">
-        <h3>Latest Events</h3>
+        <h3>{{ t.latest_events }}</h3>
         {% if events %}
           {% for event in events[:10] %}
             <div class="event">
@@ -1462,13 +1600,13 @@ def dashboard():
             </div>
           {% endfor %}
         {% else %}
-          <div class="empty">No events recorded.</div>
+          <div class="empty">{{ t.empty_events }}</div>
         {% endif %}
       </div>
     """
 
     return render_page(
-        "Dashboard",
+        t["title_dashboard"],
         "dashboard",
         dashboard_template,
         views=views,
@@ -1481,22 +1619,21 @@ def dashboard():
 def tasks_page():
     statuses = load_statuses()
 
+    t = ui_strings(get_locale())
     task_template = """
-      <h2>Tasks</h2>
-      <p class="subtitle">
-        Task definitions joined with current runtime state.
-      </p>
+      <h2>{{ t.title_tasks }}</h2>
+      <p class="subtitle">{{ t.tasks_subtitle }}</p>
 
       <div class="section table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Priority</th>
-              <th>Task</th>
-              <th>Status</th>
-              <th>Attempt</th>
-              <th>Approval</th>
-              <th>Advisory</th>
+              <th>{{ t.th_priority }}</th>
+              <th>{{ t.th_task }}</th>
+              <th>{{ t.th_status }}</th>
+              <th>{{ t.th_attempt }}</th>
+              <th>{{ t.th_approval }}</th>
+              <th>{{ t.th_advisory }}</th>
             </tr>
           </thead>
           <tbody>
@@ -1520,14 +1657,14 @@ def tasks_page():
                       'waiting_approval'
                     ) }}
                   {% else %}
-                    not required
+                    {{ t.approval_not_required }}
                   {% endif %}
                 </td>
                 <td>
                   {% if task.advisory_enabled %}
-                    enabled
+                    {{ t.advisory_enabled }}
                   {% else %}
-                    not enabled
+                    {{ t.advisory_not_enabled }}
                   {% endif %}
                 </td>
               </tr>
@@ -1538,7 +1675,7 @@ def tasks_page():
     """
 
     return render_page(
-        "Tasks",
+        t["title_tasks"],
         "tasks",
         task_template,
         tasks=[
@@ -1567,39 +1704,40 @@ def task_detail(task_id):
     view = task_view(task, statuses)
     advisory = advisory_view(view["state"])
 
+    t = ui_strings(get_locale())
     detail_template = """
       <h2>{{ task.id }}</h2>
       <p class="subtitle">{{ task.title }}</p>
 
       <div class="section">
-        <h3>Task State</h3>
+        <h3>{{ t.task_state }}</h3>
         <dl class="kv">
-          <dt>Status</dt>
+          <dt>{{ t.label_status }}</dt>
           <dd>
             <span class="badge {{ task.status }}">
               {{ task.status }}
             </span>
           </dd>
 
-          <dt>Priority</dt>
+          <dt>{{ t.label_priority }}</dt>
           <dd>{{ task.priority }}</dd>
 
-          <dt>Attempt</dt>
+          <dt>{{ t.label_attempt }}</dt>
           <dd>{{ task.attempt }}</dd>
 
-          <dt>Command</dt>
+          <dt>{{ t.label_command }}</dt>
           <dd>
             {% for item in task.command %}
               <code>{{ item }}</code>
             {% endfor %}
           </dd>
 
-          <dt>Dependencies</dt>
+          <dt>{{ t.label_dependencies }}</dt>
           <dd>
-            {{ task.depends_on|join(', ') or 'none' }}
+            {{ task.depends_on|join(', ') or t.none }}
           </dd>
 
-          <dt>Approval</dt>
+          <dt>{{ t.label_approval }}</dt>
           <dd>
             {% if task.requires_approval %}
               {{ task.state.get(
@@ -1607,20 +1745,20 @@ def task_detail(task_id):
                 'waiting_approval'
               ) }}
             {% else %}
-              not required
+              {{ t.approval_not_required }}
             {% endif %}
           </dd>
 
-          <dt>Updated At</dt>
-          <dd>{{ task.state.get('updated_at', 'not recorded') }}</dd>
+          <dt>{{ t.label_updated_at }}</dt>
+          <dd>{{ task.state.get('updated_at', t.not_recorded) }}</dd>
 
-          <dt>Block Reason</dt>
-          <dd>{{ task.state.get('block_reason', 'none') }}</dd>
+          <dt>{{ t.label_block_reason }}</dt>
+          <dd>{{ task.state.get('block_reason', t.none) }}</dd>
         </dl>
       </div>
 
       <div class="section">
-        <h3>Policies</h3>
+        <h3>{{ t.policies }}</h3>
         {% if task.state.get('policy_results') %}
           <dl class="kv">
             {% for result in task.state.get('policy_results', []) %}
@@ -1632,62 +1770,60 @@ def task_detail(task_id):
             {% endfor %}
           </dl>
         {% else %}
-          <div class="empty">No policy evaluation recorded.</div>
+          <div class="empty">{{ t.empty_policies }}</div>
         {% endif %}
       </div>
 
       <div class="section">
-        <h3>Advisory Preflight</h3>
+        <h3>{{ t.advisory_preflight }}</h3>
         {% if advisory %}
           <dl class="kv">
-            <dt>Preflight Status</dt>
+            <dt>{{ t.label_preflight_status }}</dt>
             <dd>{{ advisory.status }}</dd>
 
-            <dt>Recommended Action</dt>
-            <dd>{{ advisory.recommended_action or 'not available' }}</dd>
+            <dt>{{ t.label_recommended_action }}</dt>
+            <dd>{{ advisory.recommended_action or t.not_available }}</dd>
 
-            <dt>Confidence</dt>
-            <dd>{{ advisory.confidence or 'not available' }}</dd>
+            <dt>{{ t.label_confidence }}</dt>
+            <dd>{{ advisory.confidence or t.not_available }}</dd>
 
-            <dt>Summary</dt>
+            <dt>{{ t.label_summary }}</dt>
             <dd>{{ advisory.summary or advisory.reason }}</dd>
 
-            <dt>Risks</dt>
-            <dd>{{ advisory.risks|join(', ') or 'none recorded' }}</dd>
+            <dt>{{ t.label_risks }}</dt>
+            <dd>{{ advisory.risks|join(', ') or t.none_recorded }}</dd>
 
-            <dt>Provider / Model</dt>
+            <dt>{{ t.label_provider_model }}</dt>
             <dd>
-              {{ advisory.provider or 'not available' }}
+              {{ advisory.provider or t.not_available }}
               /
-              {{ advisory.model or 'not available' }}
+              {{ advisory.model or t.not_available }}
             </dd>
 
-            <dt>Response ID</dt>
-            <dd>{{ advisory.response_id or 'not available' }}</dd>
+            <dt>{{ t.label_response_id }}</dt>
+            <dd>{{ advisory.response_id or t.not_available }}</dd>
 
-            <dt>Artifact ID</dt>
-            <dd>{{ advisory.artifact_id or 'not available' }}</dd>
+            <dt>{{ t.label_artifact_id }}</dt>
+            <dd>{{ advisory.artifact_id or t.not_available }}</dd>
 
-            <dt>Snapshot Fingerprint</dt>
+            <dt>{{ t.label_snapshot_fp }}</dt>
             <dd>
-              {{ advisory.snapshot_fingerprint or 'not available' }}
+              {{ advisory.snapshot_fingerprint or t.not_available }}
             </dd>
 
-            <dt>Execution Authority</dt>
+            <dt>{{ t.label_exec_authority }}</dt>
             <dd>
-              {{ advisory.execution_authority or 'not available' }}
+              {{ advisory.execution_authority or t.not_available }}
             </dd>
           </dl>
         {% else %}
-          <div class="empty">
-            No advisory preflight is stored for this task.
-          </div>
+          <div class="empty">{{ t.empty_advisory }}</div>
         {% endif %}
       </div>
     """
 
     return render_page(
-        f"Task {task_id}",
+        t["title_task"].format(task_id=task_id),
         "tasks",
         detail_template,
         task=view,
@@ -1697,11 +1833,10 @@ def task_detail(task_id):
 
 @app.get("/events")
 def events_page():
+    t = ui_strings(get_locale())
     events_template = """
-      <h2>Events</h2>
-      <p class="subtitle">
-        Latest records from state/events.jsonl.
-      </p>
+      <h2>{{ t.title_events }}</h2>
+      <p class="subtitle">{{ t.events_subtitle }}</p>
 
       <div class="section">
         {% if events %}
@@ -1720,13 +1855,13 @@ def events_page():
             </div>
           {% endfor %}
         {% else %}
-          <div class="empty">No events recorded.</div>
+          <div class="empty">{{ t.empty_events }}</div>
         {% endif %}
       </div>
     """
 
     return render_page(
-        "Events",
+        t["title_events"],
         "events",
         events_template,
         events=load_events(100),
@@ -1735,20 +1870,19 @@ def events_page():
 
 @app.get("/artifacts")
 def artifacts_page():
+    t = ui_strings(get_locale())
     artifact_template = """
-      <h2>Artifacts</h2>
-      <p class="subtitle">
-        Read-only latest pointers under artifacts/latest/.
-      </p>
+      <h2>{{ t.title_artifacts }}</h2>
+      <p class="subtitle">{{ t.artifacts_subtitle }}</p>
 
       <div class="section table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Logical Name</th>
-              <th>Artifact ID</th>
-              <th>Content SHA-256</th>
-              <th>Updated At</th>
+              <th>{{ t.th_logical_name }}</th>
+              <th>{{ t.th_artifact_id }}</th>
+              <th>{{ t.th_content_sha }}</th>
+              <th>{{ t.th_updated_at }}</th>
             </tr>
           </thead>
           <tbody>
@@ -1759,9 +1893,9 @@ def artifacts_page():
                     {{ artifact.logical_name }}
                   </a>
                 </td>
-                <td>{{ artifact.artifact_id or 'not available' }}</td>
-                <td>{{ artifact.content_sha256 or 'not available' }}</td>
-                <td>{{ artifact.updated_at_utc or 'not available' }}</td>
+                <td>{{ artifact.artifact_id or t.not_available }}</td>
+                <td>{{ artifact.content_sha256 or t.not_available }}</td>
+                <td>{{ artifact.updated_at_utc or t.not_available }}</td>
               </tr>
             {% endfor %}
           </tbody>
@@ -1770,7 +1904,7 @@ def artifacts_page():
     """
 
     return render_page(
-        "Artifacts",
+        t["title_artifacts"],
         "artifacts",
         artifact_template,
         artifacts=artifact_views(),
@@ -1801,44 +1935,42 @@ def artifact_detail(logical_name):
 
     manifest = load_json(manifest_path, {})
 
+    t = ui_strings(get_locale())
     detail_template = """
       <h2>{{ logical_name }}</h2>
-      <p class="subtitle">
-        Immutable artifact metadata. Raw payload is intentionally
-        not rendered in this read-only UI.
-      </p>
+      <p class="subtitle">{{ t.artifact_detail_subtitle }}</p>
 
       <div class="section">
         <dl class="kv">
-          <dt>Artifact ID</dt>
-          <dd>{{ manifest.get('artifact_id', 'not available') }}</dd>
+          <dt>{{ t.label_artifact_id }}</dt>
+          <dd>{{ manifest.get('artifact_id', t.not_available) }}</dd>
 
-          <dt>Logical Name</dt>
+          <dt>{{ t.label_logical_name }}</dt>
           <dd>{{ manifest.get('logical_name', logical_name) }}</dd>
 
-          <dt>Content SHA-256</dt>
-          <dd>{{ manifest.get('content_sha256', 'not available') }}</dd>
+          <dt>{{ t.th_content_sha }}</dt>
+          <dd>{{ manifest.get('content_sha256', t.not_available) }}</dd>
 
-          <dt>Byte Size</dt>
-          <dd>{{ manifest.get('byte_size', 'not available') }}</dd>
+          <dt>{{ t.label_byte_size }}</dt>
+          <dd>{{ manifest.get('byte_size', t.not_available) }}</dd>
 
-          <dt>Schema Version</dt>
-          <dd>{{ manifest.get('schema_version', 'not available') }}</dd>
+          <dt>{{ t.label_schema_version }}</dt>
+          <dd>{{ manifest.get('schema_version', t.not_available) }}</dd>
 
-          <dt>Producer Task</dt>
-          <dd>{{ manifest.get('producer_task_id', 'not available') }}</dd>
+          <dt>{{ t.label_producer_task }}</dt>
+          <dd>{{ manifest.get('producer_task_id', t.not_available) }}</dd>
 
-          <dt>Created At</dt>
-          <dd>{{ manifest.get('created_at_utc', 'not available') }}</dd>
+          <dt>{{ t.label_created_at }}</dt>
+          <dd>{{ manifest.get('created_at_utc', t.not_available) }}</dd>
 
-          <dt>Immutable</dt>
-          <dd>{{ manifest.get('immutable', 'not available') }}</dd>
+          <dt>{{ t.label_immutable }}</dt>
+          <dd>{{ manifest.get('immutable', t.not_available) }}</dd>
         </dl>
       </div>
     """
 
     return render_page(
-        f"Artifact {logical_name}",
+        t["title_artifact"].format(name=logical_name),
         "artifacts",
         detail_template,
         logical_name=logical_name,
@@ -1851,6 +1983,7 @@ def artifact_detail(logical_name):
 def chat_page():
     history = get_chat_session()
     csrf_token = get_csrf_token()
+    t = ui_strings(get_locale())
     error = None
 
     if request.method == "POST":
@@ -1877,10 +2010,7 @@ def chat_page():
             time.time() - last_chat_at
             < CHAT_MIN_INTERVAL_SECONDS
         ):
-            error = (
-                "Please wait a few seconds before sending "
-                "another chat request."
-            )
+            error = t["err_chat_rate_limit"]
         else:
             try:
                 context = (
@@ -1904,10 +2034,7 @@ def chat_page():
                 error = str(error_value)
 
             except Exception:
-                error = (
-                    "Chat request failed before an answer "
-                    "could be safely recorded."
-                )
+                error = t["err_chat_failed"]
 
             else:
                 try:
@@ -1933,10 +2060,7 @@ def chat_page():
                     )
 
                 except Exception:
-                    error = (
-                        "Chat answer was not displayed because "
-                        "its audit record could not be completed."
-                    )
+                    error = t["err_chat_audit"]
 
                 else:
                     history.append(
@@ -1985,23 +2109,19 @@ def chat_page():
       <div class="chat-page">
         <div class="chat-hero">
           <div>
-            <p class="chat-eyebrow">ORCH Operator Console</p>
-            <h2>ORCH Chat</h2>
-            <p class="subtitle">
-              Ask about task state, policies, advisory metadata, and
-              recent events.
-            </p>
+            <p class="chat-eyebrow">{{ t.chat_eyebrow }}</p>
+            <h2>{{ t.chat_heading }}</h2>
+            <p class="subtitle">{{ t.chat_subtitle }}</p>
           </div>
           <div class="chat-status">
             <span class="chat-status-dot"></span>
-            Advisory only
+            {{ t.chat_advisory_only }}
           </div>
         </div>
 
         <div class="section">
           <div class="warning">
-            Read-only context · execution authority:
-            <code>none</code> · one model request per submitted question
+            {{ t.chat_warning }}
           </div>
         </div>
 
@@ -2010,7 +2130,7 @@ def chat_page():
       {% endif %}
 
       <div class="section chat-thread">
-        <p class="chat-thread-title">Conversation</p>
+        <p class="chat-thread-title">{{ t.chat_conversation }}</p>
 
         {% if history %}
           <div class="chat-history" id="chat-history">
@@ -2018,9 +2138,21 @@ def chat_page():
               <div class="chat-message chat-{{ message.role }}">
                 <div class="chat-message-inner">
                   <div class="chat-meta">
-                    <span class="chat-role">{{ message.role }}</span>
+                    <span class="chat-role">
+                      {% if message.role == 'assistant' %}
+                        {{ t.role_assistant }}
+                      {% else %}
+                        {{ t.role_user }}
+                      {% endif %}
+                    </span>
                     {% if message.mode %}
-                      <span class="chat-mode">{{ message.mode }}</span>
+                      <span class="chat-mode">
+                        {% if message.mode == 'orch_context' %}
+                          {{ t.mode_orch_context }}
+                        {% else %}
+                          {{ t.mode_general }}
+                        {% endif %}
+                      </span>
                     {% endif %}
                   </div>
 
@@ -2029,21 +2161,24 @@ def chat_page():
                   {% if message.role == 'assistant'
                         and message.metadata %}
                     <div class="chat-assistant-meta">
-                      <span class="chat-meta-label">provider</span>
+                      <span class="chat-meta-label">{{ t.meta_provider }}</span>
                       <span class="chat-meta-value">{{ message.metadata.provider }}</span>
-                      <span class="chat-meta-label">model</span>
+                      <span class="chat-meta-label">{{ t.meta_model }}</span>
                       <span class="chat-meta-value">{{ message.metadata.model }}</span>
-                      <span class="chat-meta-label">authority</span>
+                      <span class="chat-meta-label">{{ t.meta_authority }}</span>
                       <span class="chat-meta-value">{{ message.metadata.execution_authority }}</span>
-                      <span class="chat-meta-label">audit</span>
+                      <span class="chat-meta-label">{{ t.meta_audit }}</span>
                       <span class="chat-meta-value">{{ message.metadata.audit_artifact_id }}</span>
                     </div>
                     <button
                       class="chat-copy"
                       type="button"
                       data-copy-message
+                      data-label-copy="{{ t.chat_copy }}"
+                      data-label-copied="{{ t.chat_copied }}"
+                      data-label-copy-failed="{{ t.chat_copy_failed }}"
                     >
-                      Copy
+                      {{ t.chat_copy }}
                     </button>
                   {% endif %}
                 </div>
@@ -2051,14 +2186,12 @@ def chat_page():
             {% endfor %}
           </div>
         {% else %}
-          <div class="empty">
-            Start a read-only conversation with ORCH Chat.
-          </div>
+          <div class="empty">{{ t.chat_empty }}</div>
         {% endif %}
       </div>
 
       <div class="section chat-composer">
-        <h3>Ask ORCH Chat</h3>
+        <h3>{{ t.chat_ask_heading }}</h3>
 
         <form id="chat-form" method="post" action="/chat">
           <input
@@ -2069,28 +2202,33 @@ def chat_page():
 
           <div class="composer-grid">
             <div class="composer-field">
-              <label for="mode">Mode</label>
+              <label for="mode">{{ t.chat_mode_label }}</label>
               <select id="mode" name="mode">
-                <option value="general">General Chat</option>
+                <option value="general">{{ t.mode_general }}</option>
                 <option value="orch_context" selected>
-                  ORCH Context
+                  {{ t.mode_orch_context }}
                 </option>
               </select>
             </div>
 
             <div class="composer-field">
-              <label for="question">Question</label>
+              <label for="question">{{ t.chat_question_label }}</label>
               <textarea
                 id="question"
                 name="question"
                 maxlength="800"
                 required
-                placeholder="Example: Why are there currently blocked tasks?"
+                placeholder="{{ t.chat_placeholder }}"
               ></textarea>
             </div>
 
-            <button class="composer-submit" type="submit">
-              Ask ORCH Chat
+            <button
+              class="composer-submit"
+              type="submit"
+              data-label-ask="{{ t.chat_ask }}"
+              data-label-thinking="{{ t.chat_thinking }}"
+            >
+              {{ t.chat_ask }}
             </button>
           </div>
 
@@ -2103,20 +2241,17 @@ def chat_page():
             aria-live="polite"
           >
             <span class="chat-pending-spinner" aria-hidden="true"></span>
-            Waiting for advisory reply…
+            {{ t.chat_pending }}
           </p>
 
-          <p class="composer-help">
-            ORCH Context uses an allowlisted summary only; it never
-            receives secrets, raw artifact payloads, or write authority.
-          </p>
+          <p class="composer-help">{{ t.chat_help }}</p>
         </form>
       </div>
       </div>
     """
 
     return render_page(
-        "Chat",
+        t["title_chat"],
         "chat",
         chat_template,
         history=history,

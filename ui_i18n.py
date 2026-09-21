@@ -1,0 +1,408 @@
+"""UI chrome strings for ORCH Operator Console.
+
+Locales: zh-Hant (default), zh-Hans, en.
+Task/event/artifact *data* is not translated here.
+"""
+
+from __future__ import annotations
+
+SUPPORTED_LOCALES = ("zh-Hant", "zh-Hans", "en")
+DEFAULT_LOCALE = "zh-Hant"
+
+HTML_LANG = {
+    "zh-Hant": "zh-Hant",
+    "zh-Hans": "zh-Hans",
+    "en": "en",
+}
+
+LOCALE_LABELS = {
+    "zh-Hant": "繁體中文",
+    "zh-Hans": "簡體中文",
+    "en": "English",
+}
+
+_STRINGS = {
+    "en": {
+        "brand": "ORCH · Local Operator Console",
+        "nav_dashboard": "Dashboard",
+        "nav_tasks": "Tasks",
+        "nav_events": "Events",
+        "nav_artifacts": "Artifacts",
+        "nav_chat": "Chat",
+        "lang_label": "Language",
+        "title_dashboard": "Dashboard",
+        "title_tasks": "Tasks",
+        "title_events": "Events",
+        "title_artifacts": "Artifacts",
+        "title_chat": "Chat",
+        "title_task": "Task {task_id}",
+        "title_artifact": "Artifact {name}",
+        "dash_subtitle": (
+            "Read-only local view of ORCH task state and audit evidence."
+        ),
+        "metric_total": "Total Tasks",
+        "metric_done": "Done",
+        "metric_waiting": "Waiting Approval",
+        "metric_blocked": "Blocked",
+        "metric_failed": "Failed",
+        "operator_boundary": "Operator Boundary",
+        "operator_warning": (
+            "This UI is read-only. It has no approve, run, retry, "
+            "delete, command-input, connector-write, or AI-call action."
+        ),
+        "latest_events": "Latest Events",
+        "empty_events": "No events recorded.",
+        "tasks_subtitle": (
+            "Task definitions joined with current runtime state."
+        ),
+        "th_priority": "Priority",
+        "th_task": "Task",
+        "th_status": "Status",
+        "th_attempt": "Attempt",
+        "th_approval": "Approval",
+        "th_advisory": "Advisory",
+        "approval_not_required": "not required",
+        "advisory_enabled": "enabled",
+        "advisory_not_enabled": "not enabled",
+        "task_state": "Task State",
+        "label_status": "Status",
+        "label_priority": "Priority",
+        "label_attempt": "Attempt",
+        "label_command": "Command",
+        "label_dependencies": "Dependencies",
+        "label_approval": "Approval",
+        "label_updated_at": "Updated At",
+        "label_block_reason": "Block Reason",
+        "none": "none",
+        "not_recorded": "not recorded",
+        "not_available": "not available",
+        "policies": "Policies",
+        "empty_policies": "No policy evaluation recorded.",
+        "advisory_preflight": "Advisory Preflight",
+        "label_preflight_status": "Preflight Status",
+        "label_recommended_action": "Recommended Action",
+        "label_confidence": "Confidence",
+        "label_summary": "Summary",
+        "label_risks": "Risks",
+        "label_provider_model": "Provider / Model",
+        "label_response_id": "Response ID",
+        "label_artifact_id": "Artifact ID",
+        "label_snapshot_fp": "Snapshot Fingerprint",
+        "label_exec_authority": "Execution Authority",
+        "empty_advisory": "No advisory preflight is stored for this task.",
+        "none_recorded": "none recorded",
+        "events_subtitle": "Latest records from state/events.jsonl.",
+        "artifacts_subtitle": (
+            "Read-only latest pointers under artifacts/latest/."
+        ),
+        "th_logical_name": "Logical Name",
+        "th_artifact_id": "Artifact ID",
+        "th_content_sha": "Content SHA-256",
+        "th_updated_at": "Updated At",
+        "artifact_detail_subtitle": (
+            "Immutable artifact metadata. Raw payload is intentionally "
+            "not rendered in this read-only UI."
+        ),
+        "label_logical_name": "Logical Name",
+        "label_byte_size": "Byte Size",
+        "label_schema_version": "Schema Version",
+        "label_producer_task": "Producer Task",
+        "label_created_at": "Created At",
+        "label_immutable": "Immutable",
+        "chat_eyebrow": "ORCH Operator Console",
+        "chat_heading": "ORCH Chat",
+        "chat_subtitle": (
+            "Ask about task state, policies, advisory metadata, and "
+            "recent events."
+        ),
+        "chat_advisory_only": "Advisory only",
+        "chat_warning": (
+            "Read-only context · execution authority: "
+            "none · one model request per submitted question"
+        ),
+        "chat_conversation": "Conversation",
+        "chat_empty": "Start a read-only conversation with ORCH Chat.",
+        "chat_ask_heading": "Ask ORCH Chat",
+        "chat_mode_label": "Mode",
+        "mode_general": "General Chat",
+        "mode_orch_context": "ORCH Context",
+        "chat_question_label": "Question",
+        "chat_placeholder": (
+            "Example: Why are there currently blocked tasks?"
+        ),
+        "chat_ask": "Ask ORCH Chat",
+        "chat_thinking": "Thinking…",
+        "chat_pending": "Waiting for advisory reply…",
+        "chat_help": (
+            "ORCH Context uses an allowlisted summary only; it never "
+            "receives secrets, raw artifact payloads, or write authority."
+        ),
+        "chat_copy": "Copy",
+        "chat_copied": "Copied",
+        "chat_copy_failed": "Copy failed",
+        "meta_provider": "provider",
+        "meta_model": "model",
+        "meta_authority": "authority",
+        "meta_audit": "audit",
+        "role_user": "user",
+        "role_assistant": "assistant",
+        "err_chat_rate_limit": (
+            "Please wait a few seconds before sending "
+            "another chat request."
+        ),
+        "err_chat_failed": (
+            "Chat request failed before an answer "
+            "could be safely recorded."
+        ),
+        "err_chat_audit": (
+            "Chat answer was not displayed because "
+            "its audit record could not be completed."
+        ),
+    },
+    "zh-Hant": {
+        "brand": "ORCH · 本地操作員控制台",
+        "nav_dashboard": "總覽",
+        "nav_tasks": "任務",
+        "nav_events": "事件",
+        "nav_artifacts": "產物",
+        "nav_chat": "對話",
+        "lang_label": "語言",
+        "title_dashboard": "總覽",
+        "title_tasks": "任務",
+        "title_events": "事件",
+        "title_artifacts": "產物",
+        "title_chat": "對話",
+        "title_task": "任務 {task_id}",
+        "title_artifact": "產物 {name}",
+        "dash_subtitle": "ORCH 任務狀態與稽核證據嘅唯讀本地檢視。",
+        "metric_total": "任務總數",
+        "metric_done": "已完成",
+        "metric_waiting": "等待核准",
+        "metric_blocked": "已封鎖",
+        "metric_failed": "失敗",
+        "operator_boundary": "操作員邊界",
+        "operator_warning": (
+            "此介面為唯讀。冇核准、執行、重試、刪除、指令輸入、"
+            "連接器寫入或 AI 呼叫動作。"
+        ),
+        "latest_events": "最新事件",
+        "empty_events": "尚未記錄事件。",
+        "tasks_subtitle": "任務定義與目前執行狀態合併顯示。",
+        "th_priority": "優先級",
+        "th_task": "任務",
+        "th_status": "狀態",
+        "th_attempt": "嘗試次數",
+        "th_approval": "核准",
+        "th_advisory": "建議",
+        "approval_not_required": "唔需要",
+        "advisory_enabled": "已啟用",
+        "advisory_not_enabled": "未啟用",
+        "task_state": "任務狀態",
+        "label_status": "狀態",
+        "label_priority": "優先級",
+        "label_attempt": "嘗試次數",
+        "label_command": "指令",
+        "label_dependencies": "依賴",
+        "label_approval": "核准",
+        "label_updated_at": "更新時間",
+        "label_block_reason": "封鎖原因",
+        "none": "無",
+        "not_recorded": "未記錄",
+        "not_available": "唔適用",
+        "policies": "政策",
+        "empty_policies": "未有政策評估記錄。",
+        "advisory_preflight": "建議預檢",
+        "label_preflight_status": "預檢狀態",
+        "label_recommended_action": "建議動作",
+        "label_confidence": "信心度",
+        "label_summary": "摘要",
+        "label_risks": "風險",
+        "label_provider_model": "供應商／模型",
+        "label_response_id": "回應 ID",
+        "label_artifact_id": "產物 ID",
+        "label_snapshot_fp": "快照指紋",
+        "label_exec_authority": "執行權限",
+        "empty_advisory": "此任務未儲存建議預檢。",
+        "none_recorded": "未記錄",
+        "events_subtitle": "來自 state/events.jsonl 嘅最新記錄。",
+        "artifacts_subtitle": "artifacts/latest/ 下嘅唯讀最新指標。",
+        "th_logical_name": "邏輯名稱",
+        "th_artifact_id": "產物 ID",
+        "th_content_sha": "內容 SHA-256",
+        "th_updated_at": "更新時間",
+        "artifact_detail_subtitle": (
+            "不可變產物中繼資料。此唯讀介面刻意唔會渲染原始內容。"
+        ),
+        "label_logical_name": "邏輯名稱",
+        "label_byte_size": "位元組大小",
+        "label_schema_version": "結構版本",
+        "label_producer_task": "產生任務",
+        "label_created_at": "建立時間",
+        "label_immutable": "不可變",
+        "chat_eyebrow": "ORCH 操作員控制台",
+        "chat_heading": "ORCH 對話",
+        "chat_subtitle": "查詢任務狀態、政策、建議中繼資料同最近事件。",
+        "chat_advisory_only": "僅供建議",
+        "chat_warning": (
+            "唯讀情境 · 執行權限：none · 每次提交問題只會打一次模型"
+        ),
+        "chat_conversation": "對話紀錄",
+        "chat_empty": "開始與 ORCH Chat 嘅唯讀對話。",
+        "chat_ask_heading": "向 ORCH Chat 提問",
+        "chat_mode_label": "模式",
+        "mode_general": "一般對話",
+        "mode_orch_context": "ORCH 情境",
+        "chat_question_label": "問題",
+        "chat_placeholder": "例如：而家點解有任務被封鎖？",
+        "chat_ask": "送出問題",
+        "chat_thinking": "思考中…",
+        "chat_pending": "等候建議回覆…",
+        "chat_help": (
+            "ORCH 情境只會用白名單摘要；唔會收到秘密、原始產物內容"
+            "或寫入權限。"
+        ),
+        "chat_copy": "複製",
+        "chat_copied": "已複製",
+        "chat_copy_failed": "複製失敗",
+        "meta_provider": "供應商",
+        "meta_model": "模型",
+        "meta_authority": "權限",
+        "meta_audit": "稽核",
+        "role_user": "使用者",
+        "role_assistant": "助理",
+        "err_chat_rate_limit": "請稍等幾秒再傳送另一個對話請求。",
+        "err_chat_failed": "對話請求失敗，未能安全記錄答案。",
+        "err_chat_audit": "因稽核紀錄未能完成，答案未有顯示。",
+    },
+    "zh-Hans": {
+        "brand": "ORCH · 本地操作员控制台",
+        "nav_dashboard": "总览",
+        "nav_tasks": "任务",
+        "nav_events": "事件",
+        "nav_artifacts": "产物",
+        "nav_chat": "对话",
+        "lang_label": "语言",
+        "title_dashboard": "总览",
+        "title_tasks": "任务",
+        "title_events": "事件",
+        "title_artifacts": "产物",
+        "title_chat": "对话",
+        "title_task": "任务 {task_id}",
+        "title_artifact": "产物 {name}",
+        "dash_subtitle": "ORCH 任务状态与审计证据的只读本地视图。",
+        "metric_total": "任务总数",
+        "metric_done": "已完成",
+        "metric_waiting": "等待核准",
+        "metric_blocked": "已封锁",
+        "metric_failed": "失败",
+        "operator_boundary": "操作员边界",
+        "operator_warning": (
+            "此界面为只读。没有核准、执行、重试、删除、指令输入、"
+            "连接器写入或 AI 调用动作。"
+        ),
+        "latest_events": "最新事件",
+        "empty_events": "尚未记录事件。",
+        "tasks_subtitle": "任务定义与当前运行状态合并显示。",
+        "th_priority": "优先级",
+        "th_task": "任务",
+        "th_status": "状态",
+        "th_attempt": "尝试次数",
+        "th_approval": "核准",
+        "th_advisory": "建议",
+        "approval_not_required": "不需要",
+        "advisory_enabled": "已启用",
+        "advisory_not_enabled": "未启用",
+        "task_state": "任务状态",
+        "label_status": "状态",
+        "label_priority": "优先级",
+        "label_attempt": "尝试次数",
+        "label_command": "指令",
+        "label_dependencies": "依赖",
+        "label_approval": "核准",
+        "label_updated_at": "更新时间",
+        "label_block_reason": "封锁原因",
+        "none": "无",
+        "not_recorded": "未记录",
+        "not_available": "不适用",
+        "policies": "策略",
+        "empty_policies": "尚无策略评估记录。",
+        "advisory_preflight": "建议预检",
+        "label_preflight_status": "预检状态",
+        "label_recommended_action": "建议动作",
+        "label_confidence": "置信度",
+        "label_summary": "摘要",
+        "label_risks": "风险",
+        "label_provider_model": "供应商／模型",
+        "label_response_id": "响应 ID",
+        "label_artifact_id": "产物 ID",
+        "label_snapshot_fp": "快照指纹",
+        "label_exec_authority": "执行权限",
+        "empty_advisory": "此任务未存储建议预检。",
+        "none_recorded": "未记录",
+        "events_subtitle": "来自 state/events.jsonl 的最新记录。",
+        "artifacts_subtitle": "artifacts/latest/ 下的只读最新指针。",
+        "th_logical_name": "逻辑名称",
+        "th_artifact_id": "产物 ID",
+        "th_content_sha": "内容 SHA-256",
+        "th_updated_at": "更新时间",
+        "artifact_detail_subtitle": (
+            "不可变产物元数据。此只读界面故意不渲染原始内容。"
+        ),
+        "label_logical_name": "逻辑名称",
+        "label_byte_size": "字节大小",
+        "label_schema_version": "结构版本",
+        "label_producer_task": "产生任务",
+        "label_created_at": "创建时间",
+        "label_immutable": "不可变",
+        "chat_eyebrow": "ORCH 操作员控制台",
+        "chat_heading": "ORCH 对话",
+        "chat_subtitle": "查询任务状态、策略、建议元数据和最近事件。",
+        "chat_advisory_only": "仅供建议",
+        "chat_warning": (
+            "只读情境 · 执行权限：none · 每次提交问题只会调用一次模型"
+        ),
+        "chat_conversation": "对话记录",
+        "chat_empty": "开始与 ORCH Chat 的只读对话。",
+        "chat_ask_heading": "向 ORCH Chat 提问",
+        "chat_mode_label": "模式",
+        "mode_general": "一般对话",
+        "mode_orch_context": "ORCH 情境",
+        "chat_question_label": "问题",
+        "chat_placeholder": "例如：现在为什么有任务被封锁？",
+        "chat_ask": "提交问题",
+        "chat_thinking": "思考中…",
+        "chat_pending": "等待建议回复…",
+        "chat_help": (
+            "ORCH 情境只会使用白名单摘要；不会收到秘密、原始产物内容"
+            "或写入权限。"
+        ),
+        "chat_copy": "复制",
+        "chat_copied": "已复制",
+        "chat_copy_failed": "复制失败",
+        "meta_provider": "供应商",
+        "meta_model": "模型",
+        "meta_authority": "权限",
+        "meta_audit": "审计",
+        "role_user": "用户",
+        "role_assistant": "助手",
+        "err_chat_rate_limit": "请稍等几秒再发送另一个对话请求。",
+        "err_chat_failed": "对话请求失败，未能安全记录答案。",
+        "err_chat_audit": "因审计记录未能完成，答案未显示。",
+    },
+}
+
+
+def normalize_locale(value: str | None) -> str | None:
+    if value in SUPPORTED_LOCALES:
+        return value
+    return None
+
+
+def ui_strings(locale: str | None = None) -> dict[str, str]:
+    code = normalize_locale(locale) or DEFAULT_LOCALE
+    return dict(_STRINGS[code])
+
+
+def html_lang_for(locale: str | None = None) -> str:
+    code = normalize_locale(locale) or DEFAULT_LOCALE
+    return HTML_LANG[code]
