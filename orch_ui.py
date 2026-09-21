@@ -1316,7 +1316,12 @@ BASE_TEMPLATE = """
     .mode-seg input {
       position: absolute;
       opacity: 0;
-      pointer-events: none;
+      pointer-events: auto;
+    }
+
+    .mode-seg label {
+      cursor: pointer;
+      position: relative;
     }
 
     .mode-seg span {
@@ -1536,10 +1541,58 @@ BASE_TEMPLATE = """
     });
     const chatForm = document.getElementById("chat-form");
     const chatQuestion = document.getElementById("question");
+    const chatModeValue = document.getElementById("chat-mode-value");
 
     function chatLabel(name, fallback) {
       if (!chatForm) return fallback;
       return chatForm.getAttribute("data-label-" + name) || fallback;
+    }
+
+    function getSelectedMode() {
+      if (chatModeValue && chatModeValue.value) {
+        return chatModeValue.value;
+      }
+      const checked = chatForm
+        ? chatForm.querySelector("[data-mode-option]:checked")
+        : null;
+      return checked ? checked.value : "orch_context";
+    }
+
+    function setSelectedMode(mode) {
+      if (!mode || (mode !== "general" && mode !== "orch_context")) {
+        return;
+      }
+      if (chatModeValue) {
+        chatModeValue.value = mode;
+      }
+      if (chatForm) {
+        chatForm.querySelectorAll("[data-mode-option]").forEach(function(radio) {
+          radio.checked = radio.value === mode;
+        });
+      }
+      try {
+        window.sessionStorage.setItem("orch_last_chat_mode", mode);
+      } catch (error) {}
+    }
+
+    if (chatForm) {
+      chatForm.querySelectorAll("[data-mode-option]").forEach(function(radio) {
+        radio.addEventListener("change", function() {
+          if (radio.checked) {
+            setSelectedMode(radio.value);
+          }
+        });
+      });
+      // Prefer server-rendered mode; fall back to sessionStorage only when
+      // the hidden field is empty (should not happen).
+      if (chatModeValue && !chatModeValue.value) {
+        try {
+          const stored = window.sessionStorage.getItem("orch_last_chat_mode");
+          if (stored) setSelectedMode(stored);
+        } catch (error) {}
+      } else if (chatModeValue) {
+        setSelectedMode(chatModeValue.value);
+      }
     }
 
     function setChatPending(pendingOn) {
@@ -1594,10 +1647,14 @@ BASE_TEMPLATE = """
 
     function appendChatBubble(message) {
       const history = ensureChatHistory();
-      if (!history || !message) return;
+      if (!history || !message) return null;
 
       const wrap = document.createElement("div");
       wrap.className = "chat-message chat-" + message.role;
+      if (message.pending) {
+        wrap.className += " chat-pending-bubble";
+        wrap.setAttribute("data-chat-pending-bubble", "1");
+      }
 
       const inner = document.createElement("div");
       inner.className = "chat-message-inner";
@@ -1678,6 +1735,16 @@ BASE_TEMPLATE = """
       wrap.appendChild(inner);
       history.appendChild(wrap);
       wrap.scrollIntoView({ block: "end", behavior: "smooth" });
+      return wrap;
+    }
+
+    function removePendingAssistantBubble() {
+      const pendingBubble = document.querySelector(
+        "[data-chat-pending-bubble]"
+      );
+      if (pendingBubble && pendingBubble.parentNode) {
+        pendingBubble.parentNode.removeChild(pendingBubble);
+      }
     }
 
     function showChatError(message) {
@@ -1706,22 +1773,55 @@ BASE_TEMPLATE = """
     }
 
     async function submitChatAjax(event) {
-      if (event) event.preventDefault();
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
       if (!chatForm || chatForm.classList.contains("is-pending")) {
-        return;
+        return false;
       }
       if (!chatForm.reportValidity()) {
-        return;
+        return false;
       }
 
+      const mode = getSelectedMode();
+      const question = (chatQuestion && chatQuestion.value || "").trim();
+      if (!question) {
+        return false;
+      }
+
+      // Keep hidden mode + radios aligned before FormData snapshot.
+      setSelectedMode(mode);
+
       clearChatError();
+      appendChatBubble({
+        role: "user",
+        content: question,
+        mode: mode,
+      });
+      if (chatQuestion) {
+        chatQuestion.value = "";
+      }
+      appendChatBubble({
+        role: "assistant",
+        content: chatLabel("pending", "Waiting for advisory reply…"),
+        mode: mode,
+        pending: true,
+      });
       setChatPending(true);
 
-      const formData = new FormData(chatForm);
+      const formData = new FormData();
+      const csrfInput = chatForm.querySelector('input[name="csrf_token"]');
+      formData.set(
+        "csrf_token",
+        csrfInput ? csrfInput.value : ""
+      );
+      formData.set("mode", mode);
+      formData.set("question", question);
       formData.set("format", "json");
 
       try {
-        const response = await fetch(chatForm.getAttribute("action") || "/chat", {
+        const response = await fetch("/chat", {
           method: "POST",
           body: formData,
           headers: {
@@ -1737,29 +1837,29 @@ BASE_TEMPLATE = """
           payload = await response.json();
         }
 
+        removePendingAssistantBubble();
+
         if (!response.ok || !payload || payload.ok !== true) {
           const errText = (payload && payload.error)
             || chatLabel("error-failed", "Chat request failed.");
           showChatError(errText);
+          setSelectedMode(
+            (payload && payload.mode) || mode
+          );
           setChatPending(false);
-          return;
+          return false;
         }
 
-        appendChatBubble(payload.user);
         appendChatBubble(payload.assistant);
-        if (chatQuestion) {
-          chatQuestion.value = "";
-        }
-        if (payload.mode) {
-          const radio = chatForm.querySelector(
-            'input[name="mode"][value="' + payload.mode + '"]'
-          );
-          if (radio) radio.checked = true;
-        }
+        setSelectedMode(payload.mode || mode);
         setChatPending(false);
+        return false;
       } catch (error) {
+        removePendingAssistantBubble();
         showChatError(chatLabel("error-failed", "Chat request failed."));
+        setSelectedMode(mode);
         setChatPending(false);
+        return false;
       }
     }
 
@@ -1771,12 +1871,14 @@ BASE_TEMPLATE = """
           !event.isComposing
         ) {
           event.preventDefault();
-          submitChatAjax();
+          submitChatAjax(event);
         }
       });
 
       chatForm.addEventListener("submit", function(event) {
         if (!window.fetch) {
+          // no-JS / ancient browsers: classic POST; sticky mode via session
+          setSelectedMode(getSelectedMode());
           setChatPending(true);
           return;
         }
@@ -3112,11 +3214,18 @@ def chat_page():
           data-label-meta-authority="{{ t.meta_authority }}"
           data-label-meta-audit="{{ t.meta_audit }}"
           data-label-error-failed="{{ t.err_chat_failed }}"
+          data-label-pending="{{ t.chat_pending }}"
         >
           <input
             type="hidden"
             name="csrf_token"
             value="{{ csrf_token }}"
+          >
+          <input
+            type="hidden"
+            id="chat-mode-value"
+            name="mode"
+            value="{{ chat_mode }}"
           >
 
           <div class="composer-grid">
@@ -3124,8 +3233,10 @@ def chat_page():
               <label>
                 <input
                   type="radio"
-                  name="mode"
+                  name="mode_ui"
                   value="general"
+                  data-mode-option
+                  onclick="var el=document.getElementById('chat-mode-value'); if (el) el.value=this.value;"
                   {% if chat_mode == 'general' %}checked{% endif %}
                 >
                 <span>{{ t.mode_general }}</span>
@@ -3133,8 +3244,10 @@ def chat_page():
               <label>
                 <input
                   type="radio"
-                  name="mode"
+                  name="mode_ui"
                   value="orch_context"
+                  data-mode-option
+                  onclick="var el=document.getElementById('chat-mode-value'); if (el) el.value=this.value;"
                   {% if chat_mode == 'orch_context' %}checked{% endif %}
                 >
                 <span>{{ t.mode_orch_context }}</span>

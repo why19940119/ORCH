@@ -188,6 +188,9 @@ class TaskStatusAndComposerUiTests(unittest.TestCase):
         self.assertIn("submitChatAjax", source)
         self.assertIn('formData.set("format", "json")', source)
         self.assertIn("appendChatBubble", source)
+        self.assertIn("chat-mode-value", source)
+        self.assertIn("setSelectedMode", source)
+        self.assertIn("data-chat-pending-bubble", source)
 
     def test_chat_bubble_and_metadata_css_contract(self):
         source = Path("orch_ui.py").read_text(encoding="utf-8")
@@ -563,10 +566,23 @@ class OrchChatModeAndAjaxTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertRegex(html, r'value="general"\s+checked')
+        self.assertIn('id="chat-mode-value"', html)
+        self.assertIn('data-mode-option', html)
+        self.assertIn('name="mode"', html)
+        self.assertIn('value="general"', html)
+        # Hidden mode field must carry last mode
+        self.assertRegex(
+            html,
+            r'id="chat-mode-value"[\s\S]{0,80}?value="general"',
+        )
+        # Radio markup has onclick between value and checked — allow a wide gap.
+        self.assertRegex(
+            html,
+            r'value="general"[\s\S]{0,220}?\bchecked\b',
+        )
         self.assertNotRegex(
             html,
-            r'value="orch_context"\s+checked',
+            r'value="orch_context"[\s\S]{0,220}?\bchecked\b',
         )
         with self.client.session_transaction() as sess:
             self.assertEqual(sess.get("last_chat_mode"), "general")
