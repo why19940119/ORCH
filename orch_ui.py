@@ -617,24 +617,49 @@ BASE_TEMPLATE = """
       padding: 2px 5px;
     }
 
-    /* v0.16a.1.11 Grok-inspired chat UX polish */
+    /* v0.16a.1.14 mature chat layout toward Grok Bot */
+    main:has(.chat-page) {
+      max-width: 920px;
+      padding: 16px 18px 36px;
+    }
+
     .chat-page {
       margin: 0 auto;
-      max-width: 760px;
+      max-width: 880px;
+      width: 100%;
     }
 
     .chat-hero {
       align-items: center;
-      border-bottom: 1px solid rgba(90, 64, 113, .45);
+      border-bottom: 1px solid rgba(90, 64, 113, .35);
       flex-wrap: wrap;
-      margin-bottom: 14px;
-      padding-bottom: 14px;
+      gap: 10px;
+      margin-bottom: 10px;
+      padding-bottom: 10px;
+    }
+
+    .chat-hero h2 {
+      font-size: 20px;
+      margin-bottom: 4px;
+    }
+
+    .chat-hero .subtitle {
+      color: #a895bc;
+      font-size: 13px;
+      max-width: none;
+    }
+
+    .chat-eyebrow {
+      margin-bottom: 4px;
+      opacity: .85;
     }
 
     .chat-status {
       background: #2c1d43;
       border-color: #65477e;
       color: #dcb8ff;
+      font-size: 10px;
+      padding: 5px 9px;
     }
 
     .chat-status-dot {
@@ -647,28 +672,28 @@ BASE_TEMPLATE = """
       border: 0;
       border-radius: 0;
       box-shadow: none;
-      margin-bottom: 12px;
+      margin-bottom: 10px;
       padding: 0;
     }
 
     .chat-page .section.chat-composer {
-      background: rgba(27, 19, 41, .96);
+      background: rgba(27, 19, 41, .97);
       border: 1px solid #5a4071;
-      border-radius: 16px;
+      border-radius: 18px;
       box-shadow: 0 -8px 24px rgba(5, 2, 12, .45);
       margin-bottom: 0;
-      padding: 12px 14px 14px;
+      padding: 10px 12px 12px;
     }
 
     .chat-page .warning {
-      background: rgba(33, 23, 47, .72);
-      border: 1px solid rgba(89, 64, 110, .55);
-      border-left: 3px solid rgba(197, 145, 255, .55);
-      border-radius: 10px;
-      color: #cbbddc;
-      font-size: 12px;
-      margin-bottom: 4px;
-      padding: 8px 10px;
+      background: transparent;
+      border: 0;
+      border-left: 0;
+      border-radius: 0;
+      color: #9a86b0;
+      font-size: 11px;
+      margin-bottom: 2px;
+      padding: 0 2px 6px;
     }
 
     .chat-page .chat-thread-title {
@@ -676,44 +701,44 @@ BASE_TEMPLATE = """
       font-size: 11px;
       font-weight: 700;
       letter-spacing: .5px;
-      margin: 0 0 10px;
+      margin: 0 0 8px;
       text-transform: uppercase;
     }
 
     .chat-page .chat-history {
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 12px;
       margin-bottom: 8px;
     }
 
     .chat-page .chat-message {
       background: transparent;
       border: 0;
-      max-width: 78%;
+      max-width: 92%;
       padding: 0;
       white-space: normal;
     }
 
     .chat-page .chat-user {
       align-self: flex-end;
-      max-width: 78%;
+      max-width: 85%;
       width: fit-content;
     }
 
     .chat-page .chat-assistant {
       align-self: flex-start;
-      max-width: 88%;
+      max-width: 100%;
       width: 100%;
     }
 
     .chat-page .chat-message-inner {
       align-items: stretch;
       border: 1px solid transparent;
-      border-radius: 14px;
+      border-radius: 16px;
       display: flex;
       flex-direction: column;
-      padding: 8px 12px;
+      padding: 10px 14px;
     }
 
     .chat-page .chat-user .chat-message-inner {
@@ -753,25 +778,51 @@ BASE_TEMPLATE = """
     }
 
     .chat-page .chat-content {
-      font-size: 14px;
-      line-height: 1.5;
+      font-size: 15px;
+      line-height: 1.55;
       margin: 0;
       overflow-wrap: anywhere;
       white-space: pre-wrap;
     }
 
+    .chat-page .chat-meta-details {
+      margin-top: 6px;
+    }
+
+    .chat-page .chat-meta-details > summary {
+      color: #9a86b0;
+      cursor: pointer;
+      font-size: 11px;
+      list-style: none;
+      user-select: none;
+      width: fit-content;
+    }
+
+    .chat-page .chat-meta-details > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .chat-page .chat-meta-details > summary::before {
+      content: "▸ ";
+      opacity: .7;
+    }
+
+    .chat-page .chat-meta-details[open] > summary::before {
+      content: "▾ ";
+    }
+
     .chat-page .chat-assistant-meta {
-      background: rgba(12, 8, 18, .35);
-      border: 1px solid rgba(74, 54, 95, .55);
-      border-radius: 8px;
+      background: transparent;
+      border: 0;
+      border-radius: 0;
       color: var(--muted);
       display: grid;
       font-size: 11px;
-      gap: 3px 10px;
+      gap: 2px 10px;
       grid-template-columns: auto 1fr;
       line-height: 1.35;
-      margin-top: 8px;
-      padding: 7px 9px;
+      margin-top: 6px;
+      padding: 0;
       white-space: normal;
     }
 
@@ -785,20 +836,28 @@ BASE_TEMPLATE = """
       overflow-wrap: anywhere;
     }
 
+    .chat-page .chat-message-actions {
+      align-items: center;
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 6px;
+    }
+
     .chat-page .chat-copy {
-      align-self: flex-end;
+      align-self: auto;
       background: transparent;
-      border: 1px solid #5b4370;
+      border: 0;
       border-radius: 6px;
-      color: #cbb8dc;
+      color: #9a86b0;
       float: none;
       font-size: 11px;
-      margin: 8px 0 0;
-      padding: 4px 8px;
+      margin: 0;
+      padding: 2px 4px;
     }
 
     .chat-page .chat-copy:hover {
-      background: #38264e;
+      background: transparent;
       color: #fff;
     }
 
@@ -809,15 +868,27 @@ BASE_TEMPLATE = """
     }
 
     .chat-page .chat-composer h3 {
-      font-size: 13px;
-      margin: 0 0 8px;
+      display: none;
     }
 
     .chat-page .composer-grid {
       align-items: end;
       display: grid;
-      gap: 10px;
-      grid-template-columns: minmax(150px, 190px) minmax(0, 1fr) auto;
+      gap: 8px;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+    }
+
+    .chat-page .composer-mode {
+      appearance: none;
+      background: #130d20;
+      border: 1px solid #59406e;
+      border-radius: 999px;
+      color: #d5c4e8;
+      font-size: 12px;
+      font-weight: 600;
+      max-width: 160px;
+      min-height: 40px;
+      padding: 8px 12px;
     }
 
     .chat-page textarea,
@@ -827,11 +898,15 @@ BASE_TEMPLATE = """
     }
 
     .chat-page textarea {
-      min-height: 56px;
+      border-radius: 14px;
+      min-height: 48px;
+      padding: 12px 14px;
+      resize: none;
     }
 
     .chat-page textarea:focus,
-    .chat-page select:focus {
+    .chat-page select:focus,
+    .chat-page .composer-mode:focus {
       border-color: #bd8cff;
       box-shadow: 0 0 0 3px rgba(189, 140, 255, .15);
       outline: 0;
@@ -839,9 +914,12 @@ BASE_TEMPLATE = """
 
     .chat-page .composer-submit {
       background: linear-gradient(135deg, #c18cff, #9764d4);
+      border-radius: 999px;
       color: #160d21;
       margin: 0;
-      min-height: 42px;
+      min-height: 40px;
+      min-width: 72px;
+      padding: 8px 16px;
       white-space: nowrap;
     }
 
@@ -852,6 +930,13 @@ BASE_TEMPLATE = """
     .chat-page .composer-submit:disabled {
       cursor: wait;
       opacity: .72;
+    }
+
+    .chat-page .composer-help {
+      color: #7f6d93;
+      font-size: 11px;
+      line-height: 1.4;
+      margin: 8px 2px 0;
     }
 
     .chat-page .chat-pending {
@@ -890,6 +975,10 @@ BASE_TEMPLATE = """
     }
 
     @media (max-width: 720px) {
+      main:has(.chat-page) {
+        padding: 12px 12px 28px;
+      }
+
       .chat-page .chat-message,
       .chat-page .chat-user,
       .chat-page .chat-assistant {
@@ -903,6 +992,11 @@ BASE_TEMPLATE = """
 
       .chat-page .composer-grid {
         grid-template-columns: 1fr;
+      }
+
+      .chat-page .composer-mode {
+        max-width: none;
+        width: 100%;
       }
 
       .chat-page .composer-submit {
@@ -2160,26 +2254,31 @@ def chat_page():
 
                   {% if message.role == 'assistant'
                         and message.metadata %}
-                    <div class="chat-assistant-meta">
-                      <span class="chat-meta-label">{{ t.meta_provider }}</span>
-                      <span class="chat-meta-value">{{ message.metadata.provider }}</span>
-                      <span class="chat-meta-label">{{ t.meta_model }}</span>
-                      <span class="chat-meta-value">{{ message.metadata.model }}</span>
-                      <span class="chat-meta-label">{{ t.meta_authority }}</span>
-                      <span class="chat-meta-value">{{ message.metadata.execution_authority }}</span>
-                      <span class="chat-meta-label">{{ t.meta_audit }}</span>
-                      <span class="chat-meta-value">{{ message.metadata.audit_artifact_id }}</span>
+                    <div class="chat-message-actions">
+                      <button
+                        class="chat-copy"
+                        type="button"
+                        data-copy-message
+                        data-label-copy="{{ t.chat_copy }}"
+                        data-label-copied="{{ t.chat_copied }}"
+                        data-label-copy-failed="{{ t.chat_copy_failed }}"
+                      >
+                        {{ t.chat_copy }}
+                      </button>
                     </div>
-                    <button
-                      class="chat-copy"
-                      type="button"
-                      data-copy-message
-                      data-label-copy="{{ t.chat_copy }}"
-                      data-label-copied="{{ t.chat_copied }}"
-                      data-label-copy-failed="{{ t.chat_copy_failed }}"
-                    >
-                      {{ t.chat_copy }}
-                    </button>
+                    <details class="chat-meta-details">
+                      <summary>{{ t.chat_meta_details }}</summary>
+                      <div class="chat-assistant-meta">
+                        <span class="chat-meta-label">{{ t.meta_provider }}</span>
+                        <span class="chat-meta-value">{{ message.metadata.provider }}</span>
+                        <span class="chat-meta-label">{{ t.meta_model }}</span>
+                        <span class="chat-meta-value">{{ message.metadata.model }}</span>
+                        <span class="chat-meta-label">{{ t.meta_authority }}</span>
+                        <span class="chat-meta-value">{{ message.metadata.execution_authority }}</span>
+                        <span class="chat-meta-label">{{ t.meta_audit }}</span>
+                        <span class="chat-meta-value">{{ message.metadata.audit_artifact_id }}</span>
+                      </div>
+                    </details>
                   {% endif %}
                 </div>
               </div>
@@ -2191,8 +2290,6 @@ def chat_page():
       </div>
 
       <div class="section chat-composer">
-        <h3>{{ t.chat_ask_heading }}</h3>
-
         <form id="chat-form" method="post" action="/chat">
           <input
             type="hidden"
@@ -2201,26 +2298,27 @@ def chat_page():
           >
 
           <div class="composer-grid">
-            <div class="composer-field">
-              <label for="mode">{{ t.chat_mode_label }}</label>
-              <select id="mode" name="mode">
-                <option value="general">{{ t.mode_general }}</option>
-                <option value="orch_context" selected>
-                  {{ t.mode_orch_context }}
-                </option>
-              </select>
-            </div>
+            <select
+              id="mode"
+              class="composer-mode"
+              name="mode"
+              aria-label="{{ t.chat_mode_label }}"
+            >
+              <option value="general">{{ t.mode_general }}</option>
+              <option value="orch_context" selected>
+                {{ t.mode_orch_context }}
+              </option>
+            </select>
 
-            <div class="composer-field">
-              <label for="question">{{ t.chat_question_label }}</label>
-              <textarea
-                id="question"
-                name="question"
-                maxlength="800"
-                required
-                placeholder="{{ t.chat_placeholder }}"
-              ></textarea>
-            </div>
+            <textarea
+              id="question"
+              name="question"
+              maxlength="800"
+              required
+              rows="1"
+              aria-label="{{ t.chat_question_label }}"
+              placeholder="{{ t.chat_placeholder }}"
+            ></textarea>
 
             <button
               class="composer-submit"

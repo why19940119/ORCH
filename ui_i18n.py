@@ -127,10 +127,9 @@ _STRINGS = {
         "mode_general": "General Chat",
         "mode_orch_context": "ORCH Context",
         "chat_question_label": "Question",
-        "chat_placeholder": (
-            "Example: Why are there currently blocked tasks?"
-        ),
-        "chat_ask": "Ask ORCH Chat",
+        "chat_placeholder": "Ask anything…",
+        "chat_ask": "Send",
+        "chat_meta_details": "Details",
         "chat_thinking": "Thinking…",
         "chat_pending": "Waiting for advisory reply…",
         "chat_help": (
@@ -254,8 +253,9 @@ _STRINGS = {
         "mode_general": "一般對話",
         "mode_orch_context": "ORCH 情境",
         "chat_question_label": "問題",
-        "chat_placeholder": "例如：而家點解有任務被封鎖？",
-        "chat_ask": "送出問題",
+        "chat_placeholder": "有咩想問…",
+        "chat_ask": "傳送",
+        "chat_meta_details": "詳情",
         "chat_thinking": "思考中…",
         "chat_pending": "等候建議回覆…",
         "chat_help": (
@@ -369,8 +369,9 @@ _STRINGS = {
         "mode_general": "一般对话",
         "mode_orch_context": "ORCH 情境",
         "chat_question_label": "问题",
-        "chat_placeholder": "例如：现在为什么有任务被封锁？",
-        "chat_ask": "提交问题",
+        "chat_placeholder": "有什么想问…",
+        "chat_ask": "发送",
+        "chat_meta_details": "详情",
         "chat_thinking": "思考中…",
         "chat_pending": "等待建议回复…",
         "chat_help": (

@@ -131,14 +131,15 @@ class TaskStatusAndComposerUiTests(unittest.TestCase):
             source,
         )
         self.assertIn(
-            "grid-template-columns: minmax(150px, 190px) "
-            "minmax(0, 1fr) auto;",
+            "grid-template-columns: auto minmax(0, 1fr) auto;",
             source,
         )
+        self.assertIn("max-width: 880px;", source)
+        self.assertIn("main:has(.chat-page)", source)
+        self.assertIn("composer-mode", source)
 
         desktop_grid = (
-            "grid-template-columns: minmax(150px, 190px) "
-            "minmax(0, 1fr) auto;"
+            "grid-template-columns: auto minmax(0, 1fr) auto;"
         )
         desktop_idx = source.index(desktop_grid)
         after_desktop = source[desktop_idx:]
@@ -196,7 +197,7 @@ class TaskStatusAndComposerUiTests(unittest.TestCase):
             + nl
             + "      border: 0;"
             + nl
-            + "      max-width: 78%;"
+            + "      max-width: 92%;"
             + nl
             + "      padding: 0;"
             + nl
@@ -207,9 +208,9 @@ class TaskStatusAndComposerUiTests(unittest.TestCase):
         content_rule = (
             ".chat-page .chat-content {"
             + nl
-            + "      font-size: 14px;"
+            + "      font-size: 15px;"
             + nl
-            + "      line-height: 1.5;"
+            + "      line-height: 1.55;"
             + nl
             + "      margin: 0;"
             + nl
@@ -220,12 +221,15 @@ class TaskStatusAndComposerUiTests(unittest.TestCase):
         self.assertIn(content_rule, source)
         self.assertIn("width: fit-content;", source)
         self.assertIn(".chat-page .chat-assistant-meta {", source)
+        self.assertIn("chat-meta-details", source)
+        self.assertIn("<details class=\"chat-meta-details\">", source)
         self.assertIn("chat-meta-label", source)
         self.assertIn("chat-meta-value", source)
         self.assertIn(
             'class="chat-meta-label">{{ t.meta_audit }}</span>',
             source,
         )
+        self.assertIn("{{ t.chat_meta_details }}", source)
 
 
 
