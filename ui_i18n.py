@@ -112,16 +112,16 @@ _STRINGS = {
         "chat_eyebrow": "ORCH Operator Console",
         "chat_heading": "ORCH Chat",
         "chat_subtitle": (
-            "Ask about task state, policies, advisory metadata, and "
-            "recent events."
+            "General Conversation answers normal questions. "
+            "ORCH Context uses read-only task data only."
         ),
         "chat_advisory_only": "Advisory only",
         "chat_warning": (
-            "Read-only context · execution authority: "
-            "none · one model request per submitted question"
+            "No execution authority · one model request per "
+            "submitted question · never reveals secrets"
         ),
         "chat_conversation": "Conversation",
-        "chat_empty": "Start a read-only conversation with ORCH Chat.",
+        "chat_empty": "Ask anything in General Conversation, or use ORCH Context for task state.",
         "chat_ask_heading": "Ask ORCH Chat",
         "chat_mode_label": "Mode",
         "mode_general": "General Chat",
@@ -134,8 +134,9 @@ _STRINGS = {
         "chat_thinking": "Thinking…",
         "chat_pending": "Waiting for advisory reply…",
         "chat_help": (
-            "ORCH Context uses an allowlisted summary only; it never "
-            "receives secrets, raw artifact payloads, or write authority."
+            "General Conversation is open Q&A with no tools. "
+            "ORCH Context uses an allowlisted summary only — no secrets, "
+            "raw artifacts, or write authority."
         ),
         "chat_copy": "Copy",
         "chat_copied": "Copied",
@@ -241,13 +242,13 @@ _STRINGS = {
         "label_immutable": "不可變",
         "chat_eyebrow": "ORCH 操作員控制台",
         "chat_heading": "ORCH 對話",
-        "chat_subtitle": "查詢任務狀態、政策、建議中繼資料同最近事件。",
+        "chat_subtitle": "一般對話可答日常問題；ORCH 情境只用唯讀任務資料。",
         "chat_advisory_only": "僅供建議",
         "chat_warning": (
-            "唯讀情境 · 執行權限：none · 每次提交問題只會打一次模型"
+            "冇執行權限 · 每次提交只打一次模型 · 唔會洩露秘密"
         ),
         "chat_conversation": "對話紀錄",
-        "chat_empty": "開始與 ORCH Chat 嘅唯讀對話。",
+        "chat_empty": "用一般對話問任何問題，或用 ORCH 情境查任務狀態。",
         "chat_ask_heading": "向 ORCH Chat 提問",
         "chat_mode_label": "模式",
         "mode_general": "一般對話",
@@ -258,8 +259,8 @@ _STRINGS = {
         "chat_thinking": "思考中…",
         "chat_pending": "等候建議回覆…",
         "chat_help": (
-            "ORCH 情境只會用白名單摘要；唔會收到秘密、原始產物內容"
-            "或寫入權限。"
+            "一般對話係開放問答、冇工具。ORCH 情境只用白名單摘要——"
+            "唔會收到秘密、原始產物內容或寫入權限。"
         ),
         "chat_copy": "複製",
         "chat_copied": "已複製",
@@ -356,13 +357,13 @@ _STRINGS = {
         "label_immutable": "不可变",
         "chat_eyebrow": "ORCH 操作员控制台",
         "chat_heading": "ORCH 对话",
-        "chat_subtitle": "查询任务状态、策略、建议元数据和最近事件。",
+        "chat_subtitle": "一般对话可答日常问题；ORCH 情境只用只读任务数据。",
         "chat_advisory_only": "仅供建议",
         "chat_warning": (
-            "只读情境 · 执行权限：none · 每次提交问题只会调用一次模型"
+            "无执行权限 · 每次提交只调用一次模型 · 不会泄露秘密"
         ),
         "chat_conversation": "对话记录",
-        "chat_empty": "开始与 ORCH Chat 的只读对话。",
+        "chat_empty": "用一般对话问任何问题，或用 ORCH 情境查任务状态。",
         "chat_ask_heading": "向 ORCH Chat 提问",
         "chat_mode_label": "模式",
         "mode_general": "一般对话",
@@ -373,8 +374,8 @@ _STRINGS = {
         "chat_thinking": "思考中…",
         "chat_pending": "等待建议回复…",
         "chat_help": (
-            "ORCH 情境只会使用白名单摘要；不会收到秘密、原始产物内容"
-            "或写入权限。"
+            "一般对话是开放问答、无工具。ORCH 情境只用白名单摘要——"
+            "不会收到秘密、原始产物内容或写入权限。"
         ),
         "chat_copy": "复制",
         "chat_copied": "已复制",
