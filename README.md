@@ -400,24 +400,51 @@ The next work should prioritize consolidation rather than more features:
 5. Add richer operator status views and audit reporting.
 ```
 
-## ORCH Chat
+## Operator Console (quickstart)
 
-Durable browser sessions need a stable Flask secret. Set
-`ORCH_UI_SECRET_KEY` in the environment (see `.env.example`).
-If unset, ORCH uses an ephemeral per-process secret and sessions
-reset on restart.
-
-ORCH includes a local browser chat panel:
+Local read-only Operator Console (dashboard, tasks, events,
+artifacts, chat):
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+export ORCH_UI_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+# Optional chat provider (existing advisory/chat path):
+# export OPENROUTER_API_KEY='your-key'
+# export OPENROUTER_MODEL='mistralai/mistral-medium-3.1'
+
 python orch_ui.py
 ```
 
 Open:
 
 ```text
-http://127.0.0.1:5050/chat
+http://127.0.0.1:5050
 ```
+
+Chat lives at `http://127.0.0.1:5050/chat`.
+
+Durable browser sessions need a stable Flask secret. Set
+`ORCH_UI_SECRET_KEY` in the environment (see `.env.example`).
+If unset, ORCH uses an ephemeral per-process secret and sessions
+reset on restart. Session cookies use HttpOnly + SameSite=Lax
+(Secure stays off for local HTTP).
+
+### Acceptance checklist
+
+```text
+[ ] Dashboard / Tasks / Events / Artifacts / Chat routes load
+[ ] Status badges render distinct classes on /tasks
+[ ] Chat desktop composer stays sticky and opaque
+[ ] Enter sends; Shift+Enter inserts a newline
+[ ] Narrow (~400px) composer is single-column and usable
+[ ] Missing/invalid CSRF on POST /chat returns 400
+[ ] Artifact detail rejects manifest paths outside artifacts/
+```
+
+## ORCH Chat
 
 Available modes:
 
