@@ -233,6 +233,75 @@ class TaskStatusAndComposerUiTests(unittest.TestCase):
 
 
 
+
+class ConsoleDensityUiTests(unittest.TestCase):
+    def setUp(self):
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+
+    def test_shell_density_contracts(self):
+        source = Path("orch_ui.py").read_text(encoding="utf-8")
+        self.assertIn("v0.16a.1.15 console density", source)
+        self.assertIn("position: sticky;", source)
+        self.assertIn("boundary-chip", source)
+        self.assertIn("operator_boundary_short", source)
+        self.assertIn("data-copy-text", source)
+        self.assertIn("mode-seg", source)
+        self.assertIn("short_time", source)
+        self.assertIn("status_label", source)
+        self.assertIn("task_config", source)
+        self.assertIn("quiet-details", source)
+
+    def test_format_short_time_and_status_labels(self):
+        from orch_ui import format_short_time, short_id, status_label
+
+        self.assertEqual(
+            format_short_time("2026-08-16T20:34:15", "zh-Hant"),
+            "8月16日 20:34",
+        )
+        self.assertEqual(
+            format_short_time("2026-08-16T20:34:15", "en"),
+            "Aug 16, 20:34",
+        )
+        self.assertEqual(
+            short_id("abcdefghijklmnop", 4, 3),
+            "abcd…nop",
+        )
+        self.assertEqual(status_label("done", "en"), "Done")
+        self.assertEqual(status_label("done", "zh-Hant"), "完成")
+
+    def test_dashboard_uses_short_time_and_footer_chip(self):
+        html = self.client.get("/").get_data(as_text=True)
+        self.assertIn("boundary-chip", html)
+        self.assertIn(ui_strings("zh-Hant")["operator_boundary_short"], html)
+        self.assertNotIn(">Operator Boundary<", html)
+        self.assertNotIn(">操作員邊界<", html)
+        self.assertIn("card-link", html)
+        # short time pattern like 8月 or Aug
+        self.assertTrue(
+            ("月" in html and "日" in html) or "Latest Events" in html
+        )
+
+    def test_tasks_show_localized_status_labels(self):
+        html = self.client.get("/tasks").get_data(as_text=True)
+        self.assertIn(ui_strings("zh-Hant")["status_done"], html)
+        self.assertIn("badge done", html)
+
+    def test_task_detail_has_three_sections(self):
+        # pick a real task id from queue
+        import json
+        from pathlib import Path as P
+        tasks = json.loads(
+            (P("task_queue.json")).read_text(encoding="utf-8")
+        )
+        task_id = tasks[0]["id"]
+        html = self.client.get(f"/tasks/{task_id}").get_data(as_text=True)
+        t = ui_strings("zh-Hant")
+        self.assertIn(t["task_state"], html)
+        self.assertIn(t["task_config"], html)
+        self.assertIn(t["task_advisory"], html)
+
+
 class LocaleUiTests(unittest.TestCase):
     def setUp(self):
         app.config["TESTING"] = True
@@ -271,7 +340,7 @@ class LocaleUiTests(unittest.TestCase):
         self.assertEqual(switched.status_code, 200, html[:300])
         self.assertIn('lang="en"', html)
         self.assertIn("Dashboard", html)
-        self.assertIn(ui_strings("en")["operator_boundary"], html)
+        self.assertIn(ui_strings("en")["operator_boundary_short"], html)
 
         hans = self.client.post(
             "/locale",

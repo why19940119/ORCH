@@ -1,4 +1,5 @@
 from collections import Counter, deque
+from datetime import datetime
 from pathlib import Path
 import json
 import os
@@ -121,6 +122,65 @@ app.config["TRUSTED_HOSTS"] = [
 CHAT_MAX_HISTORY = 8
 CHAT_MIN_INTERVAL_SECONDS = 3
 CHAT_SESSIONS = {}
+
+
+def format_short_time(value, locale=None):
+    """Locale-aware short timestamp for UI chrome (not raw ISO)."""
+    if value is None:
+        return ""
+    text_value = str(value).strip()
+    if not text_value:
+        return ""
+
+    candidate = text_value
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+
+    parsed = None
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S.%f",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+    ):
+        try:
+            parsed = datetime.strptime(candidate, fmt)
+            break
+        except ValueError:
+            continue
+
+    if parsed is None:
+        try:
+            parsed = datetime.fromisoformat(text_value.replace("Z", "+00:00"))
+        except ValueError:
+            return text_value
+
+    loc = locale or get_locale()
+    if str(loc).startswith("zh"):
+        return (
+            f"{parsed.month}月{parsed.day}日 "
+            f"{parsed.hour:02d}:{parsed.minute:02d}"
+        )
+    return (
+        f"{parsed.strftime('%b')} {parsed.day}, "
+        f"{parsed.strftime('%H:%M')}"
+    )
+
+
+def short_id(value, head=8, tail=4):
+    text_value = "" if value is None else str(value)
+    if len(text_value) <= head + tail + 1:
+        return text_value
+    return f"{text_value[:head]}…{text_value[-tail:]}"
+
+
+def status_label(status, locale=None):
+    t = ui_strings(locale or get_locale())
+    key = f"status_{status}"
+    return t.get(key, status or t.get("status_unknown", "unknown"))
+
+
 
 
 BASE_TEMPLATE = """
@@ -1005,6 +1065,335 @@ BASE_TEMPLATE = """
     }
 
 
+    /* v0.16a.1.15 console density + shell polish */
+    header {
+      background: rgba(23, 16, 32, .92);
+      border-bottom: 1px solid rgba(73, 54, 95, .7);
+      display: flex;
+      padding: 10px 18px;
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      backdrop-filter: blur(10px);
+    }
+
+    header h1 {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: .15px;
+      margin: 0 14px 0 0;
+      white-space: nowrap;
+    }
+
+    header nav {
+      align-items: center;
+      display: flex;
+      flex: 1 1 auto;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    header nav a {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+      margin: 0;
+      padding: 5px 10px;
+    }
+
+    header nav a:hover {
+      background: rgba(61, 40, 96, .35);
+      color: var(--text);
+      text-decoration: none;
+    }
+
+    header nav a.active {
+      background: #3d2860;
+      border-color: #75539b;
+      color: #e8d4ff;
+    }
+
+    .lang-switch {
+      gap: 4px;
+      margin-left: 8px;
+    }
+
+    .lang-switch-label {
+      display: none;
+    }
+
+    .lang-switch button {
+      border-color: transparent;
+      font-size: 10px;
+      padding: 4px 7px;
+    }
+
+    main {
+      padding: 18px 20px 28px;
+    }
+
+    h2 {
+      font-size: 18px;
+      margin: 0 0 4px;
+    }
+
+    .subtitle {
+      font-size: 13px;
+      margin: 0 0 14px;
+    }
+
+    .grid {
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .card {
+      border-radius: 10px;
+      padding: 12px 14px;
+    }
+
+    a.card-link {
+      color: inherit;
+      display: block;
+      text-decoration: none;
+      transition: border-color .15s ease, transform .15s ease;
+    }
+
+    a.card-link:hover {
+      border-color: #75539b;
+      text-decoration: none;
+      transform: translateY(-1px);
+    }
+
+    .metric-label {
+      font-size: 10px;
+      letter-spacing: .35px;
+      margin-bottom: 4px;
+    }
+
+    .metric-value {
+      font-size: 22px;
+    }
+
+    .section {
+      margin-bottom: 12px;
+      padding: 14px;
+    }
+
+    th {
+      font-size: 10px;
+      letter-spacing: .3px;
+      text-transform: none;
+    }
+
+    th, td {
+      padding: 8px 8px;
+    }
+
+    .badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .2px;
+      padding: 3px 7px;
+      text-transform: none;
+    }
+
+    .kv {
+      gap: 6px 14px;
+      grid-template-columns: 160px 1fr;
+    }
+
+    .kv dt {
+      font-size: 11px;
+    }
+
+    .event {
+      align-items: baseline;
+      display: grid;
+      gap: 4px 10px;
+      grid-template-columns: 7.5rem minmax(0, 1.1fr) minmax(0, .9fr);
+      padding: 7px 0;
+    }
+
+    .event-message {
+      color: var(--muted);
+      font-size: 12px;
+      grid-column: 1 / -1;
+      margin: 0;
+    }
+
+    .event-time {
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .event-name {
+      color: #d3b7ef;
+      font-size: 12px;
+      font-weight: 600;
+      margin: 0;
+      text-transform: none;
+    }
+
+    .task-id-cell {
+      line-height: 1.35;
+    }
+
+    .task-id-cell a {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+    }
+
+    .task-title {
+      color: var(--muted);
+      display: block;
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .id-chip {
+      align-items: center;
+      display: inline-flex;
+      gap: 6px;
+      max-width: 100%;
+    }
+
+    .id-chip code {
+      font-size: 11px;
+    }
+
+    .copy-chip {
+      background: transparent;
+      border: 0;
+      border-radius: 4px;
+      color: #9a86b0;
+      cursor: pointer;
+      font-size: 10px;
+      font-weight: 600;
+      margin: 0;
+      padding: 2px 4px;
+    }
+
+    .copy-chip:hover {
+      background: rgba(61, 40, 96, .35);
+      color: #fff;
+    }
+
+    .site-footer {
+      border-top: 1px solid rgba(73, 54, 95, .45);
+      color: #8a769d;
+      font-size: 11px;
+      margin: 0 auto;
+      max-width: 1280px;
+      padding: 10px 20px 18px;
+    }
+
+    .boundary-chip {
+      background: rgba(39, 28, 55, .7);
+      border: 1px solid rgba(89, 64, 110, .45);
+      border-radius: 999px;
+      display: inline-block;
+      padding: 4px 10px;
+    }
+
+    .mode-seg {
+      background: #130d20;
+      border: 1px solid #59406e;
+      border-radius: 999px;
+      display: inline-flex;
+      overflow: hidden;
+      padding: 2px;
+    }
+
+    .mode-seg label {
+      margin: 0;
+    }
+
+    .mode-seg input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .mode-seg span {
+      border-radius: 999px;
+      color: #b9aacb;
+      cursor: pointer;
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 650;
+      padding: 7px 10px;
+      white-space: nowrap;
+    }
+
+    .mode-seg input:checked + span {
+      background: #3d2860;
+      color: #f0e9f8;
+    }
+
+    .chat-page .composer-grid {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+    }
+
+    .detail-section h3 {
+      font-size: 13px;
+      margin: 0 0 10px;
+    }
+
+    .quiet-details {
+      margin-top: 8px;
+    }
+
+    .quiet-details > summary {
+      color: #9a86b0;
+      cursor: pointer;
+      font-size: 11px;
+      list-style: none;
+      width: fit-content;
+    }
+
+    .quiet-details > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .quiet-details > summary::before {
+      content: "▸ ";
+      opacity: .7;
+    }
+
+    .quiet-details[open] > summary::before {
+      content: "▾ ";
+    }
+
+    #chat-form.is-pending .mode-seg {
+      opacity: .72;
+      pointer-events: none;
+    }
+
+    @media (max-width: 720px) {
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 8px;
+        padding: 10px 12px;
+      }
+
+      header h1 {
+        margin: 0;
+      }
+
+      .event {
+        grid-template-columns: 1fr;
+      }
+
+      .site-footer {
+        padding: 10px 12px 16px;
+      }
+    }
+
     .lang-switch {
       align-items: center;
       display: flex;
@@ -1110,20 +1499,32 @@ BASE_TEMPLATE = """
   <main>
     {{ body|safe }}
   </main>
+  <footer class="site-footer">
+    <span class="boundary-chip">{{ t.operator_boundary_short }}</span>
+  </footer>
   <script>
     document.addEventListener("click", async function(event) {
-      const button = event.target.closest("[data-copy-message]");
+      const messageButton = event.target.closest("[data-copy-message]");
+      const textButton = event.target.closest("[data-copy-text]");
+      const button = messageButton || textButton;
       if (!button || !navigator.clipboard) return;
 
-      const message = button
-        .closest(".chat-message-inner")
-        .querySelector(".chat-content").innerText;
+      let payload = "";
+      if (messageButton) {
+        const root = button.closest(".chat-message-inner");
+        if (!root) return;
+        payload = root.querySelector(".chat-content").innerText;
+      } else {
+        payload = button.getAttribute("data-copy-text") || "";
+      }
+      if (!payload) return;
+
       const labelCopy = button.getAttribute("data-label-copy") || "Copy";
       const labelCopied = button.getAttribute("data-label-copied") || "Copied";
       const labelFailed = button.getAttribute("data-label-copy-failed") || "Copy failed";
 
       try {
-        await navigator.clipboard.writeText(message);
+        await navigator.clipboard.writeText(payload);
         button.textContent = labelCopied;
         window.setTimeout(function() {
           button.textContent = labelCopy;
@@ -1508,6 +1909,22 @@ def get_locale():
     return normalize_locale(session.get("locale")) or DEFAULT_LOCALE
 
 
+
+@app.template_filter("short_time")
+def jinja_short_time(value):
+    return format_short_time(value)
+
+
+@app.template_filter("short_id")
+def jinja_short_id(value, head=8, tail=4):
+    return short_id(value, head=head, tail=tail)
+
+
+@app.template_filter("status_label")
+def jinja_status_label(status):
+    return status_label(status)
+
+
 def safe_next_path(value):
     if not value or not isinstance(value, str):
         return "/"
@@ -1643,37 +2060,32 @@ def dashboard():
       <p class="subtitle">{{ t.dash_subtitle }}</p>
 
       <div class="grid">
-        <div class="card">
+        <a class="card card-link" href="/tasks">
           <span class="metric-label">{{ t.metric_total }}</span>
           <span class="metric-value">{{ views|length }}</span>
-        </div>
-        <div class="card">
+        </a>
+        <a class="card card-link" href="/tasks">
           <span class="metric-label">{{ t.metric_done }}</span>
           <span class="metric-value">{{ counts.get('done', 0) }}</span>
-        </div>
-        <div class="card">
+        </a>
+        <a class="card card-link" href="/tasks">
           <span class="metric-label">{{ t.metric_waiting }}</span>
           <span class="metric-value">
             {{ counts.get('waiting_approval', 0) }}
           </span>
-        </div>
-        <div class="card">
+        </a>
+        <a class="card card-link" href="/tasks">
           <span class="metric-label">{{ t.metric_blocked }}</span>
           <span class="metric-value">
             {{ counts.get('blocked', 0) }}
           </span>
-        </div>
-        <div class="card">
+        </a>
+        <a class="card card-link" href="/tasks">
           <span class="metric-label">{{ t.metric_failed }}</span>
           <span class="metric-value">
             {{ counts.get('failed', 0) }}
           </span>
-        </div>
-      </div>
-
-      <div class="section">
-        <h3>{{ t.operator_boundary }}</h3>
-        <div class="warning">{{ t.operator_warning }}</div>
+        </a>
       </div>
 
       <div class="section">
@@ -1682,15 +2094,17 @@ def dashboard():
           {% for event in events[:10] %}
             <div class="event">
               <span class="event-time">
-                {{ event.get('timestamp', '') }}
+                {{ event.get('timestamp', '')|short_time }}
               </span>
               <span class="event-name">
                 {{ event.get('event', '') }}
               </span>
               <a href="/tasks/{{ event.get('task_id', '') }}">
-                {{ event.get('task_id', '') }}
+                {{ event.get('task_id', '')|short_id(10, 4) }}
               </a>
-              — {{ event.get('message', '') }}
+              {% if event.get('message') %}
+                <p class="event-message">{{ event.get('message') }}</p>
+              {% endif %}
             </div>
           {% endfor %}
         {% else %}
@@ -1734,13 +2148,13 @@ def tasks_page():
             {% for task in tasks %}
               <tr>
                 <td>{{ task.priority }}</td>
-                <td>
-                  <a href="/tasks/{{ task.id }}">{{ task.id }}</a><br>
-                  {{ task.title }}
+                <td class="task-id-cell">
+                  <a href="/tasks/{{ task.id }}">{{ task.id }}</a>
+                  <span class="task-title">{{ task.title }}</span>
                 </td>
                 <td>
                   <span class="badge {{ task.status }}">
-                    {{ task.status }}
+                    {{ task.status|status_label }}
                   </span>
                 </td>
                 <td>{{ task.attempt }}</td>
@@ -1749,7 +2163,7 @@ def tasks_page():
                     {{ task.state.get(
                       'approval_status',
                       'waiting_approval'
-                    ) }}
+                    )|status_label }}
                   {% else %}
                     {{ t.approval_not_required }}
                   {% endif %}
@@ -1803,21 +2217,50 @@ def task_detail(task_id):
       <h2>{{ task.id }}</h2>
       <p class="subtitle">{{ task.title }}</p>
 
-      <div class="section">
+      <div class="section detail-section">
         <h3>{{ t.task_state }}</h3>
         <dl class="kv">
           <dt>{{ t.label_status }}</dt>
           <dd>
             <span class="badge {{ task.status }}">
-              {{ task.status }}
+              {{ task.status|status_label }}
             </span>
           </dd>
 
-          <dt>{{ t.label_priority }}</dt>
-          <dd>{{ task.priority }}</dd>
-
           <dt>{{ t.label_attempt }}</dt>
           <dd>{{ task.attempt }}</dd>
+
+          <dt>{{ t.label_approval }}</dt>
+          <dd>
+            {% if task.requires_approval %}
+              {{ task.state.get(
+                'approval_status',
+                'waiting_approval'
+              )|status_label }}
+            {% else %}
+              {{ t.approval_not_required }}
+            {% endif %}
+          </dd>
+
+          <dt>{{ t.label_updated_at }}</dt>
+          <dd>
+            {% if task.state.get('updated_at') %}
+              {{ task.state.get('updated_at')|short_time }}
+            {% else %}
+              {{ t.not_recorded }}
+            {% endif %}
+          </dd>
+
+          <dt>{{ t.label_block_reason }}</dt>
+          <dd>{{ task.state.get('block_reason', t.none) }}</dd>
+        </dl>
+      </div>
+
+      <div class="section detail-section">
+        <h3>{{ t.task_config }}</h3>
+        <dl class="kv">
+          <dt>{{ t.label_priority }}</dt>
+          <dd>{{ task.priority }}</dd>
 
           <dt>{{ t.label_command }}</dt>
           <dd>
@@ -1831,45 +2274,25 @@ def task_detail(task_id):
             {{ task.depends_on|join(', ') or t.none }}
           </dd>
 
-          <dt>{{ t.label_approval }}</dt>
+          <dt>{{ t.policies }}</dt>
           <dd>
-            {% if task.requires_approval %}
-              {{ task.state.get(
-                'approval_status',
-                'waiting_approval'
-              ) }}
+            {% if task.state.get('policy_results') %}
+              {% for result in task.state.get('policy_results', []) %}
+                <div>
+                  <code>{{ result.get('policy_id', 'unknown') }}</code>
+                  {{ result.get('status', 'unknown') }}
+                  — {{ result.get('reason', '') }}
+                </div>
+              {% endfor %}
             {% else %}
-              {{ t.approval_not_required }}
+              {{ t.empty_policies }}
             {% endif %}
           </dd>
-
-          <dt>{{ t.label_updated_at }}</dt>
-          <dd>{{ task.state.get('updated_at', t.not_recorded) }}</dd>
-
-          <dt>{{ t.label_block_reason }}</dt>
-          <dd>{{ task.state.get('block_reason', t.none) }}</dd>
         </dl>
       </div>
 
-      <div class="section">
-        <h3>{{ t.policies }}</h3>
-        {% if task.state.get('policy_results') %}
-          <dl class="kv">
-            {% for result in task.state.get('policy_results', []) %}
-              <dt>{{ result.get('policy_id', 'unknown') }}</dt>
-              <dd>
-                {{ result.get('status', 'unknown') }}
-                — {{ result.get('reason', '') }}
-              </dd>
-            {% endfor %}
-          </dl>
-        {% else %}
-          <div class="empty">{{ t.empty_policies }}</div>
-        {% endif %}
-      </div>
-
-      <div class="section">
-        <h3>{{ t.advisory_preflight }}</h3>
+      <div class="section detail-section">
+        <h3>{{ t.task_advisory }}</h3>
         {% if advisory %}
           <dl class="kv">
             <dt>{{ t.label_preflight_status }}</dt>
@@ -1886,30 +2309,80 @@ def task_detail(task_id):
 
             <dt>{{ t.label_risks }}</dt>
             <dd>{{ advisory.risks|join(', ') or t.none_recorded }}</dd>
-
-            <dt>{{ t.label_provider_model }}</dt>
-            <dd>
-              {{ advisory.provider or t.not_available }}
-              /
-              {{ advisory.model or t.not_available }}
-            </dd>
-
-            <dt>{{ t.label_response_id }}</dt>
-            <dd>{{ advisory.response_id or t.not_available }}</dd>
-
-            <dt>{{ t.label_artifact_id }}</dt>
-            <dd>{{ advisory.artifact_id or t.not_available }}</dd>
-
-            <dt>{{ t.label_snapshot_fp }}</dt>
-            <dd>
-              {{ advisory.snapshot_fingerprint or t.not_available }}
-            </dd>
-
-            <dt>{{ t.label_exec_authority }}</dt>
-            <dd>
-              {{ advisory.execution_authority or t.not_available }}
-            </dd>
           </dl>
+          <details class="quiet-details">
+            <summary>{{ t.advisory_tech_details }}</summary>
+            <dl class="kv">
+              <dt>{{ t.label_provider_model }}</dt>
+              <dd>
+                {{ advisory.provider or t.not_available }}
+                /
+                {{ advisory.model or t.not_available }}
+              </dd>
+
+              <dt>{{ t.label_response_id }}</dt>
+              <dd>
+                {% if advisory.response_id %}
+                  <span class="id-chip" title="{{ advisory.response_id }}">
+                    <code>{{ advisory.response_id|short_id }}</code>
+                    <button
+                      type="button"
+                      class="copy-chip"
+                      data-copy-text="{{ advisory.response_id }}"
+                      data-label-copy="{{ t.chat_copy }}"
+                      data-label-copied="{{ t.chat_copied }}"
+                      data-label-copy-failed="{{ t.chat_copy_failed }}"
+                    >{{ t.chat_copy }}</button>
+                  </span>
+                {% else %}
+                  {{ t.not_available }}
+                {% endif %}
+              </dd>
+
+              <dt>{{ t.label_artifact_id }}</dt>
+              <dd>
+                {% if advisory.artifact_id %}
+                  <span class="id-chip" title="{{ advisory.artifact_id }}">
+                    <code>{{ advisory.artifact_id|short_id }}</code>
+                    <button
+                      type="button"
+                      class="copy-chip"
+                      data-copy-text="{{ advisory.artifact_id }}"
+                      data-label-copy="{{ t.chat_copy }}"
+                      data-label-copied="{{ t.chat_copied }}"
+                      data-label-copy-failed="{{ t.chat_copy_failed }}"
+                    >{{ t.chat_copy }}</button>
+                  </span>
+                {% else %}
+                  {{ t.not_available }}
+                {% endif %}
+              </dd>
+
+              <dt>{{ t.label_snapshot_fp }}</dt>
+              <dd>
+                {% if advisory.snapshot_fingerprint %}
+                  <span class="id-chip" title="{{ advisory.snapshot_fingerprint }}">
+                    <code>{{ advisory.snapshot_fingerprint|short_id }}</code>
+                    <button
+                      type="button"
+                      class="copy-chip"
+                      data-copy-text="{{ advisory.snapshot_fingerprint }}"
+                      data-label-copy="{{ t.chat_copy }}"
+                      data-label-copied="{{ t.chat_copied }}"
+                      data-label-copy-failed="{{ t.chat_copy_failed }}"
+                    >{{ t.chat_copy }}</button>
+                  </span>
+                {% else %}
+                  {{ t.not_available }}
+                {% endif %}
+              </dd>
+
+              <dt>{{ t.label_exec_authority }}</dt>
+              <dd>
+                {{ advisory.execution_authority or t.not_available }}
+              </dd>
+            </dl>
+          </details>
         {% else %}
           <div class="empty">{{ t.empty_advisory }}</div>
         {% endif %}
@@ -1937,15 +2410,17 @@ def events_page():
           {% for event in events %}
             <div class="event">
               <span class="event-time">
-                {{ event.get('timestamp', '') }}
+                {{ event.get('timestamp', '')|short_time }}
               </span>
               <span class="event-name">
                 {{ event.get('event', '') }}
               </span>
               <a href="/tasks/{{ event.get('task_id', '') }}">
-                {{ event.get('task_id', '') }}
+                {{ event.get('task_id', '')|short_id(10, 4) }}
               </a>
-              — {{ event.get('message', '') }}
+              {% if event.get('message') %}
+                <p class="event-message">{{ event.get('message') }}</p>
+              {% endif %}
             </div>
           {% endfor %}
         {% else %}
@@ -1987,9 +2462,47 @@ def artifacts_page():
                     {{ artifact.logical_name }}
                   </a>
                 </td>
-                <td>{{ artifact.artifact_id or t.not_available }}</td>
-                <td>{{ artifact.content_sha256 or t.not_available }}</td>
-                <td>{{ artifact.updated_at_utc or t.not_available }}</td>
+                <td>
+                  {% if artifact.artifact_id %}
+                    <span class="id-chip" title="{{ artifact.artifact_id }}">
+                      <code>{{ artifact.artifact_id|short_id }}</code>
+                      <button
+                        type="button"
+                        class="copy-chip"
+                        data-copy-text="{{ artifact.artifact_id }}"
+                        data-label-copy="{{ t.chat_copy }}"
+                        data-label-copied="{{ t.chat_copied }}"
+                        data-label-copy-failed="{{ t.chat_copy_failed }}"
+                      >{{ t.chat_copy }}</button>
+                    </span>
+                  {% else %}
+                    {{ t.not_available }}
+                  {% endif %}
+                </td>
+                <td>
+                  {% if artifact.content_sha256 %}
+                    <span class="id-chip" title="{{ artifact.content_sha256 }}">
+                      <code>{{ artifact.content_sha256|short_id(10, 6) }}</code>
+                      <button
+                        type="button"
+                        class="copy-chip"
+                        data-copy-text="{{ artifact.content_sha256 }}"
+                        data-label-copy="{{ t.chat_copy }}"
+                        data-label-copied="{{ t.chat_copied }}"
+                        data-label-copy-failed="{{ t.chat_copy_failed }}"
+                      >{{ t.chat_copy }}</button>
+                    </span>
+                  {% else %}
+                    {{ t.not_available }}
+                  {% endif %}
+                </td>
+                <td>
+                  {% if artifact.updated_at_utc %}
+                    {{ artifact.updated_at_utc|short_time }}
+                  {% else %}
+                    {{ t.not_available }}
+                  {% endif %}
+                </td>
               </tr>
             {% endfor %}
           </tbody>
@@ -2034,32 +2547,75 @@ def artifact_detail(logical_name):
       <h2>{{ logical_name }}</h2>
       <p class="subtitle">{{ t.artifact_detail_subtitle }}</p>
 
-      <div class="section">
+      <div class="section detail-section">
         <dl class="kv">
-          <dt>{{ t.label_artifact_id }}</dt>
-          <dd>{{ manifest.get('artifact_id', t.not_available) }}</dd>
-
           <dt>{{ t.label_logical_name }}</dt>
           <dd>{{ manifest.get('logical_name', logical_name) }}</dd>
 
+          <dt>{{ t.label_artifact_id }}</dt>
+          <dd>
+            {% set aid = manifest.get('artifact_id') %}
+            {% if aid %}
+              <span class="id-chip" title="{{ aid }}">
+                <code>{{ aid|short_id }}</code>
+                <button
+                  type="button"
+                  class="copy-chip"
+                  data-copy-text="{{ aid }}"
+                  data-label-copy="{{ t.chat_copy }}"
+                  data-label-copied="{{ t.chat_copied }}"
+                  data-label-copy-failed="{{ t.chat_copy_failed }}"
+                >{{ t.chat_copy }}</button>
+              </span>
+            {% else %}
+              {{ t.not_available }}
+            {% endif %}
+          </dd>
+
           <dt>{{ t.th_content_sha }}</dt>
-          <dd>{{ manifest.get('content_sha256', t.not_available) }}</dd>
+          <dd>
+            {% set sha = manifest.get('content_sha256') %}
+            {% if sha %}
+              <span class="id-chip" title="{{ sha }}">
+                <code>{{ sha|short_id(10, 6) }}</code>
+                <button
+                  type="button"
+                  class="copy-chip"
+                  data-copy-text="{{ sha }}"
+                  data-label-copy="{{ t.chat_copy }}"
+                  data-label-copied="{{ t.chat_copied }}"
+                  data-label-copy-failed="{{ t.chat_copy_failed }}"
+                >{{ t.chat_copy }}</button>
+              </span>
+            {% else %}
+              {{ t.not_available }}
+            {% endif %}
+          </dd>
 
           <dt>{{ t.label_byte_size }}</dt>
           <dd>{{ manifest.get('byte_size', t.not_available) }}</dd>
-
-          <dt>{{ t.label_schema_version }}</dt>
-          <dd>{{ manifest.get('schema_version', t.not_available) }}</dd>
 
           <dt>{{ t.label_producer_task }}</dt>
           <dd>{{ manifest.get('producer_task_id', t.not_available) }}</dd>
 
           <dt>{{ t.label_created_at }}</dt>
-          <dd>{{ manifest.get('created_at_utc', t.not_available) }}</dd>
-
-          <dt>{{ t.label_immutable }}</dt>
-          <dd>{{ manifest.get('immutable', t.not_available) }}</dd>
+          <dd>
+            {% if manifest.get('created_at_utc') %}
+              {{ manifest.get('created_at_utc')|short_time }}
+            {% else %}
+              {{ t.not_available }}
+            {% endif %}
+          </dd>
         </dl>
+        <details class="quiet-details">
+          <summary>{{ t.advisory_tech_details }}</summary>
+          <dl class="kv">
+            <dt>{{ t.label_schema_version }}</dt>
+            <dd>{{ manifest.get('schema_version', t.not_available) }}</dd>
+            <dt>{{ t.label_immutable }}</dt>
+            <dd>{{ manifest.get('immutable', t.not_available) }}</dd>
+          </dl>
+        </details>
       </div>
     """
 
@@ -2298,17 +2854,21 @@ def chat_page():
           >
 
           <div class="composer-grid">
-            <select
-              id="mode"
-              class="composer-mode"
-              name="mode"
-              aria-label="{{ t.chat_mode_label }}"
-            >
-              <option value="general">{{ t.mode_general }}</option>
-              <option value="orch_context" selected>
-                {{ t.mode_orch_context }}
-              </option>
-            </select>
+            <div class="mode-seg" role="group" aria-label="{{ t.chat_mode_label }}">
+              <label>
+                <input type="radio" name="mode" value="general">
+                <span>{{ t.mode_general }}</span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="mode"
+                  value="orch_context"
+                  checked
+                >
+                <span>{{ t.mode_orch_context }}</span>
+              </label>
+            </div>
 
             <textarea
               id="question"
