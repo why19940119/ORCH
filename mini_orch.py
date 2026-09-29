@@ -606,6 +606,7 @@ def decide_approval(
     events_file=None,
     extra_state=None,
     strict=True,
+    requested_by=None,
 ):
     """Record a human approval decision through the standard gate.
 
@@ -620,6 +621,17 @@ def decide_approval(
         return {"ok": False, "reason": "operator_required"}
 
     decided_by = decided_by.strip()
+
+    # v0.20.0: nobody approves their own work. ``requested_by`` is a name
+    # or list of names (draft requester + every version author).
+    if decision == "approved" and requested_by:
+        authors = [requested_by] if isinstance(requested_by, str) else list(requested_by)
+        if any(
+            str(author or "").strip().casefold() == decided_by.casefold()
+            for author in authors
+        ):
+            return {"ok": False, "reason": "self_approval"}
+
     queue_path = Path(queue_file) if queue_file is not None else QUEUE_FILE
     status_path = (
         Path(status_file) if status_file is not None else STATUS_FILE

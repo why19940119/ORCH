@@ -35,3 +35,8 @@ state/ecom_demo_queue.json
 data/import/
 state/ecom_import.json
 state/.ecom_import_*
+
+# v0.20.0 local accounts + governance audit (never commit)
+state/auth.json
+state/auth_audit.jsonl
+state/.auth*

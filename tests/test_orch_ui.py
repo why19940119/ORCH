@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from auth_testing import signed_in
 from orch_ui import (
     ARTIFACTS_ROOT,
     CHAT_SESSIONS,
@@ -25,6 +26,7 @@ class OrchUiTests(unittest.TestCase):
     def setUp(self):
         app.config["TESTING"] = True
         self.client = app.test_client()
+        signed_in(self, self.client)  # v0.20.0: login required
 
     def test_read_only_routes_return_success(self):
         for path in [
@@ -60,6 +62,12 @@ class OrchUiTests(unittest.TestCase):
         self.assertEqual(
             post_routes,
             [
+                # v0.20.0: admin pages (admin role + CSRF) and login/logout.
+                "/admin/approvers",
+                "/admin/changes/<change_id>/<decision>",
+                "/admin/retention",
+                "/admin/retention/purge",
+                "/admin/users/request",
                 "/chat",
                 "/demo/draft",
                 # v0.19.0: CSV import page (CSRF on each; no model calls).
@@ -71,6 +79,8 @@ class OrchUiTests(unittest.TestCase):
                 "/inbox/<task_id>/reject",
                 "/inbox/<task_id>/revise",
                 "/locale",
+                "/login",
+                "/logout",
             ],
         )
 
@@ -79,6 +89,7 @@ class TaskStatusAndComposerUiTests(unittest.TestCase):
     def setUp(self):
         app.config["TESTING"] = True
         self.client = app.test_client()
+        signed_in(self, self.client)  # v0.20.0: login required
 
     def test_tasks_render_all_distinct_status_badge_classes(self):
         statuses = [
@@ -320,6 +331,7 @@ class ConsoleDensityUiTests(unittest.TestCase):
     def setUp(self):
         app.config["TESTING"] = True
         self.client = app.test_client()
+        signed_in(self, self.client)  # v0.20.0: login required
         seed_console_fixtures(self)
 
     def test_shell_density_contracts(self):
@@ -383,6 +395,7 @@ class LocaleUiTests(unittest.TestCase):
     def setUp(self):
         app.config["TESTING"] = True
         self.client = app.test_client()
+        signed_in(self, self.client)  # v0.20.0: login required
 
     def test_default_locale_is_zh_hant(self):
         self.assertEqual(DEFAULT_LOCALE, "zh-Hant")
@@ -463,6 +476,7 @@ class OrchChatUiTests(unittest.TestCase):
     def setUp(self):
         app.config["TESTING"] = True
         self.client = app.test_client()
+        signed_in(self, self.client)  # v0.20.0: login required
 
     def test_chat_page_loads(self):
         response = self.client.get("/chat")
@@ -503,6 +517,7 @@ class OrchChatProviderTests(unittest.TestCase):
         app.config["TESTING"] = True
         CHAT_SESSIONS.clear()
         self.client = app.test_client()
+        signed_in(self, self.client)  # v0.20.0: login required
 
     @patch("orch_ui.publish_chat_audit_artifact")
     @patch("orch_ui.record_chat_usage")
@@ -592,6 +607,7 @@ class OrchChatModeAndAjaxTests(unittest.TestCase):
         app.config["TESTING"] = True
         CHAT_SESSIONS.clear()
         self.client = app.test_client()
+        signed_in(self, self.client)  # v0.20.0: login required
 
     def _mock_result(self, answer="General answer."):
         return {
@@ -726,6 +742,7 @@ class OrchUiHostValidationTests(unittest.TestCase):
     def setUp(self):
         app.config["TESTING"] = True
         self.client = app.test_client()
+        signed_in(self, self.client)  # v0.20.0: login required
 
     def test_untrusted_host_is_rejected(self):
         response = self.client.get(
@@ -738,8 +755,9 @@ class OrchUiHostValidationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_loopback_host_is_allowed(self):
+        # v0.20.0: /login is public (session cookies are per-host in the client).
         response = self.client.get(
-            "/tasks",
+            "/login",
             headers={
                 "Host": "127.0.0.1",
             },
@@ -859,6 +877,7 @@ class OrchChatDemoContextTests(unittest.TestCase):
         app.config["TESTING"] = True
         CHAT_SESSIONS.clear()
         self.client = app.test_client()
+        signed_in(self, self.client)  # v0.20.0: login required
 
     def test_build_chat_context_includes_sample_001(self):
         context = build_chat_context(self.QUESTION)
@@ -995,6 +1014,7 @@ class ArtifactRootContainmentTests(unittest.TestCase):
 
     def test_artifact_detail_rejects_escaping_pointer(self):
         client = app.test_client()
+        signed_in(self, client)  # v0.20.0: login required
         pointer = {
             "logical_name": "escape_probe",
             "artifact_id": "artifact_escape_probe",

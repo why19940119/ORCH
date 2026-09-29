@@ -23,7 +23,7 @@ Positioning (must hold):
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import json
 import os
@@ -34,6 +34,7 @@ import uuid
 import artifact_store
 import commerce_import
 import mini_orch
+import orch_auth
 from ui_i18n import DEFAULT_LOCALE, ui_strings
 from approval_inbox import inbox_item
 from chat_security import record_chat_usage, sha256_value
@@ -54,7 +55,7 @@ TASK_PREFIX = "task_ecom_"
 DRAFT_LOGICAL_PREFIX = "ecom_draft_"
 AUDIT_LOGICAL_NAME = "ecom_audit"
 AUDIT_SCHEMA_VERSION = "1.0"
-DEMO_VERSION = "v0.19.0"
+DEMO_VERSION = "v0.20.0"
 
 MAX_DRAFT_CHARS = 4000
 MAX_NOTE_CHARS = 300
@@ -533,6 +534,55 @@ def validate_operator(operator):
     operator = (operator or "").strip()
     _require(OPERATOR_PATTERN.fullmatch(operator), "operator_required")
     return operator
+
+
+def identity_mode():
+    """v0.20.0: 'account' once local accounts exist, else legacy 'typed'."""
+    return "account" if orch_auth.has_users() else "typed"
+
+
+def require_role(operator, roles):
+    """Server-side role check in the shared path (no-op before bootstrap,
+    when the web console is not reachable at all)."""
+    if not orch_auth.has_users():
+        return
+    _require(orch_auth.user_role(operator) in roles, "forbidden_role")
+
+
+def _same_person(a, b):
+    return str(a or "").strip().casefold() == str(b or "").strip().casefold()
+
+
+def draft_authors(task, state):
+    """Everyone who wrote any version of the draft (requester included)."""
+    authors = [task.get("ecom_draft", {}).get("created_by")]
+    authors += [v.get("created_by") for v in (state.get("ecom") or {}).get("versions") or []]
+    return [a for a in authors if a]
+
+
+def due_at(created_at, deadline_hours=None):
+    hours = deadline_hours
+    if hours in (None, ""):
+        hours = orch_auth.settings()["default_deadline_hours"]
+    try:
+        hours = int(hours)
+    except (TypeError, ValueError):
+        raise DemoError("invalid_deadline")
+    _require(1 <= hours <= 720, "invalid_deadline")
+    start = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    return (start + timedelta(hours=hours)).isoformat(timespec="seconds")
+
+
+def is_overdue(task, state, now=None):
+    meta = task.get("ecom_draft") or {}
+    due = meta.get("due_at_utc")
+    if not due or state.get("approval_status") != "waiting_approval":
+        return False
+    now = now or datetime.now(timezone.utc)
+    try:
+        return datetime.fromisoformat(due.replace("Z", "+00:00")) < now
+    except ValueError:
+        return False
 
 
 def _sku_facts(sku):
@@ -1283,8 +1333,10 @@ def is_demo_task_id(task_id):
     return isinstance(task_id, str) and bool(TASK_ID_PATTERN.fullmatch(task_id))
 
 
-def create_draft(kind, params, operator, language="en", session_id_sha256=None):
+def create_draft(kind, params, operator, language="en", session_id_sha256=None,
+                 deadline_hours=None):
     operator = validate_operator(operator)
+    require_role(operator, {"editor"})
     _require(language in LANGUAGES, "invalid_language")
     data = load_sample_data()
     source = build_source(kind, params, data)
@@ -1297,6 +1349,8 @@ def create_draft(kind, params, operator, language="en", session_id_sha256=None):
     logical_name = f"{DRAFT_LOGICAL_PREFIX}{draft_id}"
     module = DRAFT_KINDS[kind]["module"]
     created_at = utc_now()
+    due_at_utc = due_at(created_at, deadline_hours)
+    identity = identity_mode()
 
     payload = {
         "artifact_type": "ecom_draft",
@@ -1342,6 +1396,9 @@ def create_draft(kind, params, operator, language="en", session_id_sha256=None):
             "created_by": operator,
             "created_at_utc": created_at,
             "sample_data": source.get("sample_data", True),
+            # v0.20.0: logged-in account (not a typed name) + deadline.
+            "identity": identity,
+            "due_at_utc": due_at_utc,
         },
     }
     version_entry = {
@@ -1404,6 +1461,7 @@ def _get_task_and_state(task_id):
 
 def revise_draft(task_id, body, operator, expected_version):
     operator = validate_operator(operator)
+    require_role(operator, {"editor"})
     body = (body or "").strip()
     _require(0 < len(body) <= MAX_DRAFT_CHARS, "invalid_body")
 
@@ -1476,6 +1534,18 @@ def decide(task_id, decision, operator, expected_version, channel=None, note="")
         _require(str(expected_version) == str(ecom["current_version"]),
                  "stale_version")
         kind = task["ecom_draft"]["kind"]
+        module = task["ecom_draft"]["module"]
+
+        # v0.20.0 governance, enforced here for every caller:
+        # role + per-module assignment, and never your own draft.
+        if orch_auth.has_users():
+            _require(orch_auth.user_role(operator) == "approver", "forbidden_role")
+            _require(orch_auth.can_approve(operator, module), "not_assigned")
+        if decision == "approved":
+            _require(
+                not any(_same_person(operator, a) for a in draft_authors(task, state)),
+                "self_approval",
+            )
 
         if decision == "approved":
             _require(channel in DRAFT_KINDS[kind]["channels"],
@@ -1528,6 +1598,10 @@ def decide(task_id, decision, operator, expected_version, channel=None, note="")
             "sample_data": (draft_payload.get("source") or {}).get(
                 "sample_data", True
             ),
+            "identity": identity_mode(),
+            "draft_identity": task["ecom_draft"].get("identity", "typed"),
+            "due_at_utc": task["ecom_draft"].get("due_at_utc"),
+            "overdue_at_decision": is_overdue(task, state),
         }
         # v0.18.2: the gate decides first; the immutable audit record is
         # published only after decide_approval succeeded.
@@ -1545,6 +1619,7 @@ def decide(task_id, decision, operator, expected_version, channel=None, note="")
             decision,
             operator,
             note=note or None,
+            requested_by=draft_authors(task, state),
             queue_file=QUEUE_FILE,
             status_file=STATUS_FILE,
             events_file=EVENTS_FILE,
@@ -1645,6 +1720,11 @@ def draft_views(data=None, locale=DEFAULT_LOCALE):
                 "channels": DRAFT_KINDS.get(meta.get("kind"), {}).get(
                     "channels", []
                 ),
+                "identity": meta.get("identity", "typed"),
+                "legacy": meta.get("identity") != "account",
+                "due_at_utc": meta.get("due_at_utc"),
+                "overdue": is_overdue(task, state),
+                "authors": draft_authors(task, state),
             }
         )
     views.sort(key=lambda view: view.get("created_at_utc") or "", reverse=True)
@@ -1724,6 +1804,95 @@ def import_legacy_demo_tasks(main_queue_file=None):
             tasks.sort(key=lambda item: item.get("priority", 999))
             _save(QUEUE_FILE, tasks)
     return copied
+
+
+def overdue_drafts(now=None):
+    tasks = _load(QUEUE_FILE, [])
+    statuses = _load(STATUS_FILE, {})
+    out = []
+    for task in tasks:
+        if not is_demo_task_id(task.get("id")) or "ecom_draft" not in task:
+            continue
+        state = statuses.get(task["id"], {})
+        if is_overdue(task, state, now):
+            out.append(
+                {
+                    "id": task["id"],
+                    "module": task["ecom_draft"].get("module"),
+                    "kind": task["ecom_draft"].get("kind"),
+                    "due_at_utc": task["ecom_draft"].get("due_at_utc"),
+                    "created_by": task["ecom_draft"].get("created_by"),
+                    "approvers": orch_auth.approvers_for(task["ecom_draft"].get("module")),
+                }
+            )
+    return sorted(out, key=lambda item: item["due_at_utc"] or "")
+
+
+def purge_decided_drafts(cutoff):
+    """v0.20.0 retention: remove decided (approved/rejected) drafts whose
+    decision is older than ``cutoff`` from the demo queue/status and delete
+    their draft artifacts. Pending drafts, ecom_audit records and
+    events.jsonl are always kept."""
+    removed_tasks, removed_artifacts = [], 0
+    with demo_lock():
+        tasks = _load(QUEUE_FILE, [])
+        statuses = _load(STATUS_FILE, {})
+        keep = []
+        for task in tasks:
+            state = statuses.get(task.get("id"), {})
+            decision = ((state.get("ecom") or {}).get("decision") or {})
+            decided = decision.get("decided_at_utc")
+            old = False
+            if is_demo_task_id(task.get("id")) and decided and state.get(
+                "approval_status"
+            ) in {"approved", "rejected"}:
+                try:
+                    old = datetime.fromisoformat(decided.replace("Z", "+00:00")) < cutoff
+                except ValueError:
+                    old = False
+            if not old:
+                keep.append(task)
+                continue
+            removed_tasks.append(task["id"])
+            for version in (state.get("ecom") or {}).get("versions") or []:
+                removed_artifacts += _delete_draft_artifact(version.get("artifact_id"))
+            draft_id = task["ecom_draft"].get("draft_id")
+            latest = Path(artifact_store.LATEST_DIR) / f"{DRAFT_LOGICAL_PREFIX}{draft_id}.json"
+            if latest.is_file():
+                latest.unlink()
+            statuses.pop(task["id"], None)
+        if removed_tasks:
+            _save(QUEUE_FILE, keep)
+            _save(STATUS_FILE, statuses)
+    return {"tasks": len(removed_tasks), "task_ids": removed_tasks,
+            "artifacts": removed_artifacts}
+
+
+def _delete_draft_artifact(artifact_id):
+    if not isinstance(artifact_id, str) or not artifact_id.startswith(
+        f"artifact_{DRAFT_LOGICAL_PREFIX}"
+    ) or not re.fullmatch(r"[A-Za-z0-9_-]+", artifact_id):
+        return 0
+    manifests = Path(artifact_store.MANIFESTS_DIR)
+    manifest_path = manifests / f"{artifact_id}.json"
+    if not manifest_path.is_file():
+        return 0
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    object_path = Path(manifest.get("object_path", ""))
+    manifest_path.unlink()
+    objects_root = Path(artifact_store.OBJECTS_DIR).resolve()
+    try:
+        resolved = object_path.resolve()
+        resolved.relative_to(objects_root)
+    except (OSError, ValueError):
+        return 1
+    still_used = any(
+        json.loads(other.read_text(encoding="utf-8")).get("object_path") == str(object_path)
+        for other in manifests.glob("*.json")
+    )
+    if not still_used and resolved.is_file():
+        resolved.unlink()
+    return 1
 
 
 def reset_demo_tasks():

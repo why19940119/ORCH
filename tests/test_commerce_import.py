@@ -496,7 +496,7 @@ class RepoHygieneTests(unittest.TestCase):
             self.assertEqual(missing, [], code)
 
     def test_version(self):
-        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.19.0")
+        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.20.0")
         self.assertEqual(commerce_import.IMPORT_VERSION, "v0.19.0")
         self.assertIn("v0.19.0", (PROJECT_ROOT / "README.md").read_text(encoding="utf-8"))
 

@@ -332,9 +332,21 @@ def attachment_audit_records(records):
     return history_attachment_meta(records)
 
 
+def configured_upload_retention_seconds():
+    """v0.20.0: admin retention setting (days); 24h if unavailable."""
+    try:
+        import orch_auth
+
+        return int(orch_auth.settings()["upload_retention_days"]) * 24 * 60 * 60
+    except Exception:
+        return UPLOAD_RETENTION_SECONDS
+
+
 def sweep_old_uploads(max_age_seconds=None, now=None):
     """Delete upload batch dirs/files older than the retention window."""
-    max_age = UPLOAD_RETENTION_SECONDS if max_age_seconds is None else max_age_seconds
+    if max_age_seconds is None:
+        max_age_seconds = configured_upload_retention_seconds()
+    max_age = max_age_seconds
     root = CHAT_UPLOADS_ROOT
     if not root.is_dir():
         return 0

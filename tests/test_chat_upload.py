@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import chat_attachments
 from orch_ui import CHAT_SESSIONS, app
+from auth_testing import signed_in
 
 
 def mock_result(answer="Read your file."):
@@ -40,6 +41,7 @@ class ChatUploadTests(unittest.TestCase):
         app.config["TESTING"] = True
         CHAT_SESSIONS.clear()
         self.client = app.test_client()
+        signed_in(self, self.client)  # v0.20.0: login required
         self.client.get("/chat")
         with self.client.session_transaction() as sess:
             self.token = sess["csrf_token"]

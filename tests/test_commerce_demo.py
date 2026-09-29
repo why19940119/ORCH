@@ -21,6 +21,7 @@ import commerce_ui
 import mini_orch
 import orch_ui
 from orch_ui import PROJECT_ROOT, app
+from auth_testing import demo_signed_in, sign_in
 from ui_i18n import SUPPORTED_LOCALES, ui_strings
 
 
@@ -79,6 +80,8 @@ class DemoSandbox(unittest.TestCase):
             item.start()
         app.config["TESTING"] = True
         self.client = app.test_client()
+        # v0.20.0: accounts replace typed names; default actor is the editor.
+        demo_signed_in(self, self.client)
         self.client.get("/inbox")
         with self.client.session_transaction() as stored:
             self.token = stored["csrf_token"]
@@ -89,6 +92,9 @@ class DemoSandbox(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     # helpers ---------------------------------------------------------
+    def as_user(self, username):
+        sign_in(self.client, username)
+
     def queue(self):
         """The demo queue (state/ecom_demo_queue.json in the sandbox)."""
         if not self.demo_queue_file.exists():
@@ -231,12 +237,14 @@ class DemoApprovalFlowTests(DemoSandbox):
         self.assertEqual([t["id"] for t in self.queue()], [task_id])
 
         # The draft is visible in the inbox as pending (no auto-approve).
+        self.as_user("Ben Lee")
         html = self.client.get("/inbox").get_data(as_text=True)
         self.assertIn(f'id="{task_id}"', html)
         self.assertIn(f"/inbox/{task_id}/approve", html)
 
     def test_approve_writes_audit_through_existing_machinery(self):
         task_id = self.create_one()
+        self.as_user("Ben Lee")
         response = self.client.post(
             f"/inbox/{task_id}/approve",
             data={
@@ -291,8 +299,14 @@ class DemoApprovalFlowTests(DemoSandbox):
 
     def test_approve_requires_named_operator_and_valid_channel(self):
         task_id = self.create_one()
+        # v0.20.0: an editor (not an approver) is refused whatever name is typed.
+        self.assertEqual(self.client.post(
+            f"/inbox/{task_id}/approve",
+            data={"csrf_token": self.token, "version": "1", "operator": "Ben Lee",
+                  "channel": "online_store_product_page"},
+        ).status_code, 403)
+        self.as_user("Ben Lee")
         for data in (
-            {"operator": "", "channel": "online_store_product_page"},
             {"operator": "Ben Lee", "channel": "tiktok_ads"},
         ):
             self.client.post(
@@ -304,6 +318,7 @@ class DemoApprovalFlowTests(DemoSandbox):
 
     def test_reject_needs_reason_and_is_never_dispatched(self):
         task_id = self.create_one(kind="lead_reply", inquiry_id="INQ-S-004")
+        self.as_user("Ben Lee")
         self.client.post(
             f"/inbox/{task_id}/reject",
             data={"csrf_token": self.token, "operator": "Ben Lee", "version": "1", "note": ""},
@@ -335,6 +350,7 @@ class DemoApprovalFlowTests(DemoSandbox):
 
     def test_revision_creates_new_version_and_stale_approval_is_refused(self):
         task_id = self.create_one()
+        self.as_user("Cara Wong")
         self.client.post(
             f"/inbox/{task_id}/revise",
             data={"csrf_token": self.token, "operator": "Cara Wong", "version": "1",
@@ -349,6 +365,7 @@ class DemoApprovalFlowTests(DemoSandbox):
         self.assertEqual(manifest["parent_artifact_id"], v1["artifact_id"])
 
         # Approving the stale v1 is refused.
+        self.as_user("Ben Lee")
         self.client.post(
             f"/inbox/{task_id}/approve",
             data={"csrf_token": self.token, "operator": "Ben Lee", "version": "1",
@@ -388,7 +405,10 @@ class DemoApprovalFlowTests(DemoSandbox):
             self.assertEqual(statuses[task_id]["approval_status"], "waiting_approval")
 
     def test_draft_requires_operator(self):
-        self.draft(operator="")
+        # v0.20.0: the operator is the signed-in editor; a typed name is
+        # ignored and non-editors are refused.
+        self.as_user("Ben Lee")
+        self.assertEqual(self.draft(operator="Amy Chan").status_code, 403)
         self.assertEqual(self.demo_task_ids(), [])
 
     def test_draft_rate_limit(self):

@@ -7,10 +7,12 @@ import re
 import secrets
 import sys
 import time
+from urllib.parse import quote
 
 from flask import (
     Flask,
     abort,
+    g,
     jsonify,
     redirect,
     render_template_string,
@@ -44,8 +46,10 @@ from chat_attachments import (
     history_attachment_meta,
     process_uploaded_files,
 )
+import admin_ui
 import commerce_demo
 import commerce_ui
+import orch_auth
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -123,7 +127,11 @@ else:
 
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_SECURE"] = False
+# v0.20.0: SESSION_COOKIE_SECURE=1 when served over HTTPS (off for local HTTP).
+app.config["SESSION_COOKIE_SECURE"] = os.getenv(
+    "SESSION_COOKIE_SECURE", ""
+).strip().lower() in {"1", "true", "yes", "on"}
+app.config["SESSION_COOKIE_NAME"] = "orch_session"
 
 # v0.18.2: cap request bodies (3 attachments of at most 5MB + form fields).
 MAX_UPLOAD_REQUEST_MB = 16
@@ -1539,6 +1547,33 @@ BASE_TEMPLATE = """
 
     .import-error-row td { vertical-align: top; }
 
+    .user-chip {
+      align-items: center;
+      display: flex;
+      font-size: 12px;
+      gap: 8px;
+      margin-left: 12px;
+    }
+
+    .user-chip form { margin: 0; }
+    .user-chip button { font-size: 12px; padding: 4px 10px; }
+
+    .login-card { margin: 40px auto; max-width: 440px; }
+    .login-form { flex-direction: column; align-items: stretch; }
+
+    .escalation { border-color: rgba(255, 120, 120, .7); }
+
+    .legacy-tag, .overdue-tag, .self-tag {
+      border-radius: 999px;
+      font-size: 11px;
+      margin-left: 6px;
+      padding: 2px 8px;
+    }
+
+    .legacy-tag { background: #3a3346; color: #cbbfe0; }
+    .overdue-tag { background: #5a1f1f; color: #ffb4b4; }
+    .self-tag { background: #3d3317; color: #ffdc70; }
+
     .demo-flash {
       border-radius: 7px;
       font-size: 13px;
@@ -1778,6 +1813,7 @@ BASE_TEMPLATE = """
 <body>
   <header>
     <h1>{{ t.brand }}</h1>
+    {% if current_user %}
     <nav>
       <a href="/" class="{{ 'active' if active == 'dashboard' }}">
         {{ t.nav_dashboard }}
@@ -1809,7 +1845,20 @@ BASE_TEMPLATE = """
       ] %}
         <a href="{{ href }}" class="{{ 'active' if active == key }}">{{ label }}</a>
       {% endfor %}
+      {% if current_user.role == 'admin' %}
+      <span class="nav-sep" aria-hidden="true"></span>
+      <span class="nav-group-label">{{ t.nav_admin_group }}</span>
+      {% for href, key, label in [
+        ('/admin/users', 'admin_users', t.nav_admin_users),
+        ('/admin/approvers', 'admin_approvers', t.nav_admin_approvers),
+        ('/admin/retention', 'admin_retention', t.nav_admin_retention),
+        ('/admin/permissions', 'admin_permissions', t.nav_admin_permissions),
+      ] %}
+        <a href="{{ href }}" class="{{ 'active' if active == key }}">{{ label }}</a>
+      {% endfor %}
+      {% endif %}
     </nav>
+    {% endif %}
     <div class="lang-switch" aria-label="{{ t.lang_label }}">
       <span class="lang-switch-label">{{ t.lang_label }}</span>
       {% for code, label in locale_choices %}
@@ -1827,6 +1876,15 @@ BASE_TEMPLATE = """
         </form>
       {% endfor %}
     </div>
+    {% if current_user %}
+    <div class="user-chip" data-current-user="{{ current_user.username }}">
+      <span>{{ current_user.username }} · {{ t['role_' ~ current_user.role] }}</span>
+      <form method="post" action="/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit">{{ t.auth_logout }}</button>
+      </form>
+    </div>
+    {% endif %}
   </header>
   <main>
     {{ body|safe }}
@@ -2822,6 +2880,7 @@ def render_page(title, active, body_template, **context):
         "t": t,
         "locale": locale,
         "csrf_token": context.get("csrf_token", csrf_token),
+        "current_user": g.get("user"),
     }
     body = render_template_string(
         body_template,
@@ -2839,7 +2898,161 @@ def render_page(title, active, body_template, **context):
         csrf_token=csrf_token,
         locale_choices=locale_choices,
         next_path=safe_next_path(request.path),
+        current_user=g.get("user"),
     )
+
+
+# ---------------------------------------------------------------------------
+# v0.20.0: local accounts (login required once any account exists)
+# ---------------------------------------------------------------------------
+
+AUTH_OPEN_ENDPOINTS = {"static", "login", "login_post", "set_locale", "setup_required"}
+
+
+def _wants_json():
+    return (
+        request.args.get("format") == "json"
+        or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        or "application/json" in (request.headers.get("Accept") or "").lower()
+    )
+
+
+@app.before_request
+def require_login():
+    g.user = None
+    _ = request.host  # trusted-host validation (400) runs before any redirect
+    endpoint = request.endpoint or ""
+    if not orch_auth.has_users():
+        if endpoint in {"static", "set_locale", "setup_required"}:
+            return None
+        if _wants_json():
+            t = ui_strings(_current_locale())
+            return jsonify({"ok": False, "error": t["auth_setup_needed"]}), 401
+        return redirect("/setup")
+    user = orch_auth.session_user(session)
+    if user:
+        g.user = user
+        if endpoint in {"login", "setup_required"}:
+            return redirect("/")
+        return None
+    if endpoint in AUTH_OPEN_ENDPOINTS:
+        return None
+    if _wants_json():
+        t = ui_strings(_current_locale())
+        return jsonify({"ok": False, "error": t["auth_login_required"]}), 401
+    next_path = safe_next_path(request.full_path.rstrip("?"))
+    return redirect("/login" + ("?next=" + quote(next_path) if next_path != "/" else ""))
+
+
+def current_role():
+    return (g.get("user") or {}).get("role")
+
+
+def require_role(*roles):
+    """403 unless the logged-in account has one of ``roles``."""
+    if current_role() not in roles:
+        abort(403)
+
+
+@app.errorhandler(403)
+def forbidden(_error):
+    t = ui_strings(_current_locale())
+    if _wants_json():
+        return jsonify({"ok": False, "error": t["auth_forbidden"]}), 403
+    body = (
+        '<div class="section"><div class="warning" role="alert">'
+        "{{ t.auth_forbidden }}</div>"
+        '<p><a href="/">{{ t.nav_dashboard }}</a></p></div>'
+    )
+    return render_page(t["auth_forbidden_title"], "", body), 403
+
+
+LOGIN_TEMPLATE = """
+  <div class="login-card section">
+    <h2>{{ t.auth_login_title }}</h2>
+    <p class="subtitle">{{ t.auth_login_intro }}</p>
+    {% if notice %}<div class="demo-flash demo-flash-ok" role="status">{{ t['auth_notice_' ~ notice] }}</div>{% endif %}
+    {% if error %}<div class="warning" role="alert" data-login-error="{{ error }}">{{ t['auth_err_login_' ~ error] }}</div>{% endif %}
+    <form method="post" action="/login" class="demo-form login-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="next" value="{{ next_path_value }}">
+      <label class="demo-field"><span>{{ t.auth_username }}</span>
+        <input type="text" name="username" required maxlength="40" autocomplete="username" value="{{ username }}"></label>
+      <label class="demo-field"><span>{{ t.auth_password }}</span>
+        <input type="password" name="password" required maxlength="128" autocomplete="current-password"></label>
+      <button type="submit">{{ t.auth_login_button }}</button>
+    </form>
+    <p class="composer-help">{{ t.auth_login_help }}</p>
+  </div>
+"""
+
+
+def _render_login(error=None, username="", status=200):
+    t = ui_strings(get_locale())
+    notice = session.pop("auth_notice", None)
+    next_value = safe_next_path(
+        request.form.get("next") if request.method == "POST" else request.args.get("next", "/")
+    )
+    return render_page(
+        t["auth_login_title"], "login", LOGIN_TEMPLATE,
+        error=error, username=username, notice=notice,
+        next_path_value=next_value,
+    ), status
+
+
+@app.get("/login")
+def login():
+    return _render_login()
+
+
+@app.post("/login")
+def login_post():
+    csrf_token = get_csrf_token()
+    submitted = request.form.get("csrf_token", "")
+    if (
+        not submitted
+        or len(submitted) != len(csrf_token)
+        or not secrets.compare_digest(csrf_token, submitted)
+    ):
+        abort(400)
+    username = (request.form.get("username") or "").strip()[:40]
+    password = request.form.get("password") or ""
+    user, reason = orch_auth.authenticate(username, password)
+    if not user:
+        return _render_login(reason, username, 401)
+    next_path = safe_next_path(request.form.get("next", "/"))
+    orch_auth.start_session(session, user)
+    return redirect(next_path)
+
+
+@app.post("/logout")
+def logout():
+    csrf_token = get_csrf_token()
+    submitted = request.form.get("csrf_token", "")
+    if (
+        not submitted
+        or len(submitted) != len(csrf_token)
+        or not secrets.compare_digest(csrf_token, submitted)
+    ):
+        abort(400)
+    if g.get("user"):
+        orch_auth.audit("logout", g.user["username"])
+    orch_auth.end_session(session, "logged_out")
+    return redirect("/login")
+
+
+@app.get("/setup")
+def setup_required():
+    t = ui_strings(get_locale())
+    body = """
+  <div class="login-card section" data-setup-required>
+    <h2>{{ t.auth_setup_title }}</h2>
+    <p>{{ t.auth_setup_intro }}</p>
+    <pre class="draft-body">.venv/bin/python orch_auth.py create-admin</pre>
+    <p class="composer-help">{{ t.auth_setup_help }}</p>
+  </div>
+"""
+    return render_page(t["auth_setup_title"], "setup", body), 503
 
 
 @app.post("/locale")
@@ -2874,9 +3087,16 @@ def dashboard():
     counts = Counter(view["status"] for view in views)
 
     t = ui_strings(get_locale())
+    overdue = commerce_demo.overdue_drafts()
     dashboard_template = """
       <h2>{{ t.title_dashboard }}</h2>
       <p class="subtitle">{{ t.dash_subtitle }}</p>
+      {% if overdue %}
+        <div class="warning escalation" role="alert" data-escalation>
+          {{ t.gov_overdue_banner.format(n=overdue|length) }}
+          <a href="/inbox">{{ t.nav_inbox }}</a>
+        </div>
+      {% endif %}
 
       <div class="grid">
         <a class="card card-link" href="/tasks">
@@ -2939,6 +3159,7 @@ def dashboard():
         views=views,
         counts=counts,
         events=load_events(20),
+        overdue=overdue,
     )
 
 
@@ -3891,6 +4112,15 @@ commerce_ui.register(
     get_locale=get_locale,
     ui_strings=ui_strings,
     format_short_time=format_short_time,
+)
+
+# v0.20.0: admin pages (users, module approvers, retention, 權限清單).
+admin_ui.register(
+    app,
+    render_page=render_page,
+    get_csrf_token=get_csrf_token,
+    get_locale=get_locale,
+    ui_strings=ui_strings,
 )
 
 
