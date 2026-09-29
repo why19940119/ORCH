@@ -100,14 +100,14 @@ class LoginTests(unittest.TestCase):
     def test_lockout_and_time_based_unlock(self):
         with patch.dict(os.environ, {"ORCH_LOGIN_MAX_FAILURES": "3",
                                      "ORCH_LOGIN_LOCKOUT_MINUTES": "10"}):
-            for _ in range(2):
+            # Review fix: the page shows one generic message, locked or not.
+            for _ in range(3):
                 self.assertIn('data-login-error="invalid"',
                               self.login("Eve Editor", "bad-password-1").get_data(as_text=True))
-            self.assertIn('data-login-error="locked"',
-                          self.login("Eve Editor", "bad-password-1").get_data(as_text=True))
-            # Even the right password is refused while locked.
-            self.assertIn('data-login-error="locked"',
-                          self.login("Eve Editor", TEST_PASSWORD).get_data(as_text=True))
+            locked = self.login("Eve Editor", TEST_PASSWORD).get_data(as_text=True)
+            self.assertIn('data-login-error="invalid"', locked)   # right password, still refused
+            self.assertEqual(self.client.get("/tasks").status_code, 302)
+            self.assertEqual(orch_auth.authenticate("Eve Editor", TEST_PASSWORD)[1], "locked")
             later = datetime.now(timezone.utc) + timedelta(minutes=11)
             user, reason = orch_auth.authenticate("Eve Editor", TEST_PASSWORD, now=later)
             self.assertEqual(reason, "ok")
@@ -357,7 +357,12 @@ class AdminChangeTests(unittest.TestCase):
         orch_auth.request_change("Ann Admin", "create_user", "Bob Admin", role="admin",
                                  password="Second-Admin-77")
         pending = orch_auth.request_change("Bob Admin", "disable", "Ann Admin")
-        orch_auth.decide_change("Ann Admin", pending["id"], "rejected")
+        # Review fix: the target of a change cannot decide it.
+        with self.assertRaises(orch_auth.AuthError) as caught:
+            orch_auth.decide_change("Ann Admin", pending["id"], "approved")
+        self.assertEqual(caught.exception.code, "not_on_self")
+        with self.assertRaises(orch_auth.AuthError):
+            orch_auth.decide_change("Ann Admin", pending["id"], "rejected")
         with self.assertRaises(orch_auth.AuthError) as caught:
             orch_auth.request_change("Bob Admin", "change_role", "Bob Admin", role="editor")
         self.assertEqual(caught.exception.code, "not_on_self")
@@ -532,8 +537,7 @@ class I18nTests(unittest.TestCase):
             used |= {f"role_{role}", f"role_{role}_desc"}
         for kind in orch_auth.CHANGE_KINDS:
             used.add(f"adm_kind_{kind}")
-        for code in ("invalid", "locked", "disabled"):
-            used.add(f"auth_err_login_{code}")
+        used.add("auth_err_login_invalid")        # one generic login failure
         for code in ("expired", "revoked", "logged_out"):
             used.add(f"auth_notice_{code}")
         for block in ("role", "self", "not_assigned"):

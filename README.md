@@ -834,9 +834,37 @@ account changes    creating users, role changes, disable / enable and password
                    marked "single-admin exception" in the governance log.
                    The last active admin cannot be disabled or demoted; admins
                    cannot change their own account.
-sessions           idle timeout; any change to an account signs it out
-lockout            too many wrong passwords lock the account for a while
+sessions           idle timeout (ORCH_SESSION_IDLE_MINUTES) and an absolute
+                   limit (ORCH_SESSION_MAX_HOURS, default 12); signing out
+                   or any change to an account ends that account's sessions
+                   in every browser (a copied cookie stops working)
+lockout            too many failed sign-ins lock the account for a while;
+                   unknown usernames are counted and locked the same way,
+                   the page shows one generic "sign-in failed" message and a
+                   password hash is checked on every path (no username
+                   enumeration). Admins can unlock in /admin/users (audited)
 ```
+
+First-run rule for the single-admin exception: it applies only until two
+active admins exist for the first time. After that it never comes back
+on its own, even if only one admin is left: changes wait for a second
+admin. To re-open it on purpose (for example the other admin left), run
+`.venv/bin/python orch_auth.py allow-single-admin` on this machine; it
+is audited with the OS user and closes again when a second admin exists.
+The account a change targets can never decide it, so with exactly two
+admins, removing one needs a third admin (or the CLI recovery above).
+
+Authors can neither approve nor reject their own draft. The governance
+audit section on /audit is shown to admins only; failed sign-ins for
+unknown usernames store only a short hash of the typed name. The
+權限清單 CSV neutralises cells starting with = + - @ tab or CR (leading
+apostrophe) and shows times in HKT with an explicit +08:00 offset
+(`ORCH_DISPLAY_TZ` to change).
+
+Shell access to this machine is trusted: `orch_auth.py` CLI commands
+(create-admin, unlock, reset-password, purge, allow-single-admin) and
+`mini_orch.py approve` are not behind the web login. They record the OS
+user (`getpass.getuser()`) in the audit trail.
 
 ### Retention and purge
 
@@ -871,6 +899,7 @@ state/.auth.lock         file lock
 .venv/bin/python orch_auth.py unlock NAME       # clear a lockout
 .venv/bin/python orch_auth.py reset-password NAME   # break-glass reset (logged)
 .venv/bin/python orch_auth.py purge             # run the retention purge
+.venv/bin/python orch_auth.py allow-single-admin    # re-open the single-admin exception (audited)
 ```
 
 `python3 mini_orch.py approve` still works for normal (non-demo) tasks.
@@ -883,6 +912,8 @@ before.
 ORCH_UI_SECRET_KEY          session signing key (set a fixed value so
                             sessions survive restarts)
 ORCH_SESSION_IDLE_MINUTES   idle sign-out, default 30
+ORCH_SESSION_MAX_HOURS      absolute session lifetime, default 12
+ORCH_DISPLAY_TZ             time zone for exported times, default Asia/Hong_Kong
 ORCH_LOGIN_MAX_FAILURES     wrong passwords before lockout, default 5
 ORCH_LOGIN_LOCKOUT_MINUTES  lockout length, default 15
 SESSION_COOKIE_SECURE       1 = cookie only over HTTPS (set behind HTTPS)

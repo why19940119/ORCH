@@ -3055,7 +3055,9 @@ def login_post():
     password = request.form.get("password") or ""
     user, reason = orch_auth.authenticate(username, password)
     if not user:
-        return _render_login(reason, username, 401)
+        # Review fix: one generic message for unknown / wrong / locked /
+        # disabled, so the page does not reveal which usernames exist.
+        return _render_login("invalid", username, 401)
     next_path = safe_next_path(request.form.get("next", "/"))
     orch_auth.start_session(session, user)
     return redirect(next_path)
@@ -3072,6 +3074,8 @@ def logout():
     ):
         abort(400)
     if g.get("user"):
+        # Review fix: bump the session epoch so a copied cookie is dead too.
+        orch_auth.revoke_sessions(g.user["username"])
         orch_auth.audit("logout", g.user["username"])
     orch_auth.end_session(session, "logged_out")
     return redirect("/login")

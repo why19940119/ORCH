@@ -19,12 +19,17 @@ CLI (passwords are read with getpass, never from arguments or logs):
     python orch_auth.py unlock NAME
     python orch_auth.py reset-password NAME              break-glass, audited
     python orch_auth.py purge                            apply retention now
+    python orch_auth.py allow-single-admin               re-open the single-admin
+                                                         exception (audited)
+CLI events record the OS user (getpass.getuser()); shell access to this
+machine is trusted.
 """
 
 from __future__ import annotations
 
 import csv
 import getpass
+import hashlib
 import io
 import json
 import os
@@ -100,6 +105,34 @@ def lockout_seconds():
     return _env_int("ORCH_LOGIN_LOCKOUT_MINUTES", 15) * 60
 
 
+def max_session_seconds():
+    """Absolute session lifetime (review fix): re-login after N hours."""
+    return _env_int("ORCH_SESSION_MAX_HOURS", 12) * 3600
+
+
+def os_user():
+    """OS account running a CLI command (recorded on CLI audit events)."""
+    try:
+        return getpass.getuser()
+    except Exception:
+        return "unknown"
+
+
+def display_time(value):
+    """ISO UTC -> local display time with an explicit offset (default HKT)."""
+    parsed = _parse(value)
+    if not parsed:
+        return ""
+    try:
+        from zoneinfo import ZoneInfo
+        zone = ZoneInfo(os.getenv("ORCH_DISPLAY_TZ", "").strip() or "Asia/Hong_Kong")
+    except Exception:
+        zone = timezone(timedelta(hours=8))
+    local = parsed.astimezone(zone)
+    offset = local.strftime("%z")
+    return local.strftime("%Y-%m-%d %H:%M:%S ") + offset[:3] + ":" + offset[3:]
+
+
 def _now():
     return datetime.now(timezone.utc)
 
@@ -141,7 +174,27 @@ def _empty_store():
         "module_approvers": {},
         "pending_changes": [],
         "settings": dict(DEFAULT_SETTINGS),
+        # Review fix: the single-admin exception is first-run only.
+        "bootstrap": {"complete": False},
+        # Failed sign-ins for unknown usernames (keyed by a hash only).
+        "unknown_logins": {},
     }
+
+
+def _migrate_bootstrap(data, store):
+    """Stores from before the bootstrap flag: bootstrap is complete when a
+    second admin has ever existed or any change was approved by a second
+    admin."""
+    if isinstance(data, dict) and isinstance(data.get("bootstrap"), dict):
+        return
+    admins = [u for u in store["users"].values() if u.get("role") == "admin"]
+    second_admin_decided = any(
+        change.get("status") == "applied" and not change.get("bootstrap_exception")
+        for change in store.get("pending_changes") or []
+    )
+    if len(admins) >= 2 or second_admin_decided:
+        store["bootstrap"] = {"complete": True, "completed_at_utc": _iso(_now()),
+                              "reason": "migrated"}
 
 
 def load_store():
@@ -156,6 +209,9 @@ def load_store():
     if isinstance(data, dict):
         store.update(data)
     store["settings"] = {**DEFAULT_SETTINGS, **(store.get("settings") or {})}
+    if not isinstance(store.get("unknown_logins"), dict):
+        store["unknown_logins"] = {}
+    _migrate_bootstrap(data, store)
     return store
 
 
@@ -295,7 +351,7 @@ def _new_user(username, role, password_hash, created_by):
     }
 
 
-def bootstrap_admin(username, password, actor="cli"):
+def bootstrap_admin(username, password, actor="cli", os_account=None):
     """First-run admin. Refused as soon as any account exists."""
     username = validate_username(username)
     password_hash = hash_password(password)
@@ -305,7 +361,8 @@ def bootstrap_admin(username, password, actor="cli"):
             raise AuthError("already_bootstrapped")
         store["users"][_key(username)] = _new_user(username, "admin", password_hash, actor)
         _save_store(store)
-    audit("bootstrap_admin", actor, target=username, role="admin")
+    audit("bootstrap_admin", actor, target=username, role="admin",
+          **({"os_user": os_account} if os_account else {}))
     return username
 
 
@@ -313,25 +370,68 @@ def bootstrap_admin(username, password, actor="cli"):
 _DUMMY_HASH = generate_password_hash(secrets.token_urlsafe(16))
 
 
+UNKNOWN_LOGIN_CAP = 1000
+
+
+def typed_username_ref(username):
+    """What the audit keeps of a typed, unknown username: a short hash."""
+    typed = str(username or "").strip()
+    return hashlib.sha256(_key(typed).encode("utf-8")).hexdigest()[:16]
+
+
+def _unknown_login_failure(store, username, now):
+    ref = typed_username_ref(username)
+    bucket = store["unknown_logins"]
+    entry = dict(bucket.get(ref) or {"failed": 0, "locked_until_utc": None})
+    locked_until = _parse(entry.get("locked_until_utc"))
+    if locked_until and locked_until > now:
+        reason = "locked"
+    else:
+        if locked_until:
+            entry = {"failed": 0, "locked_until_utc": None}
+        entry["failed"] = int(entry.get("failed") or 0) + 1
+        reason = "invalid"
+        if entry["failed"] >= max_failed_logins():
+            entry["locked_until_utc"] = _iso(now + timedelta(seconds=lockout_seconds()))
+            reason = "locked"
+    entry["last_utc"] = _iso(now)
+    bucket[ref] = entry
+    if len(bucket) > UNKNOWN_LOGIN_CAP:
+        keep = sorted(bucket.items(), key=lambda kv: kv[1].get("last_utc") or "")[-UNKNOWN_LOGIN_CAP:]
+        store["unknown_logins"] = dict(keep)
+    return ref, entry, reason
+
+
 def authenticate(username, password, now=None):
-    """Returns ``(user, reason)``; reason is ok|invalid|locked|disabled."""
+    """Returns ``(user, reason)``; reason is ok|invalid|locked|disabled.
+
+    The web UI shows ONE generic failure message for every non-ok reason.
+    A password hash is checked on every path (real, locked, disabled or
+    unknown user) so timing does not reveal which usernames exist, and
+    unknown usernames get the same failure counter and lockout.
+    """
     now = now or _now()
     key = _key(username)
+    password = str(password or "")
     with _Locked():
         store = load_store()
         user = store["users"].get(key)
         if user is None:
-            check_password_hash(_DUMMY_HASH, str(password or ""))
-            audit("login_failed", str(username or "")[:40], reason="unknown_user")
-            return None, "invalid"
+            check_password_hash(_DUMMY_HASH, password)
+            ref, entry, reason = _unknown_login_failure(store, username, now)
+            _save_store(store)
+            audit("login_failed", "(unknown)", reason="unknown_user",
+                  typed_username_sha256=ref, failed_logins=entry["failed"])
+            return None, reason
         locked_until = _parse(user.get("locked_until_utc"))
         if locked_until and locked_until > now:
+            check_password_hash(user["password_hash"], password)   # equal timing
             audit("login_refused_locked", user["username"])
             return None, "locked"
         if locked_until and locked_until <= now:
             user["locked_until_utc"] = None
             user["failed_logins"] = 0
-        if not check_password_hash(user["password_hash"], str(password or "")):
+        if not check_password_hash(user["password_hash"], password):
             user["failed_logins"] = int(user.get("failed_logins") or 0) + 1
             locked = user["failed_logins"] >= max_failed_logins()
             if locked:
@@ -399,13 +499,31 @@ def session_user(session, now_ts=None):
         return None
     seen = float(session.get("auth_seen") or 0)
     if now_ts - seen > idle_timeout_seconds():
-        audit("session_expired", user["username"])
+        audit("session_expired", user["username"], kind="idle")
+        end_session(session, "expired")
+        return None
+    login_at = float(session.get("auth_login_at") or 0)
+    if now_ts - login_at > max_session_seconds():
+        audit("session_expired", user["username"], kind="absolute")
         end_session(session, "expired")
         return None
     # Only refresh occasionally to keep the cookie stable.
     if now_ts - seen > 30:
         session["auth_seen"] = now_ts
     return public_user(user)
+
+
+def revoke_sessions(username):
+    """Review fix: logout bumps the user's session epoch, so a copied or
+    replayed cookie stops working (this signs out every browser of that
+    user)."""
+    with _Locked():
+        store = load_store()
+        user = store["users"].get(_key(username))
+        if not user:
+            return
+        user["session_epoch"] = int(user.get("session_epoch", 1)) + 1
+        _save_store(store)
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +602,40 @@ def _apply_change(store, change, approved_by):
     user["session_epoch"] = int(user.get("session_epoch", 1)) + 1
 
 
+def bootstrap_open(store=None):
+    """True while the single-admin exception may apply (first run, or
+    re-opened with ``orch_auth.py allow-single-admin``)."""
+    store = store or load_store()
+    return not (store.get("bootstrap") or {}).get("complete")
+
+
+def _maybe_complete_bootstrap(store):
+    """Rule: bootstrap is complete (for good) as soon as two active admins
+    exist. Returns True when it was closed just now."""
+    boot = store.setdefault("bootstrap", {"complete": False})
+    if not boot.get("complete") and len(active_admins(store)) >= 2:
+        boot.update(complete=True, completed_at_utc=_iso(_now()), reason="second_admin")
+        return True
+    return False
+
+
+def allow_single_admin(actor="cli", os_account=None):
+    """Explicit CLI step to re-open the single-admin exception (audited)."""
+    with _Locked():
+        store = load_store()
+        admins = active_admins(store)
+        if len(admins) != 1:
+            raise AuthError("single_admin_not_applicable")
+        store["bootstrap"] = {
+            "complete": False,
+            "reopened_at_utc": _iso(_now()),
+            "reopened_by_os_user": os_account,
+        }
+        _save_store(store)
+    audit("single_admin_reenabled", actor, os_user=os_account,
+          admin=admins[0]["username"])
+
+
 def _audit_params(params):
     return {key: value for key, value in (params or {}).items() if key != "password_hash"}
 
@@ -513,11 +665,14 @@ def request_change(actor, kind, target, role=None, password=None):
             "requested_at_utc": _iso(_now()),
             "status": "pending",
         }
-        single_admin = len(active_admins(store)) == 1
+        lone_admin = len(active_admins(store)) == 1
+        single_admin = lone_admin and bootstrap_open(store)
+        closed = False
         if single_admin:
             _apply_change(store, change, actor_user["username"])
             change.update(status="applied", decided_by=actor_user["username"],
                           decided_at_utc=_iso(_now()), bootstrap_exception=True)
+            closed = _maybe_complete_bootstrap(store)
         store["pending_changes"].append(change)
         store["pending_changes"] = store["pending_changes"][-500:]
         _save_store(store)
@@ -527,9 +682,15 @@ def request_change(actor, kind, target, role=None, password=None):
         audit("account_change_applied", actor_user["username"], change_id=change["id"],
               kind=kind, target=target, params=_audit_params(params),
               bootstrap_exception=True)
-    return {k: v for k, v in change.items() if k != "params"} | {
+    if closed:
+        audit("bootstrap_complete", actor_user["username"], reason="second_admin")
+    result = {k: v for k, v in change.items() if k != "params"} | {
         "params": _audit_params(params)
     }
+    # Only admin left but bootstrap is over: nobody can approve until a
+    # second admin exists or `orch_auth.py allow-single-admin` is run.
+    result["awaiting_second_admin"] = lone_admin and not single_admin
+    return result
 
 
 def decide_change(actor, change_id, decision):
@@ -545,6 +706,9 @@ def decide_change(actor, change_id, decision):
             raise AuthError("unknown_change")
         if _key(change["requested_by"]) == _key(actor_user["username"]):
             raise AuthError("second_admin_required")
+        # Review fix: the account being changed cannot approve its own change.
+        if change["kind"] != "create_user" and _key(change["target"]) == _key(actor_user["username"]):
+            raise AuthError("not_on_self")
         if decision == "approved":
             requester = store["users"].get(_key(change["requested_by"]))
             if not requester or requester.get("disabled") or requester["role"] != "admin":
@@ -552,6 +716,7 @@ def decide_change(actor, change_id, decision):
             _validate_change(store, requester, change["kind"], change["target"],
                              change.get("params") or {})
             _apply_change(store, change, actor_user["username"])
+        closed = decision == "approved" and _maybe_complete_bootstrap(store)
         change.update(
             status="applied" if decision == "approved" else "rejected",
             decided_by=actor_user["username"],
@@ -564,6 +729,8 @@ def decide_change(actor, change_id, decision):
     audit("account_change_" + ("applied" if decision == "approved" else "rejected"),
           actor_user["username"], change_id=change_id, kind=change["kind"],
           target=change["target"], requested_by=change["requested_by"])
+    if closed:
+        audit("bootstrap_complete", actor_user["username"], reason="second_admin")
     return change
 
 
@@ -577,19 +744,30 @@ def pending_changes(store=None):
     ]
 
 
-def unlock_user(username, actor="cli"):
+def unlock_user(username, actor="cli", via="cli", os_account=None):
+    """Clear a lockout. CLI (records the OS user) or an admin in the web UI."""
     with _Locked():
         store = load_store()
+        if via == "web":
+            actor = _require_admin(store, actor)["username"]
         user = store["users"].get(_key(username))
         if not user:
             raise AuthError("unknown_user")
         user["failed_logins"] = 0
         user["locked_until_utc"] = None
         _save_store(store)
-    audit("account_unlocked", actor, target=user["username"])
+    details = {"via": via}
+    if via == "cli":
+        details["os_user"] = os_account or os_user()
+    audit("account_unlocked", actor, target=user["username"], **details)
 
 
-def break_glass_reset(username, password, actor="cli"):
+def is_locked(user, now=None):
+    until = _parse((user or {}).get("locked_until_utc"))
+    return bool(until and until > (now or _now()))
+
+
+def break_glass_reset(username, password, actor="cli", os_account=None):
     """Local CLI recovery (e.g. the only admin forgot the password)."""
     password_hash = hash_password(password)
     with _Locked():
@@ -602,7 +780,8 @@ def break_glass_reset(username, password, actor="cli"):
         user["locked_until_utc"] = None
         user["session_epoch"] = int(user.get("session_epoch", 1)) + 1
         _save_store(store)
-    audit("password_reset_break_glass", actor, target=user["username"])
+    audit("password_reset_break_glass", actor, target=user["username"],
+          os_user=os_account or os_user())
 
 
 # ---------------------------------------------------------------------------
@@ -697,7 +876,7 @@ def update_settings(actor, **values):
     return store["settings"]
 
 
-def purge(actor, now=None):
+def purge(actor, now=None, os_account=None):
     """Delete decided drafts and chat uploads older than the retention.
 
     Audit records (ecom_audit artifacts, events.jsonl, auth_audit.jsonl)
@@ -728,6 +907,7 @@ def purge(actor, now=None):
         draft_artifacts_removed=drafts["artifacts"],
         upload_batches_removed=uploads_count,
         audit_kept=True,
+        **({"os_user": os_account or os_user()} if actor == "cli" else {}),
     )
     return record
 
@@ -748,10 +928,28 @@ def permission_rows(store=None):
     return rows
 
 
+CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_safe(value):
+    """Neutralise spreadsheet formulas: cells starting with = + - @ tab or
+    CR get a leading apostrophe (OWASP CSV injection guidance)."""
+    text = "" if value is None else str(value)
+    return "'" + text if text.startswith(CSV_FORMULA_PREFIXES) else text
+
+
+class _SafeWriter:
+    def __init__(self, stream):
+        self._writer = csv.writer(stream)
+
+    def writerow(self, row):
+        self._writer.writerow([csv_safe(cell) for cell in row])
+
+
 def permissions_csv(t, store=None):
     store = store or load_store()
     out = io.StringIO()
-    writer = csv.writer(out)
+    writer = _SafeWriter(out)
     writer.writerow([
         t["perm_col_user"], t["perm_col_role"], t["perm_col_status"],
         t["perm_col_modules"], t["perm_col_created"], t["perm_col_last_login"],
@@ -762,8 +960,8 @@ def permissions_csv(t, store=None):
             t[f"role_{row['role']}"],
             t["perm_status_disabled"] if row["disabled"] else t["perm_status_active"],
             " / ".join(t.get(f"mod_{m}_title", m) for m in row["approve_modules"]) or "—",
-            row.get("created_at_utc") or "",
-            row.get("last_login_utc") or "",
+            display_time(row.get("created_at_utc")),
+            display_time(row.get("last_login_utc")),
         ])
     writer.writerow([])
     writer.writerow([t["perm_col_module"], t["perm_col_assigned"]])
@@ -795,6 +993,7 @@ CLI_MESSAGES = {
     "weak_password": f"Password must be {MIN_PASSWORD_CHARS}-{MAX_PASSWORD_CHARS} characters with some variety and no leading/trailing spaces.",
     "password_mismatch": "The passwords do not match.",
     "unknown_user": "No such user.",
+    "single_admin_not_applicable": "allow-single-admin only applies when exactly one active admin exists.",
 }
 
 
@@ -813,7 +1012,7 @@ def main(argv=None):
                 username = input("Admin username: ").strip()
             validate_username(username)
             password = _read_new_password()
-            name = bootstrap_admin(username, password)
+            name = bootstrap_admin(username, password, os_account=os_user())
             print(f"Admin '{name}' created. Start the console and sign in at /login.")
             return 0
         if command in {"status", "list-users"}:
@@ -832,17 +1031,22 @@ def main(argv=None):
             print(f"Pending account changes: {len(pending)}")
             return 0
         if command == "unlock" and len(argv) == 2:
-            unlock_user(argv[1])
+            unlock_user(argv[1], actor="cli", via="cli", os_account=os_user())
             print(f"Unlocked {argv[1]}.")
             return 0
         if command == "reset-password" and len(argv) == 2:
             if not get_user(argv[1]):
                 raise AuthError("unknown_user")
-            break_glass_reset(argv[1], _read_new_password())
+            break_glass_reset(argv[1], _read_new_password(), os_account=os_user())
             print(f"Password reset for {argv[1]} (audited as break-glass).")
             return 0
+        if command == "allow-single-admin":
+            allow_single_admin("cli", os_account=os_user())
+            print("Single-admin exception re-opened (audited). Account changes by the "
+                  "only admin apply at once until a second admin exists.")
+            return 0
         if command == "purge":
-            record = purge("cli")
+            record = purge("cli", os_account=os_user())
             print(
                 f"Purged {record['drafts_removed']} decided draft(s), "
                 f"{record['upload_batches_removed']} upload batch(es). Audit kept."

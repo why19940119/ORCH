@@ -68,6 +68,7 @@ class OrchUiTests(unittest.TestCase):
                 "/admin/retention",
                 "/admin/retention/purge",
                 "/admin/users/request",
+                "/admin/users/unlock",
                 "/chat",
                 "/demo/draft",
                 # v0.19.0: CSV import page (CSRF on each; no model calls).

@@ -84,7 +84,8 @@ def _run(action, success_code, back):
 
 USERS_BODY = """
   <p class="subtitle">{{ t.adm_users_intro }}</p>
-  {% if single_admin %}<div class="warning" data-single-admin>{{ t.adm_single_admin_note }}</div>{% endif %}
+  {% if single_admin and bootstrap_open %}<div class="warning" data-single-admin>{{ t.adm_single_admin_note }}</div>
+  {% elif single_admin %}<div class="warning" data-single-admin-closed>{{ t.adm_single_admin_closed_note }}</div>{% endif %}
 
   <div class="section">
     <h3>{{ t.adm_pending_title }}</h3>
@@ -126,7 +127,7 @@ USERS_BODY = """
         <tr>
           <td>{{ u.username }}</td>
           <td>{{ t['role_' ~ u.role] }}</td>
-          <td>{% if u.disabled %}{{ t.perm_status_disabled }}{% elif u.locked_until_utc %}{{ t.adm_status_locked }}{% else %}{{ t.perm_status_active }}{% endif %}</td>
+          <td>{% if u.disabled %}{{ t.perm_status_disabled }}{% elif now_locked(u) %}{{ t.adm_status_locked }}{% else %}{{ t.perm_status_active }}{% endif %}</td>
           <td>{{ u.last_login_utc|local_time if u.last_login_utc else '—' }}</td>
           <td>
             {% if u.username|lower != current_user.username|lower %}
@@ -151,6 +152,13 @@ USERS_BODY = """
               <input type="password" name="password" minlength="10" maxlength="128" required placeholder="{{ t.adm_new_password }}" autocomplete="new-password">
               <button type="submit">{{ t.adm_kind_reset_password }}</button>
             </form>
+            {% if now_locked(u) or u.failed_logins %}
+            <form method="post" action="/admin/users/unlock" class="demo-form" data-unlock-form>
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="target" value="{{ u.username }}">
+              <button type="submit">{{ t.adm_unlock }}</button>
+            </form>
+            {% endif %}
           </td>
         </tr>
       {% endfor %}
@@ -203,6 +211,7 @@ def users():
         "adm_users_heading", "admin_users", USERS_BODY,
         users=orch_auth.list_users(store), changes=orch_auth.pending_changes(store),
         roles=orch_auth.ROLES, single_admin=len(orch_auth.active_admins(store)) == 1,
+        bootstrap_open=orch_auth.bootstrap_open(store), now_locked=orch_auth.is_locked,
     )
 
 
@@ -217,7 +226,21 @@ def request_change():
             role=request.form.get("role") if kind in {"create_user", "change_role"} else None,
             password=request.form.get("password") if kind in {"create_user", "reset_password"} else None,
         ),
-        lambda change: "change_applied" if change["status"] == "applied" else "change_requested",
+        lambda change: ("change_applied" if change["status"] == "applied"
+                        else "awaiting_second_admin" if change.get("awaiting_second_admin")
+                        else "change_requested"),
+        "/admin/users",
+    )
+
+
+@bp.post("/admin/users/unlock")
+def unlock_user():
+    """Review fix: admins clear a lockout from the web UI (audited, CSRF)."""
+    actor = _admin()
+    _csrf()
+    return _run(
+        lambda: orch_auth.unlock_user(request.form.get("target", ""), actor=actor, via="web"),
+        "unlocked",
         "/admin/users",
     )
 
@@ -399,7 +422,7 @@ def permissions_csv():
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
     return Response(
         content.encode("utf-8"),
-        mimetype="text/csv; charset=utf-8",
+        content_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="orch-permissions-{stamp}.csv"',
                  "Cache-Control": "no-store"},
     )

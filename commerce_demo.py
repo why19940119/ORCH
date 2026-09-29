@@ -1892,11 +1892,11 @@ def decide(task_id, decision, operator, expected_version, channel=None, note="")
         if orch_auth.has_users():
             _require(orch_auth.user_role(operator) == "approver", "forbidden_role")
             _require(orch_auth.can_approve(operator, module), "not_assigned")
-        if decision == "approved":
-            _require(
-                not any(_same_person(operator, a) for a in draft_authors(task, state)),
-                "self_approval",
-            )
+        # Review fix: authors can neither approve nor reject their own draft.
+        _require(
+            not any(_same_person(operator, a) for a in draft_authors(task, state)),
+            "self_approval" if decision == "approved" else "self_rejection",
+        )
 
         if decision == "approved":
             _require(channel in DRAFT_KINDS[kind]["channels"],

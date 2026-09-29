@@ -607,6 +607,7 @@ def decide_approval(
     extra_state=None,
     strict=True,
     requested_by=None,
+    os_user=None,
 ):
     """Record a human approval decision through the standard gate.
 
@@ -624,13 +625,14 @@ def decide_approval(
 
     # v0.20.0: nobody approves their own work. ``requested_by`` is a name
     # or list of names (draft requester + every version author).
-    if decision == "approved" and requested_by:
+    if requested_by:
         authors = [requested_by] if isinstance(requested_by, str) else list(requested_by)
         if any(
             str(author or "").strip().casefold() == decided_by.casefold()
             for author in authors
         ):
-            return {"ok": False, "reason": "self_approval"}
+            return {"ok": False, "reason": "self_approval" if decision == "approved"
+                    else "self_rejection"}
 
     queue_path = Path(queue_file) if queue_file is not None else QUEUE_FILE
     status_path = (
@@ -687,6 +689,9 @@ def decide_approval(
 
     if extra_state:
         task_state.update(extra_state)
+    if os_user:
+        # v0.20.0: CLI decisions record the OS account (shell access is trusted).
+        task_state["decided_os_user"] = os_user
 
     task_state["updated_at"] = timestamp
     statuses[task_id] = task_state
@@ -698,7 +703,7 @@ def decide_approval(
         task,
         message,
         events_file=events_file,
-        extra={"operator": decided_by},
+        extra={"operator": decided_by, **({"os_user": os_user} if os_user else {})},
     )
 
     return {
@@ -709,6 +714,14 @@ def decide_approval(
         "decided_at": timestamp,
         "state": task_state,
     }
+
+
+def _os_user():
+    try:
+        import getpass
+        return getpass.getuser()
+    except Exception:
+        return "unknown"
 
 
 def approve_task(task_id):
@@ -728,6 +741,7 @@ def approve_task(task_id):
             "approved",
             "local_terminal_user",
             strict=False,
+            os_user=_os_user(),
         )
 
     if result["ok"]:

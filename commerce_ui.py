@@ -1044,6 +1044,7 @@ def audit_log():
       <div class="empty">{{ t.demo_audit_empty }}</div>
     {% endif %}
   </div>
+  {% if current_user and current_user.role == "admin" %}
   <div class="section" data-governance-audit>
     <h3>{{ t.gov_audit_title }} ({{ gov|length }})</h3>
     <p class="composer-help">{{ t.gov_audit_note }}</p>
@@ -1059,6 +1060,7 @@ def audit_log():
       <div class="empty">{{ t.demo_audit_empty }}</div>
     {% endif %}
   </div>
+  {% endif %}
   <div class="section">
     <h3>{{ t.demo_audit_events }}</h3>
     {% if events %}
@@ -1079,7 +1081,7 @@ def audit_log():
         "mod_audit_log_title", "audit", body,
         records=commerce_demo.audit_records(),
         events=commerce_demo.demo_events(),
-        gov=orch_auth.read_audit(200),
+        gov=orch_auth.read_audit(200) if (g.get("user") or {}).get("role") == "admin" else [],
         **_module_context("audit_log"),
     )
 
