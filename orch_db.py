@@ -36,6 +36,7 @@ import shutil
 import sqlite3
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -145,10 +146,31 @@ def _connect(db_file):
     conn = sqlite3.connect(str(db_file), timeout=BUSY_TIMEOUT_MS / 1000,
                            isolation_level=None)
     conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
-    conn.execute("PRAGMA journal_mode=WAL")
+    _enable_wal(conn)
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
+
+
+def _enable_wal(conn):
+    """WAL is persistent, so this only switches once (on a new DB). The
+    switch needs an exclusive lock and SQLite does not run the busy handler
+    for it, so two processes creating the DB at once retry here."""
+    deadline = time.monotonic() + BUSY_TIMEOUT_MS / 1000
+    delay = 0.005
+    while True:
+        try:
+            if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal":
+                return
+            conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc) and "busy" not in str(exc):
+                raise
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 0.2)
 
 
 def _ensure_schema(conn):

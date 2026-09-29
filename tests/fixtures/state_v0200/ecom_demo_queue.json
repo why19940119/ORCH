@@ -1,0 +1,38 @@
+[
+  {
+    "id": "task_ecom_content_ab12cd34ef",
+    "title": "Product page: SAMPLE-001",
+    "command": [
+      "python3",
+      "worker_ecom_publish_record.py",
+      "task_ecom_content_ab12cd34ef"
+    ],
+    "priority": 50,
+    "depends_on": [],
+    "max_retries": 0,
+    "requires_approval": true,
+    "ecom_draft": {
+      "kind": "content",
+      "module": "content",
+      "draft_id": "ab12cd34ef",
+      "created_by": "Amy Chan"
+    }
+  },
+  {
+    "id": "task_ecom_faq_0011223344",
+    "title": "FAQ",
+    "command": [
+      "true"
+    ],
+    "priority": 50,
+    "depends_on": [],
+    "max_retries": 0,
+    "requires_approval": true,
+    "ecom_draft": {
+      "kind": "faq",
+      "module": "knowledge",
+      "draft_id": "0011223344",
+      "created_by": "Amy Chan"
+    }
+  }
+]
