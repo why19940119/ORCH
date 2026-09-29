@@ -23,3 +23,6 @@ state/chat_usage.jsonl
 
 # v0.17.0 chat uploads (contained locally)
 uploads/
+
+# v0.18.0 e-commerce demo file lock
+state/.ecom_demo.lock
