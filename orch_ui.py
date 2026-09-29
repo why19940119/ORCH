@@ -1559,6 +1559,9 @@ BASE_TEMPLATE = """
     .user-chip button { font-size: 12px; padding: 4px 10px; }
 
     .login-card { margin: 40px auto; max-width: 440px; }
+    .login-form { display: flex; flex-direction: column; align-items: stretch; gap: 12px; }
+    .login-form .demo-field { min-width: 0; width: 100%; }
+    .login-form button { align-self: flex-start; }
     .login-form { flex-direction: column; align-items: stretch; }
 
     .escalation { border-color: rgba(255, 120, 120, .7); }
@@ -1659,7 +1662,9 @@ BASE_TEMPLATE = """
 
     .demo-field-wide { flex: 1 1 100%; }
 
-    .demo-field input[type="text"] {
+    .demo-field input[type="text"],
+    .demo-field input[type="password"],
+    .demo-field input[type="number"] {
       background: #120c1d;
       border: 1px solid var(--line);
       border-radius: 7px;
