@@ -569,7 +569,7 @@ class I18nTests(unittest.TestCase):
 
     def test_version(self):
         self.assertEqual(commerce_demo.DEMO_VERSION, "v0.20.1")
-        self.assertEqual(orch_auth.AUTH_VERSION, "v0.20.0")
+        self.assertEqual(orch_auth.AUTH_VERSION, "v0.20.1")
         self.assertIn("v0.20.0", (PROJECT_ROOT / "README.md").read_text(encoding="utf-8"))
 
 

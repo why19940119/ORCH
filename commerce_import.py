@@ -51,7 +51,7 @@ IMPORT_DIR = PROJECT_ROOT / "data" / "import"
 IMPORT_STATE_FILE = PROJECT_ROOT / "state" / "ecom_import.json"
 LOCK_FILE = PROJECT_ROOT / "state" / ".ecom_demo.lock"
 
-IMPORT_VERSION = "v0.19.1"
+IMPORT_VERSION = "v0.20.1"
 SCHEMA_VERSION = "1.0"
 
 SCHEMAS = {
@@ -782,21 +782,35 @@ def compute_metrics(state=None, today=None):
             pct = round(100.0 * delta / prev_value, 1) if prev_value else None
             return {"abs": delta, "pct": pct}
 
+        def _coverage(window, start, end):
+            # Review fix: how many days of the window the data covers
+            # (the order period runs from first_day to as_of_day).
+            covered = max(0, (min(end, as_of_day) - max(start, first_day)).days + 1)
+            window["covered_days"] = covered
+            window["fully_covered"] = covered == (end - start).days + 1
+            window["covered"] = covered > 0
+            return window
+
         for days_n in PERIOD_DAYS:
-            current = _window(as_of_day - timedelta(days=days_n - 1), as_of_day)
+            cur_start = as_of_day - timedelta(days=days_n - 1)
+            current = _coverage(_window(cur_start, as_of_day), cur_start, as_of_day)
             prev_end = as_of_day - timedelta(days=days_n)
             prev_start = prev_end - timedelta(days=days_n - 1)
-            previous = _window(prev_start, prev_end)
-            previous["fully_covered"] = first_day <= prev_start
+            previous = _coverage(_window(prev_start, prev_end), prev_start, prev_end)
+            # A change is only given when both windows are fully inside the
+            # data; otherwise it would compare against days with no data.
+            comparable = current["fully_covered"] and previous["fully_covered"]
             period_totals[str(days_n)] = {
                 "days": days_n,
+                "data_starts": first_day.isoformat(),
                 "current": current,
                 "previous": previous,
+                "comparable": comparable,
                 "change": {
                     "revenue": _change(current["revenue"], previous["revenue"], money=True),
                     "orders": _change(current["orders"], previous["orders"]),
                     "units": _change(current["units"], previous["units"]),
-                },
+                } if comparable else None,
             }
 
     ranked_days = sorted(revenue_by_day, key=lambda row: (-row["revenue"], row["date"]))

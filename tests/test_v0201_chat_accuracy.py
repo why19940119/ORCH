@@ -106,7 +106,9 @@ class PeriodTotalsPromptTests(ChatHarness):
         metrics = commerce_import.compute_metrics()
         p7, p30 = metrics["period_totals"]["7"], metrics["period_totals"]["30"]
         self.assertEqual(p7["current"], {"start": "2026-09-22", "end": "2026-09-28",
-                                         "revenue": 6090.0, "orders": 7, "units": 15})
+                                         "revenue": 6090.0, "orders": 7, "units": 15,
+                                         "covered_days": 7, "fully_covered": True,
+                                         "covered": True})
         self.assertEqual((p7["previous"]["revenue"], p7["previous"]["orders"], p7["previous"]["units"]),
                          (5600.0, 7, 14))
         self.assertEqual(p7["change"]["revenue"], {"abs": 490.0, "pct": 8.8})
@@ -264,7 +266,7 @@ class SanitizerTests(ChatHarness):
     def test_sanitize_reply_unit(self):
         text = sanitize_reply("根據 store_data 同 `ecom_import.json`，REFERENCE_DATA 顯示", "zh-Hant")
         self.assertEqual(text, "根據 數據 同 匯入數據，數據 顯示")
-        text = sanitize_reply("From imported_store_data (data_source) in data/sample_data.json.", "en")
+        text = sanitize_reply("From imported_store_data (data_source) in demo/sample_data.json.", "en")
         self.assertEqual(text, "From the imported data (the data) in the sample data.")
         self.assertEqual(sanitize_reply("据 data_source 显示", "zh-Hans"), "据 数据 显示")
         # Ordinary words that only contain the labels are left alone.
@@ -297,7 +299,7 @@ class SanitizerTests(ChatHarness):
 
     def test_general_mode_is_untouched(self):
         chat = {"answer": "Edit package.json", "limitations": []}
-        self.assertEqual(orch_chat.sanitize_chat_answer(chat, "en")["answer"], "Edit the data")
+        self.assertEqual(orch_chat.sanitize_chat_answer(chat, "en")["answer"], "Edit package.json")
         # ask_orch only applies the sanitizer in ORCH Context mode.
         source = (PROJECT_ROOT / "orch_chat.py").read_text(encoding="utf-8")
         self.assertIn('if mode == "orch_context" else validate_chat_answer(parsed_answer)', source)
@@ -393,18 +395,18 @@ class AccountChangeTests(unittest.TestCase):
             orch_auth.request_change("Ann Admin", "change_role", "Ed Editor", role="editor")
         self.assertEqual(caught.exception.code, "invalid_role")
 
-    def test_transient_last_admin_still_refused_not_closed(self):
+    def test_requester_no_longer_admin_is_auto_closed_on_approve(self):
         change = orch_auth.request_change("Ann Admin", "disable", "Bob Admin")
         store = orch_auth.load_store()
         store["users"][orch_auth._key("Ann Admin")]["disabled"] = True
         store["users"][orch_auth._key("Cy Admin")] = orch_auth._new_user(
             "Cy Admin", "admin", "x", "test")
         orch_auth._save_store(store)
-        # Requester no longer admin: refused as before, the request stays open.
-        with self.assertRaises(orch_auth.AuthError):
-            orch_auth.decide_change("Cy Admin", change["id"], "approved")
-        self.assertEqual({c["id"]: c for c in orch_auth.pending_changes()}[change["id"]]["status"],
-                         "pending")
+        # Review fix: it can never be approved, so it is closed (audited).
+        result = orch_auth.decide_change("Cy Admin", change["id"], "approved")
+        self.assertEqual((result["status"], result["auto_close_reason"]),
+                         ("auto_closed", "requester_not_admin"))
+        self.assertFalse(orch_auth.get_user("Bob Admin").get("disabled"))
 
     def test_i18n_keys(self):
         for code in SUPPORTED_LOCALES:
@@ -413,6 +415,176 @@ class AccountChangeTests(unittest.TestCase):
                         "gov_ev_account_change_auto_closed", "gov_msg_change_auto_closed",
                         "adm_status_auto_closed"):
                 self.assertIn(key, strings, (code, key))
+
+
+class ReviewFixSanitizerTests(unittest.TestCase):
+    """PR #6 review items 1 and 4: only known internal names are replaced,
+    in the UI locale; legitimate text is never garbled."""
+
+    def test_legitimate_text_is_untouched(self):
+        for text in ("Required artifact does not exist: output/policy_prerequisite.json",
+                     "https://example.com/feed.json",
+                     "Edit package.json",
+                     "Download https://example.com/demo/sample_data.json",
+                     "In summary: sales rose. The summary shows growth; the scope is small.",
+                     "restore_database storedata"):
+            for locale in ("en", "zh-Hant", "zh-Hans"):
+                self.assertEqual(sanitize_reply(text, locale), text, (text, locale))
+
+    def test_known_file_names_as_whole_tokens(self):
+        self.assertEqual(sanitize_reply("see state/ecom_import.json", "en"), "see the imported data")
+        self.assertEqual(sanitize_reply("see demo/sample_data.json", "en"), "see the sample data")
+        self.assertEqual(sanitize_reply("`ecom_import.json` and sample_data.json", "en"),
+                         "the imported data and the sample data")
+        self.assertEqual(sanitize_reply("my_ecom_import.json", "en"), "my_ecom_import.json")
+
+    def test_replacement_words_follow_ui_locale(self):
+        text = "According to store_data and ecom_import.json"
+        self.assertEqual(sanitize_reply(text, "en"), "According to the data and the imported data")
+        self.assertEqual(sanitize_reply(text, "zh-Hant"), "According to 數據 and 匯入數據")
+        self.assertEqual(sanitize_reply(text, "zh-Hans"), "According to 数据 and 导入数据")
+        # Chinese text in an English UI still gets English words (UI locale).
+        self.assertEqual(sanitize_reply("根據 store_data", "en"), "根據 the data")
+        self.assertEqual(sanitize_reply("store_data", None), "the data")
+
+    def test_internal_keys_dotted_backticked_and_snake_case(self):
+        self.assertEqual(sanitize_reply("From store_data.summary.", "en"), "From the data.")
+        self.assertEqual(sanitize_reply("REFERENCE_DATA.store_data.as_of_date is set", "en"),
+                         "the data is set")
+        self.assertEqual(sanitize_reply("see `summary` and `sales_ranking`", "en"),
+                         "see the data and the data")
+        self.assertEqual(sanitize_reply('"summary": [1]', "en"), "the data: [1]")
+        self.assertEqual(sanitize_reply("as_of_date: 2026-09-28", "en"), "the data: 2026-09-28")
+        for key in ("sales_ranking", "as_of_date", "matching_products",
+                    "won_order_leads_not_sales_ranking"):
+            self.assertEqual(sanitize_reply(f"{key} shows", "zh-Hant"), "數據 shows", key)
+        self.assertEqual(sanitize_reply("imported_store_data.summary", "en"), "the imported data")
+        # Plain prose words stay.
+        self.assertEqual(sanitize_reply("Summary: a good week", "en"), "Summary: a good week")
+
+
+class ReviewFixCoverageTests(ChatHarness):
+    """PR #6 review item 2: windows not fully covered by the data."""
+
+    def test_partial_current_and_uncovered_previous(self):
+        # 20 days of data: 30-day window only partly covered, previous 30
+        # days not covered at all -> no change figure (no +HK$x vs HK$0).
+        self.upload(orders="order_id,date,sku,quantity,amount_hkd\n"
+                           "O1,2026-09-01,TEA-01,1,88\nO2,2026-09-20,TEA-01,1,1986\n")
+        metrics = commerce_import.compute_metrics()
+        p30 = metrics["period_totals"]["30"]
+        self.assertEqual((p30["current"]["covered_days"], p30["current"]["fully_covered"]), (20, False))
+        self.assertEqual((p30["previous"]["covered"], p30["previous"]["covered_days"]), (False, 0))
+        self.assertIsNone(p30["change"])
+        p7 = metrics["period_totals"]["7"]
+        self.assertTrue(p7["current"]["fully_covered"])
+        self.assertTrue(p7["previous"]["fully_covered"])
+        self.assertIsNotNone(p7["change"])
+        summary = "\n".join(commerce_demo.chat_summary(metrics, "2026-09-20"))
+        self.assertIn("last_30_days (2026-08-22 to 2026-09-20, PARTIAL: data covers only 20 of 30 days "
+                      "(data starts 2026-09-01)): revenue HK$2,074.00", summary)
+        self.assertIn("previous_30_days (2026-07-23 to 2026-08-21): NOT COVERED by the data", summary)
+        self.assertIn("change_30_days vs previous: NOT AVAILABLE", summary)
+        self.assertNotIn("+HK$2,074.00", summary)
+        self.assertIn("change_7_days vs previous: revenue +HK$1,986.00", summary)
+
+    def test_partially_covered_previous_has_no_change(self):
+        self.upload(orders="order_id,date,sku,quantity,amount_hkd\n"
+                           "O1,2026-09-10,TEA-01,1,88\nO2,2026-09-20,TEA-01,1,100\n")
+        p7 = commerce_import.compute_metrics()["period_totals"]["7"]
+        self.assertEqual((p7["previous"]["covered_days"], p7["previous"]["fully_covered"]), (4, False))
+        self.assertIsNone(p7["change"])
+        summary = "\n".join(commerce_demo.chat_summary(commerce_import.compute_metrics(), "2026-09-20"))
+        self.assertIn("previous_7_days (2026-09-07 to 2026-09-13, PARTIAL: data covers only 4 of 7 days", summary)
+
+    def test_fully_covered_fixture_keeps_change(self):
+        self.upload(**fixture_csvs())
+        p30 = commerce_import.compute_metrics()["period_totals"]["30"]
+        self.assertTrue(p30["comparable"])
+        self.assertEqual(p30["change"]["revenue"], {"abs": 4000.0, "pct": 21.4})
+
+
+class ReviewFixAccountTests(unittest.TestCase):
+    """PR #6 review item 3: requests from an admin later disabled/demoted."""
+
+    def setUp(self):
+        use_temp_auth(self, users=(("Ann Admin", "admin"), ("Bob Admin", "admin"),
+                                   ("Cy Admin", "admin"), ("Ed Editor", "editor")))
+        store = orch_auth.load_store()
+        store["bootstrap"] = {"complete": True}
+        orch_auth._save_store(store)
+
+    def test_sweep_closes_requests_of_demoted_admin(self):
+        stuck = orch_auth.request_change("Ann Admin", "change_role", "Ed Editor", role="approver")
+        demote = orch_auth.request_change("Bob Admin", "change_role", "Ann Admin", role="editor")
+        orch_auth.decide_change("Cy Admin", demote["id"], "approved")
+        changes = {c["id"]: c for c in orch_auth.pending_changes()}
+        self.assertEqual((changes[stuck["id"]]["status"], changes[stuck["id"]]["auto_close_reason"]),
+                         ("auto_closed", "requester_not_admin"))
+        rows = [r for r in orch_auth.read_audit() if r["event"] == "account_change_auto_closed"]
+        self.assertEqual([(r["change_id"], r["reason"]) for r in rows],
+                         [(stuck["id"], "requester_not_admin")])
+        # And a fresh identical request is no longer blocked.
+        again = orch_auth.request_change("Bob Admin", "change_role", "Ed Editor", role="approver")
+        self.assertEqual(again["status"], "pending")
+
+    def test_duplicate_check_skips_requests_of_disabled_admin(self):
+        stuck = orch_auth.request_change("Ann Admin", "disable", "Ed Editor")
+        store = orch_auth.load_store()   # disabled by another route, no sweep
+        store["users"][orch_auth._key("Ann Admin")]["disabled"] = True
+        orch_auth._save_store(store)
+        fresh = orch_auth.request_change("Bob Admin", "disable", "Ed Editor")
+        self.assertEqual(fresh["status"], "pending")
+        orch_auth.decide_change("Cy Admin", fresh["id"], "approved")
+        changes = {c["id"]: c for c in orch_auth.pending_changes()}
+        self.assertEqual(changes[stuck["id"]]["status"], "auto_closed")
+
+
+class ReviewFixPromptAndUiTests(unittest.TestCase):
+    """PR #6 review items 5, 6 and 7."""
+
+    def test_cantonese_register_and_revenue_term(self):
+        system = build_system_prompt("orch_context", "zh-Hant")
+        self.assertIn("consistently colloquial Cantonese from start to finish", system)
+        self.assertIn("do not mix in written-Chinese", system)
+        for text in (system, ORCH_CONTEXT_SYSTEM_PROMPT):
+            self.assertIn("營業額", text)
+            self.assertIn("营业额", text)
+        self.assertIn("never\nwrite 營收 or 营收", ORCH_CONTEXT_SYSTEM_PROMPT)
+        # 營收/营收 appears nowhere else: labels, context builder, UI strings.
+        for name in ("ui_i18n.py", "commerce_demo.py", "commerce_import.py",
+                     "commerce_ui.py", "orch_ui.py"):
+            source = (PROJECT_ROOT / name).read_text(encoding="utf-8")
+            self.assertNotIn("營收", source, name)
+            self.assertNotIn("营收", source, name)
+        for locale in SUPPORTED_LOCALES:
+            blob = json.dumps(ui_strings(locale), ensure_ascii=False)
+            self.assertNotIn("營收", blob)
+            self.assertNotIn("营收", blob)
+
+    def test_context_header_names_revenue(self):
+        metrics = BudgetTests().big_metrics()
+        header = commerce_demo.chat_summary(metrics, "2025-12-31")[0]
+        self.assertIn("revenue = 營業額", header)
+
+    def test_narrow_composer_stacks(self):
+        source = (PROJECT_ROOT / "orch_ui.py").read_text(encoding="utf-8")
+        desktop = source.index(".chat-page .composer-grid {\n      grid-template-columns: auto minmax(0, 1fr) auto;")
+        block = source.split("v0.20.1 review fix: a later desktop rule", 1)[1].split("\n    }\n", 1)[0]
+        late = source.index("v0.20.1 review fix: a later desktop rule")
+        self.assertGreater(late, desktop)       # comes after, so it wins
+        self.assertIn("@media (max-width: 720px)", block)
+        self.assertIn("grid-template-columns: 1fr;", block)
+        # It is the LAST composer-grid column rule in the stylesheet.
+        self.assertGreater(late, source.rfind("grid-template-columns: auto minmax(0, 1fr) auto;"))
+        self.assertIn("min-height: 120px;", block)
+
+    def test_versions(self):
+        self.assertEqual(orch_auth.AUTH_VERSION, "v0.20.1")
+        self.assertEqual(commerce_import.IMPORT_VERSION, "v0.20.1")
+        use_temp_auth(self, users=())
+        record = orch_auth.audit("test_event", "cli")
+        self.assertEqual(record["audit_version"], "v0.20.1")
 
 
 class ChatDataSourceUiTests(ImportSandbox):

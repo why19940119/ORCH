@@ -49,7 +49,7 @@ import mini_orch
 PROJECT_ROOT = Path(__file__).resolve().parent
 AUTH_DIR = Path(os.getenv("ORCH_AUTH_DIR") or (PROJECT_ROOT / "state"))
 
-AUTH_VERSION = "v0.20.0"
+AUTH_VERSION = "v0.20.1"
 ROLES = ("admin", "editor", "approver")
 USERNAME_PATTERN = re.compile(r"^[\w .@'\-]{2,40}$", re.UNICODE)
 MIN_PASSWORD_CHARS = 10
@@ -579,11 +579,21 @@ def _validate_change(store, actor_user, kind, target, params):
 # v0.20.1: codes meaning a pending request no longer applies to the current
 # accounts; such requests are auto-closed (audited) rather than left open.
 NO_LONGER_APPLIES = frozenset(
-    {"unknown_user", "user_exists", "invalid_role", "invalid_change", "target_disabled"}
+    {"unknown_user", "user_exists", "invalid_role", "invalid_change", "target_disabled",
+     "requester_not_admin"}
 )
 
 
-def _same_request(item, kind, target, params):
+def _requester_is_admin(store, item):
+    requester = store["users"].get(_key(item.get("requested_by", "")))
+    return bool(requester and not requester.get("disabled") and requester["role"] == "admin")
+
+
+def _same_request(item, kind, target, params, store=None):
+    # Review fix: a request whose requester is no longer an active admin
+    # can never be approved, so it does not block a new one.
+    if store is not None and not _requester_is_admin(store, item):
+        return False
     return (
         item.get("status") == "pending"
         and item.get("kind") == kind
@@ -610,9 +620,11 @@ def _sweep_pending(store, closed_by, skip_id=None):
     for item in store["pending_changes"]:
         if item.get("status") != "pending" or item.get("id") == skip_id:
             continue
-        requester = store["users"].get(_key(item.get("requested_by", "")))
-        if not requester or requester.get("disabled") or requester["role"] != "admin":
+        if not _requester_is_admin(store, item):
+            # Review fix: the requester was disabled / demoted since.
+            closed.append(_auto_close(item, "requester_not_admin", closed_by))
             continue
+        requester = store["users"][_key(item["requested_by"])]
         try:
             _validate_change(store, requester, item["kind"], item["target"],
                              item.get("params") or {})
@@ -726,7 +738,7 @@ def request_change(actor, kind, target, role=None, password=None):
         # single-admin exception the change applies now and the older
         # pending copy is auto-closed by the sweep instead).
         if not single_admin and any(
-            _same_request(item, kind, target, params) for item in store["pending_changes"]
+            _same_request(item, kind, target, params, store) for item in store["pending_changes"]
         ):
             raise AuthError("duplicate_request")
         closed = False
@@ -776,9 +788,9 @@ def decide_change(actor, change_id, decision):
             raise AuthError("not_on_self")
         if decision == "approved":
             requester = store["users"].get(_key(change["requested_by"]))
-            if not requester or requester.get("disabled") or requester["role"] != "admin":
-                raise AuthError("requester_not_admin")
             try:
+                if not requester or requester.get("disabled") or requester["role"] != "admin":
+                    raise AuthError("requester_not_admin")
                 _validate_change(store, requester, change["kind"], change["target"],
                                  change.get("params") or {})
             except AuthError as error:

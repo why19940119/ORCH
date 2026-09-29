@@ -1716,6 +1716,29 @@ BASE_TEMPLATE = """
       white-space: normal;
     }
 
+    /* v0.20.1 review fix: a later desktop rule (auto 1fr auto) overrode the
+       older 720px query, squeezing the textarea on phones. Stack the
+       composer controls on narrow screens so the textarea keeps its height. */
+    @media (max-width: 720px) {
+      .chat-page .composer-grid {
+        grid-template-columns: 1fr;
+        align-items: stretch;
+      }
+
+      .chat-page .composer-tools {
+        flex-wrap: wrap;
+      }
+
+      .chat-page .composer-grid textarea {
+        min-height: 120px;
+        width: 100%;
+      }
+
+      .chat-page .composer-submit {
+        width: 100%;
+      }
+    }
+
     .import-notices { list-style: none; margin: 10px 0 0; padding: 0; }
     .import-warning { font-size: 12px; }
 

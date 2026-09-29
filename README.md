@@ -68,7 +68,11 @@ v0.20.1     Chat accuracy: precomputed last 7 / 30 day totals with previous
             series (partial ISO weeks flagged with their dates), HK$ money,
             「匯入數據」 label, no-estimation rule, Cantonese register;
             internal labels filtered from replies; sample won leads unranked;
-            stale account-change requests refused / auto-closed (audited)
+            stale account-change requests refused / auto-closed (audited);
+            review fixes: filter only known internal names (UI-locale words),
+            partial / uncovered periods flagged (no change vs no data),
+            requests of demoted admins auto-closed, stacked phone composer,
+            colloquial Cantonese + 營業額, audit / import version v0.20.1
 ```
 
 ## Core Architecture
@@ -589,8 +593,13 @@ extrapolate or do arithmetic, say when a metric is not in the data, always
 use HK$, call the data 匯入數據 (zh-Hant) / 导入数据 (zh-Hans), never 進口,
 and reply in Cantonese when asked in Cantonese. Internal labels
 (`REFERENCE_DATA`, `store_data`, `data_source`, `*.json` file names) are
-replaced with plain words in ORCH Context replies before they are shown or
-stored (`orch_chat.sanitize_reply`). Account-change requests that no longer
+replaced with plain words in the UI language in ORCH Context replies before
+they are shown or stored (`orch_chat.sanitize_reply`). Only the known internal
+names are touched: other `*.json` paths, URLs and ordinary words such as
+"summary" are left alone. A 7 / 30 day window that the data covers only
+partly is marked PARTIAL (covered days of the window); a previous window with
+no data is marked NOT COVERED and no change is given unless both windows are
+fully covered. Account-change requests that no longer
 apply (a second disable, the current role, a disabled or deleted target) are
 refused when requested and auto-closed on approval or after another change
 applies, with an `account_change_auto_closed` audit record.

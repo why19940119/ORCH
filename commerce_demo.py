@@ -607,22 +607,40 @@ def _period_lines(metrics):
         item = (metrics.get("period_totals") or {}).get(key)
         if not item:
             continue
-        cur, prev, chg = item["current"], item["previous"], item["change"]
-        coverage = "" if prev.get("fully_covered") else " (previous period only partly covered by the data)"
+        cur, prev, chg = item["current"], item["previous"], item.get("change")
+        starts = item.get("data_starts") or "-"
+        cur_note = "" if cur.get("fully_covered", True) else (
+            f", PARTIAL: data covers only {cur.get('covered_days')} of {key} days "
+            f"(data starts {starts})")
         lines.append(
-            f"last_{key}_days ({cur['start']} to {cur['end']}): revenue {hkd(cur['revenue'])}, "
-            f"orders {cur['orders']}, units {cur['units']}"
+            f"last_{key}_days ({cur['start']} to {cur['end']}{cur_note}): revenue "
+            f"{hkd(cur['revenue'])}, orders {cur['orders']}, units {cur['units']}"
         )
-        lines.append(
-            f"previous_{key}_days ({prev['start']} to {prev['end']}){coverage}: revenue "
-            f"{hkd(prev['revenue'])}, orders {prev['orders']}, units {prev['units']}"
-        )
-        lines.append(
-            f"change_{key}_days vs previous: revenue {_signed_hkd(chg['revenue']['abs'])} "
-            f"({_pct_text(chg['revenue']['pct'])}), orders {chg['orders']['abs']:+d} "
-            f"({_pct_text(chg['orders']['pct'])}), units {chg['units']['abs']:+d} "
-            f"({_pct_text(chg['units']['pct'])})"
-        )
+        if not prev.get("covered", True):
+            lines.append(
+                f"previous_{key}_days ({prev['start']} to {prev['end']}): NOT COVERED by the "
+                f"data (data starts {starts}); no figures for this period"
+            )
+        else:
+            prev_note = "" if prev.get("fully_covered", True) else (
+                f", PARTIAL: data covers only {prev.get('covered_days')} of {key} days "
+                f"(data starts {starts})")
+            lines.append(
+                f"previous_{key}_days ({prev['start']} to {prev['end']}{prev_note}): revenue "
+                f"{hkd(prev['revenue'])}, orders {prev['orders']}, units {prev['units']}"
+            )
+        if chg:
+            lines.append(
+                f"change_{key}_days vs previous: revenue {_signed_hkd(chg['revenue']['abs'])} "
+                f"({_pct_text(chg['revenue']['pct'])}), orders {chg['orders']['abs']:+d} "
+                f"({_pct_text(chg['orders']['pct'])}), units {chg['units']['abs']:+d} "
+                f"({_pct_text(chg['units']['pct'])})"
+            )
+        else:
+            lines.append(
+                f"change_{key}_days vs previous: NOT AVAILABLE (both periods must be fully "
+                "covered by the data; do not compute one)"
+            )
     return lines
 
 
@@ -632,7 +650,7 @@ def _chat_summary_lines(metrics, as_of, level):
     period = metrics.get("order_period")
     lines = [
         f"數據來源 / data source: 匯入數據 (imported data), as of {as_of or '-'} "
-        "(latest order date; not real-time)",
+        "(latest order date; not real-time); revenue = 營業額, money in HK$",
     ]
     lines += _period_lines(metrics)
     lines.append(

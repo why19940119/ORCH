@@ -124,40 +124,83 @@ def validate_chat_answer(answer):
 # v0.20.1: internal labels and file names must never reach the user. The
 # model is told not to use them; this is the server-side safety net applied
 # to ORCH Context replies before they are displayed or stored.
+# Review fix: only the KNOWN internal names are replaced (never any *.json,
+# URL or ordinary word), and the replacement words follow the UI locale.
 _REPLY_PHRASES = {
     "imported": {"zh-Hant": "匯入數據", "zh-Hans": "导入数据", "en": "the imported data"},
     "sample": {"zh-Hant": "示範數據", "zh-Hans": "示范数据", "en": "the sample data"},
     "data": {"zh-Hant": "數據", "zh-Hans": "数据", "en": "the data"},
 }
-_ID = r"(?<![A-Za-z0-9_]){}(?![A-Za-z0-9_])"
-_WRAP = r"`?{}`?"
+# Internal file names, matched as whole tokens only (a URL such as
+# https://example.com/sample_data.json or output/x.json is left alone).
+_FILE_NAMES = {
+    r"(?:state/)?ecom_import\.json": "imported",
+    r"(?:demo/)?sample_data\.json": "sample",
+    r"(?:state/)?ecom_demo_queue\.json": "data",
+}
+# Context labels (the top-level blocks of REFERENCE_DATA).
+_LABELS = {
+    "imported_store_data": "imported",
+    "sample_data": "sample",
+    "sample_reference": "sample",
+    "REFERENCE_DATA": "data",
+    "ORCH_CONTEXT": "data",
+    "USER_QUESTION": "data",
+    "store_data": "data",
+    "data_source": "data",
+}
+# Internal keys inside the context. snake_case keys cannot be prose, so
+# they are replaced as bare tokens; plain words (summary) only in key forms
+# (label.summary, `summary`, "summary":).
+_SNAKE_KEYS = (
+    "sales_ranking", "as_of_date", "as_of_note", "matching_products",
+    "won_order_leads_not_sales_ranking", "won_order_leads_by_sku",
+    "per_product_sales_available", "weekly_order_counts_all_products",
+    "matching_skus", "matching_inquiries", "matching_leads",
+    "matching_kb_entries", "catalog_summary", "approved_facts",
+    "unresolved_ids", "unmatched_order_lines", "data_label",
+    "data_label_by_language", "task_lookup",
+)
+_WORD_KEYS = ("summary", "scope", "currency", "limitations")
+
+_B = r"(?<![\w./:-])"          # token start: not inside a path, URL or word
+_E = r"(?![\w-])"              # token end
+_IDENT = "|".join(sorted(list(_LABELS) + list(_SNAKE_KEYS) + list(_WORD_KEYS),
+                         key=len, reverse=True))
+
+
+def _kind_of(token):
+    head = token.strip('`"').split(".", 1)[0].rstrip(":")
+    return _LABELS.get(head, "data")
+
+
 _REPLY_PATTERNS = [
-    (re.compile(_WRAP.format(r"[\w./-]*ecom_import[\w-]*\.jsonl?"), re.I), "imported"),
-    (re.compile(_WRAP.format(r"[\w./-]*sample_data[\w-]*\.jsonl?"), re.I), "sample"),
-    (re.compile(_WRAP.format(r"(?<![\w])[\w./-]+\.jsonl?(?![\w])"), re.I), "data"),
-    (re.compile(_WRAP.format(_ID.format(r"imported_store_data")), re.I), "imported"),
-    (re.compile(_WRAP.format(_ID.format(r"sample_(?:data|reference)")), re.I), "sample"),
-    (re.compile(_WRAP.format(_ID.format(
-        r"(?:REFERENCE_DATA|ORCH_CONTEXT|store_data|data_source|USER_QUESTION)")), re.I), "data"),
+    # file names (optionally backticked or quoted)
+    *[(re.compile(r"[`\"]?" + _B + name + _E + r"[`\"]?", re.I), kind)
+      for name, kind in _FILE_NAMES.items()],
+    # dotted forms: store_data.summary, REFERENCE_DATA.store_data.as_of_date
+    (re.compile(r"`?" + _B + r"(?:" + "|".join(_LABELS) + r")(?:\.(?:" + _IDENT
+                + r"))+" + r"`?" + _E), None),
+    # backticked or JSON-quoted keys: `summary`, "summary":
+    (re.compile(r"`(?:" + _IDENT + r")`|\"(?:" + _IDENT + r")\"(?=\s*:)"), None),
+    # bare labels and snake_case keys (never plain words)
+    (re.compile(_B + r"(?:" + "|".join(sorted(list(_LABELS) + list(_SNAKE_KEYS),
+                                               key=len, reverse=True)) + r")" + _E), None),
 ]
-_CJK = re.compile(r"[\u3400-\u9fff]")
 
 
-def _reply_locale(text, locale):
-    if locale in ("zh-Hant", "zh-Hans", "en"):
-        if locale == "en" and _CJK.search(text):
-            return "zh-Hant"
-        return locale
-    return "zh-Hant" if _CJK.search(text) else "en"
+def _reply_locale(locale):
+    return locale if locale in ("zh-Hant", "zh-Hans", "en") else "en"
 
 
 def sanitize_reply(text, locale=None):
-    """Replace internal labels / data file names with plain words."""
+    """Replace internal labels / keys / data file names with plain words in
+    the UI locale."""
     if not isinstance(text, str) or not text:
         return text
-    lang = _reply_locale(text, locale)
+    words = {kind: phrases[_reply_locale(locale)] for kind, phrases in _REPLY_PHRASES.items()}
     for pattern, kind in _REPLY_PATTERNS:
-        text = pattern.sub(_REPLY_PHRASES[kind][lang], text)
+        text = pattern.sub(lambda m, k=kind: words[k or _kind_of(m.group(0))], text)
     return text
 
 
@@ -254,7 +297,9 @@ is not given (for example do not derive a 30-day figure from 7 days of
 data). If a metric or period is not in the data, say plainly that the
 data does not include it. Weeks marked PARTIAL cover only the dates
 shown; say so when you cite them. Always write money as HK$ (for
-example HK$1,234.50), never another currency symbol.
+example HK$1,234.50), never another currency symbol. Revenue is
+營業額 in Traditional Chinese and 营业额 in Simplified Chinese; never
+write 營收 or 营收.
 
 Dates and time-relative questions (today, 今日, 今天, this week, 本週,
 本周, this month, 本月, recently, latest): you do not have real-time
@@ -431,10 +476,13 @@ def locale_instruction(locale):
         "scope notes and guidance such as suggesting General Conversation "
         "mode or the Approval Inbox. Match the user's register: if the "
         "question is written in Cantonese (for example 係、咩、點、嘅、"
-        "唔、邊個、幾多), reply in Cantonese written in Traditional Chinese; "
-        "if it is written standard Traditional Chinese, Simplified Chinese "
-        "or English, reply in that written language. Currency is always "
-        "HK$. Keep the JSON keys and "
+        "唔、邊個、幾多), reply in Cantonese written in Traditional Chinese, "
+        "consistently colloquial Cantonese from start to finish (use 係、"
+        "嘅、咗、唔、冇、啲、喺、佢哋、而家; do not mix in written-Chinese "
+        "forms such as 是、的、了、沒有、這些、現在); if it is written "
+        "standard Traditional Chinese, Simplified Chinese or English, reply "
+        "in that written language. Revenue is 營業額 (Simplified: 营业额), "
+        "never 營收/营收. Currency is always HK$. Keep the JSON keys and "
         "the value "
         '"none" for execution_authority in English.'
     )
