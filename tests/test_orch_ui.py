@@ -62,6 +62,11 @@ class OrchUiTests(unittest.TestCase):
             [
                 "/chat",
                 "/demo/draft",
+                # v0.19.0: CSV import page (CSRF on each; no model calls).
+                "/import",
+                "/import/folder",
+                "/import/reset",
+                "/import/toggle",
                 "/inbox/<task_id>/approve",
                 "/inbox/<task_id>/reject",
                 "/inbox/<task_id>/revise",

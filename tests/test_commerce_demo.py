@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 import artifact_store
 import commerce_demo
+import commerce_import
 import commerce_ui
 import mini_orch
 import orch_ui
@@ -63,6 +64,9 @@ class DemoSandbox(unittest.TestCase):
             patch.object(commerce_demo, "STATUS_FILE", self.tmp / "state" / "task_status.json"),
             patch.object(commerce_demo, "EVENTS_FILE", self.tmp / "state" / "events.jsonl"),
             patch.object(commerce_demo, "LOCK_FILE", self.tmp / "state" / ".lock"),
+            # v0.19.0: never read a developer's real imported store data.
+            patch.object(commerce_import, "IMPORT_STATE_FILE", self.tmp / "state" / "ecom_import.json"),
+            patch.object(commerce_import, "LOCK_FILE", self.tmp / "state" / ".import.lock"),
             patch.object(artifact_store, "ARTIFACT_ROOT", art),
             patch.object(artifact_store, "STAGING_DIR", art / "staging"),
             patch.object(artifact_store, "OBJECTS_DIR", art / "objects" / "sha256"),

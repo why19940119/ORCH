@@ -19,6 +19,7 @@ from unittest.mock import patch
 import artifact_store
 import chat_attachments
 import commerce_demo
+import commerce_import
 import commerce_ui
 import mini_orch
 import orch_chat
@@ -334,6 +335,8 @@ class DemoStateSandbox(unittest.TestCase):
             patch.object(commerce_demo, "STATUS_FILE", self.status),
             patch.object(commerce_demo, "EVENTS_FILE", self.events),
             patch.object(commerce_demo, "LOCK_FILE", self.lock),
+            patch.object(commerce_import, "IMPORT_STATE_FILE", self.tmp / "state" / "ecom_import.json"),
+            patch.object(commerce_import, "LOCK_FILE", self.lock),
             patch.object(mini_orch, "QUEUE_FILE", self.main_queue),
             patch.object(mini_orch, "DEMO_QUEUE_FILE", self.demo_queue),
             patch.object(mini_orch, "STATUS_FILE", self.status),
@@ -571,7 +574,8 @@ class ZhHantNamingTests(DemoStateSandbox):
         self.assertEqual(en_views[0]["id"], task_id)
 
     def test_version_bumped(self):
-        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.18.2")
+        # v0.19.0 (WP-ORCH-10) supersedes v0.18.2.
+        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.19.0")
 
 
 # 9. fresh-clone test config ------------------------------------------------

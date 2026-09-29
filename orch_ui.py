@@ -1521,6 +1521,24 @@ BASE_TEMPLATE = """
 
     .sample-meta { color: #b9aacb; margin-left: auto; }
 
+    .sample-banner.imported-banner {
+      background: rgba(94, 214, 160, .08);
+      border-color: rgba(94, 214, 160, .6);
+      color: #a9ecd0;
+    }
+
+    .sample-banner.imported-banner strong { background: #174a36; color: #7ff0c0; }
+
+    .sample-note {
+      border-left: 3px solid rgba(255, 205, 87, .7);
+      color: #f6d78d;
+      font-size: 12px;
+      margin: 4px 0 10px;
+      padding: 4px 10px;
+    }
+
+    .import-error-row td { vertical-align: top; }
+
     .demo-flash {
       border-radius: 7px;
       font-size: 13px;
@@ -1787,6 +1805,7 @@ BASE_TEMPLATE = """
         ('/market', 'market', t.nav_market),
         ('/inbox', 'inbox', t.nav_inbox),
         ('/audit', 'audit', t.nav_audit),
+        ('/import', 'import', t.nav_import),
       ] %}
         <a href="{{ href }}" class="{{ 'active' if active == key }}">{{ label }}</a>
       {% endfor %}
@@ -2388,6 +2407,14 @@ def request_too_large(_error):
                 "mode": session.get("last_chat_mode", "orch_context"),
             }
         ), 413
+    if request.path.startswith("/import"):
+        # v0.19.0: the CSV import page has its own way back.
+        body = (
+            '<div class="section"><div class="warning" role="alert">'
+            "{{ message }}</div>"
+            '<p><a href="/import">{{ t.nav_import }}</a></p></div>'
+        )
+        return render_page(t["nav_import"], "import", body, message=message), 413
     body = (
         '<div class="section"><div class="warning" role="alert">'
         "{{ message }}</div>"

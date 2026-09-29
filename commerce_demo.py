@@ -32,6 +32,7 @@ import sys
 import uuid
 
 import artifact_store
+import commerce_import
 import mini_orch
 from ui_i18n import DEFAULT_LOCALE, ui_strings
 from approval_inbox import inbox_item
@@ -53,7 +54,7 @@ TASK_PREFIX = "task_ecom_"
 DRAFT_LOGICAL_PREFIX = "ecom_draft_"
 AUDIT_LOGICAL_NAME = "ecom_audit"
 AUDIT_SCHEMA_VERSION = "1.0"
-DEMO_VERSION = "v0.18.2"
+DEMO_VERSION = "v0.19.0"
 
 MAX_DRAFT_CHARS = 4000
 MAX_NOTE_CHARS = 300
@@ -98,7 +99,18 @@ DRAFT_KINDS = {
         "module": "knowledge_base",
         "channels": ["knowledge_base"],
     },
+    # v0.19.0: suggestions computed from imported store data (CSV import).
+    "import_insight": {
+        "module": "market_dashboard",
+        "channels": ["internal_report"],
+    },
+    "import_campaign": {
+        "module": "campaign_engine",
+        "channels": ["meta_ads", "google_ads", "tiktok_ads", "edm"],
+    },
 }
+
+IMPORT_KINDS = ("import_insight", "import_campaign")
 
 CONTENT_TYPES = ("product_page", "faq", "ad_copy")
 CAMPAIGN_OBJECTIVES = ("traffic", "inquiries", "sales")
@@ -549,6 +561,18 @@ def build_source(kind, params, data=None):
         "kind": kind,
     }
 
+    if kind in IMPORT_KINDS:
+        return _build_import_source(kind, params)
+    if kind == "content" and params.get("sku"):
+        # v0.19.0: Content Studio drafts use the imported product row when
+        # an import is active and the SKU comes from it.
+        imported = commerce_import.active_import()
+        if imported and any(
+            row["sku"] == params["sku"]
+            for row in imported["data"].get("products") or []
+        ):
+            return _build_import_source(kind, params)
+
     if kind == "content":
         sku = skus.get(params.get("sku"))
         _require(sku, "invalid_sku")
@@ -652,6 +676,61 @@ def build_source(kind, params, data=None):
     return source
 
 
+def _build_import_source(kind, params):
+    """v0.19.0: draft source from imported store data (state/ecom_import.json)."""
+    state = commerce_import.active_import()
+    _require(state, "no_import_data")
+    source = {
+        "dataset": "data/import (state/ecom_import.json)",
+        "dataset_version": state.get("imported_at_utc"),
+        "imported_at_utc": state.get("imported_at_utc"),
+        "sample_data": False,
+        "imported": True,
+        "kind": kind,
+    }
+    products = {row["sku"]: row for row in state["data"].get("products") or []}
+    if kind == "content":
+        row = products.get(params.get("sku"))
+        _require(row, "invalid_sku")
+        content_type = params.get("content_type", "product_page")
+        _require(content_type in CONTENT_TYPES, "invalid_content_type")
+        source.update(
+            {
+                "refs": [row["sku"], "products.csv"],
+                "content_type": content_type,
+                "sku": _sku_facts(commerce_import.product_as_sku(row)),
+                "kb": [],
+            }
+        )
+        return source
+
+    metrics = commerce_import.compute_metrics(state)
+    if kind == "import_insight":
+        _require(metrics["totals"]["order_lines"] or metrics["totals"]["pageviews"],
+                 "no_import_data")
+        source.update(
+            {
+                "refs": ["orders.csv", "traffic.csv", "products.csv"],
+                "metrics": commerce_import.metrics_digest(metrics),
+            }
+        )
+        return source
+
+    row = products.get(params.get("sku"))
+    _require(row, "invalid_sku")
+    objective = params.get("objective", "traffic")
+    _require(objective in CAMPAIGN_OBJECTIVES, "invalid_objective")
+    source.update(
+        {
+            "refs": [row["sku"], "orders.csv", "traffic.csv"],
+            "sku": _sku_facts(commerce_import.product_as_sku(row)),
+            "objective": objective,
+            "metrics": commerce_import.metrics_digest(metrics, sku=row["sku"]),
+        }
+    )
+    return source
+
+
 # ---------------------------------------------------------------------------
 # Draft text: OpenRouter (orch_chat.ask_orch) or deterministic mock
 # ---------------------------------------------------------------------------
@@ -682,6 +761,12 @@ def draft_title(kind, source, locale=DEFAULT_LOCALE):
         return t["demo_title_insight"]
     if kind == "kb_update":
         return f"{source['kb_entry']['id']} v{source['kb_entry']['version']}→?"
+    if kind == "import_insight":
+        period = (source.get("metrics") or {}).get("order_period") or ["?", "?"]
+        return t["imp_title_insight"].format(start=period[0], end=period[1])
+    if kind == "import_campaign":
+        objective = t.get(f"obj_{source['objective']}", source["objective"])
+        return f"{source['sku']['sku']} · {source['sku']['name_en']} · {objective}"
     return kind
 
 
@@ -693,7 +778,8 @@ def task_title(kind, module, source, locale=DEFAULT_LOCALE):
         module_name = module_name[len("ORCH "):]
     separator = "：" if str(locale).startswith("zh") else ": "
     title = (
-        f"{t['demo_title_prefix']} {module_name}{separator}"
+        f"{t['demo_title_prefix'] if source.get('sample_data', True) else t['imp_title_prefix']}"
+        f" {module_name}{separator}"
         f"{draft_title(kind, source, locale)}"
     )
     return title[:160]
@@ -729,6 +815,8 @@ def build_prompt(kind, source, language):
         "Mark anything needing a human decision as [HUMAN TO CONFIRM]. "
         "Put only the draft text in answer. "
     )
+    if source.get("imported"):
+        return (head + _import_prompt_body(kind, source))[:MAX_PROMPT_CHARS]
     if kind == "content":
         sku = source["sku"]
         body = (
@@ -776,6 +864,147 @@ def build_prompt(kind, source, language):
     return (head + body)[:MAX_PROMPT_CHARS]
 
 
+def _import_prompt_body(kind, source):
+    if kind == "content":
+        sku = source["sku"]
+        return (
+            f"Task: {source['content_type']} for SKU {sku['sku']} "
+            f"'{sku['name_en']}' from the store's imported product sheet. "
+            f"Facts: {'; '.join(sku['facts'])}. Shipping, returns, materials "
+            "and specs are unknown: write [HUMAN TO CONFIRM]."
+        )
+    metrics = json.dumps(source["metrics"], ensure_ascii=False, separators=(",", ":"))
+    if kind == "import_insight":
+        return (
+            "Task: 3-bullet insight + 3 next actions (restock, promote, fix "
+            "traffic) from the store's IMPORTED sales/traffic metrics. "
+            "Conversion = orders / pageviews (assumption). Metrics: " + metrics
+        )
+    sku = source["sku"]
+    return (
+        f"Task: ad campaign suggestion (audience, 2 creative variants A/B, "
+        f"channel mix, test plan) for {sku['sku']} '{sku['name_en']}', objective "
+        f"{source['objective']}, grounded in IMPORTED metrics; budget [HUMAN TO "
+        f"CONFIRM]; do not push low-stock SKUs. Metrics: " + metrics
+    )
+
+
+OBJECTIVE_ZH = {"traffic": "增加流量", "inquiries": "增加查詢", "sales": "提升銷售"}
+
+
+def _import_mock_draft(kind, source, zh):
+    """Deterministic drafts from imported data (no invented facts)."""
+    if kind == "content":
+        sku = source["sku"]
+        name = sku["name_en"]
+        price = f"HK${sku['list_price_hkd']:g}"
+        ctype = source["content_type"]
+        if ctype == "product_page":
+            return (
+                f"{name}（{sku['sku']}）\n\n商品表資料：\n- 售價：{price}\n- 類別：{sku['category']}\n\n"
+                "產品描述：[待人手確認 — 匯入資料未包含物料、尺寸及功效]\n"
+                f"價格：{price}（取自匯入商品表，發佈前請再確認）\n運送及退貨：[待人手確認]"
+                if zh else
+                f"{name} ({sku['sku']})\n\nFrom your product sheet:\n- Price: {price}\n- Category: {sku['category']}\n\n"
+                "Description: [HUMAN TO CONFIRM — the import has no materials, size or claims]\n"
+                f"Price: {price} (from the imported product sheet; re-check before publishing)\n"
+                "Shipping and returns: [HUMAN TO CONFIRM]"
+            )
+        if ctype == "faq":
+            return (
+                f"{name} 常見問題\n\n問：售價多少？\n答：{price}（以結帳頁為準）。\n\n"
+                f"問：屬於哪個類別？\n答：{sku['category']}。\n\n問：多久送達？\n答：[待人手確認]\n\n問：可以退貨嗎？\n答：[待人手確認]"
+                if zh else
+                f"{name} — FAQ\n\nQ: How much is it?\nA: {price} (checkout price applies).\n\n"
+                f"Q: Which category is it in?\nA: {sku['category']}.\n\n"
+                "Q: How long is delivery?\nA: [HUMAN TO CONFIRM]\n\nQ: Can I return it?\nA: [HUMAN TO CONFIRM]"
+            )
+        return (
+            f"廣告文案草稿 — {name}\n\n標題 A：{name}\n標題 B：{sku['category']}之選，{price}\n"
+            "內文：[待人手確認 — 請補充賣點]\n行動呼籲：立即選購\n（不含任何功效或「最佳」聲稱；優惠需人手確認）"
+            if zh else
+            f"Ad copy draft — {name}\n\nHeadline A: {name}\nHeadline B: {sku['category']} pick at {price}\n"
+            "Body: [HUMAN TO CONFIRM — add selling points]\nCTA: Shop now\n"
+            "(No efficacy or 'best' claims; any offer is [HUMAN TO CONFIRM])"
+        )
+
+    metrics = source["metrics"]
+    totals = metrics["totals"]
+    conversion = metrics.get("conversion")
+    top = metrics["top_skus"][0] if metrics["top_skus"] else None
+    low = metrics["low_cover"]
+    traffic = metrics["traffic_by_source"][0] if metrics["traffic_by_source"] else None
+    if kind == "import_insight":
+        period = metrics.get("order_period") or ["-", "-"]
+        if zh:
+            lines = [f"數據洞察（真實匯入數據，{period[0]} 至 {period[1]}）",
+                     f"- 營業額 HK${totals['revenue']:,.2f}，{totals['orders']} 張訂單，售出 {totals['units']} 件。"]
+            if top:
+                lines.append(f"- 最暢銷：{top['sku']} {top['name']}，佔營業額 {top['share_pct']}%。")
+            if traffic:
+                lines.append(f"- 最大流量來源：{traffic['source']}（{traffic['share_pct']}% 瀏覽量）。")
+            if conversion:
+                lines.append(f"- 轉化率約 {conversion['rate_pct']}%（假設：訂單數 ÷ 瀏覽量，{conversion['start']} 至 {conversion['end']}）。")
+            lines.append("\n建議下一步：")
+            if low:
+                lines.append("1. 補貨：" + "、".join(f"{r['sku']}（約 {r['days_of_cover'] if r['days_of_cover'] is not None else 0} 日存貨）" for r in low[:3]) + "。")
+            else:
+                lines.append("1. 存貨充足；每週重新匯入以監察。")
+            if top:
+                lines.append(f"2. 為 {top['sku']} 準備推廣草稿（需人手批准）。")
+            if traffic:
+                lines.append(f"3. 檢查 {traffic['source']} 以外渠道的落地頁表現。")
+            return "\n".join(lines)
+        lines = [f"Insight (imported store data, {period[0]} to {period[1]})",
+                 f"- Revenue HK${totals['revenue']:,.2f} from {totals['orders']} orders, {totals['units']} units."]
+        if top:
+            lines.append(f"- Best seller: {top['sku']} {top['name']}, {top['share_pct']}% of revenue.")
+        if traffic:
+            lines.append(f"- Top traffic source: {traffic['source']} ({traffic['share_pct']}% of pageviews).")
+        if conversion:
+            lines.append(f"- Conversion about {conversion['rate_pct']}% (assumption: orders ÷ pageviews, {conversion['start']} to {conversion['end']}).")
+        lines.append("\nSuggested next actions:")
+        if low:
+            lines.append("1. Restock: " + ", ".join(f"{r['sku']} (~{r['days_of_cover'] if r['days_of_cover'] is not None else 0} days of cover)" for r in low[:3]) + ".")
+        else:
+            lines.append("1. Stock cover looks fine; re-import weekly to keep watching.")
+        if top:
+            lines.append(f"2. Prepare a promotion draft for {top['sku']} (needs human approval).")
+        if traffic:
+            lines.append(f"3. Review landing pages for sources other than {traffic['source']}.")
+        return "\n".join(lines)
+
+    sku = source["sku"]
+    sku_sales = metrics.get("sku_sales") or {}
+    cover = metrics.get("sku_cover") or {}
+    channel = traffic["source"] if traffic else "-"
+    low_stock = cover.get("status") in {"out", "low"}
+    days = cover.get("days_of_cover")
+    if zh:
+        lines = [f"推廣活動建議 — {sku['sku']} {sku['name_en']}（真實匯入數據）",
+                 f"目標：{OBJECTIVE_ZH.get(source['objective'], source['objective'])}",
+                 f"數據：售出 {sku_sales.get('units', 0)} 件，營業額 HK${sku_sales.get('revenue', 0):,.2f}；存貨 {cover.get('stock', '-')} 件"
+                 + (f"，約 {days} 日存貨" if days is not None else "") + "。",
+                 f"主要渠道：{channel}（流量最大來源）。"]
+        if low_stock:
+            lines.append("⚠ 存貨偏低：建議先補貨，暫緩加大投放。")
+        lines += [f"\n素材 A：「{sku['name_en']}」— HK${sku['list_price_hkd']:g}",
+                  f"素材 B：「{sku['category']}」精選 — 限量供應（需人手確認）",
+                  "A/B 測試：兩組素材平均分配 7 日，比較點擊率及訂單。\n預算：[待人手確認]"]
+        return "\n".join(lines)
+    lines = [f"Campaign suggestion — {sku['sku']} {sku['name_en']} (imported store data)",
+             f"Objective: {source['objective']}",
+             f"Data: {sku_sales.get('units', 0)} units sold, revenue HK${sku_sales.get('revenue', 0):,.2f}; stock {cover.get('stock', '-')}"
+             + (f", about {days} days of cover" if days is not None else "") + ".",
+             f"Lead channel: {channel} (largest traffic source)."]
+    if low_stock:
+        lines.append("Warning: low stock. Restock before scaling spend.")
+    lines += [f"\nCreative A: \"{sku['name_en']}\" — HK${sku['list_price_hkd']:g}",
+              f"Creative B: \"{sku['category']} pick\" — limited stock (HUMAN TO CONFIRM)",
+              "A/B test: split evenly for 7 days; compare CTR and orders.\nBudget: [HUMAN TO CONFIRM]"]
+    return "\n".join(lines)
+
+
 CATEGORY_ZH = {
     "home": "家居",
     "kitchen": "廚房",
@@ -793,6 +1022,14 @@ def _mock_footer(language):
 
 def mock_draft(kind, source, language="en"):
     zh = language == "zh-Hant"
+
+    if source.get("imported"):
+        footer = (
+            "\n\n[AI 草稿 · 模擬生成 · 真實匯入數據 · 待人手核准，未發佈]"
+            if zh else
+            "\n\n[MOCK DRAFT · deterministic generator · imported store data · pending human approval, not published]"
+        )
+        return _import_mock_draft(kind, source, zh) + footer
 
     if kind == "content":
         sku = source["sku"]
@@ -1077,7 +1314,7 @@ def create_draft(kind, params, operator, language="en", session_id_sha256=None):
         "created_at_utc": created_at,
         "approval_required": True,
         "published": False,
-        "sample_data": True,
+        "sample_data": source.get("sample_data", True),
         "execution_authority": "none",
     }
     publication = _publish_json(logical_name, payload, task_id)
@@ -1104,7 +1341,7 @@ def create_draft(kind, params, operator, language="en", session_id_sha256=None):
             "language": language,
             "created_by": operator,
             "created_at_utc": created_at,
-            "sample_data": True,
+            "sample_data": source.get("sample_data", True),
         },
     }
     version_entry = {
@@ -1265,7 +1502,9 @@ def decide(task_id, decision, operator, expected_version, channel=None, note="")
             "content_sha256": version["content_sha256"],
             "source": {
                 "refs": (draft_payload.get("source") or {}).get("refs", []),
-                "dataset": "demo/sample_data.json",
+                "dataset": (draft_payload.get("source") or {}).get(
+                    "dataset", "demo/sample_data.json"
+                ),
                 "provider": (draft_payload.get("provenance") or {}).get(
                     "provider"
                 ),
@@ -1286,7 +1525,9 @@ def decide(task_id, decision, operator, expected_version, channel=None, note="")
             ),
             "external_call": False,
             "note": note,
-            "sample_data": True,
+            "sample_data": (draft_payload.get("source") or {}).get(
+                "sample_data", True
+            ),
         }
         # v0.18.2: the gate decides first; the immutable audit record is
         # published only after decide_approval succeeded.
