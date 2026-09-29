@@ -35,6 +35,7 @@ import uuid
 import artifact_store
 import commerce_import
 import mini_orch
+import orch_db
 import orch_auth
 from ui_i18n import DEFAULT_LOCALE, ui_strings
 from approval_inbox import inbox_item
@@ -56,7 +57,7 @@ TASK_PREFIX = "task_ecom_"
 DRAFT_LOGICAL_PREFIX = "ecom_draft_"
 AUDIT_LOGICAL_NAME = "ecom_audit"
 AUDIT_SCHEMA_VERSION = "1.0"
-DEMO_VERSION = "v0.20.0"
+DEMO_VERSION = "v0.21.0"
 
 MAX_DRAFT_CHARS = 4000
 MAX_NOTE_CHARS = 300
@@ -2110,18 +2111,9 @@ def audit_records(limit=200):
 
 
 def demo_events(limit=100):
-    path = Path(EVENTS_FILE)
-    if not path.exists():
-        return []
-    rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if str(record.get("task_id", "")).startswith(TASK_PREFIX):
-            rows.append(record)
-    return list(reversed(rows[-limit:]))
+    # v0.21.0: events live in state/orch.db (append-only table).
+    return orch_db.read_log(Path(EVENTS_FILE), limit=limit, newest_first=True,
+                            where_task_prefix=TASK_PREFIX)
 
 
 def approved_kb_updates():

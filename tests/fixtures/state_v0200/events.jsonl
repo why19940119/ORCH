@@ -1,0 +1,6 @@
+{"timestamp": "2026-09-20T10:00:00", "event": "orchestrator_started", "task_id": "orchestrator", "message": "Task queue execution started."}
+{"timestamp": "2026-09-20T10:01:02", "event": "task_done", "task_id": "task_001", "message": "done"}
+{"timestamp": "2026-09-21T09:00:00", "event": "task_approved", "task_id": "task_policy_gate", "message": "Approved by local_terminal_user", "os_user": "fat"}
+{"timestamp": "2026-09-22T03:00:00", "event": "task_approved", "task_id": "task_ecom_faq_0011223344", "message": "Approved by Ben Lee"}
+{"timestamp": "2026-09-22T03:00:01", "event": "ecom_publish_recorded", "task_id": "task_ecom_faq_0011223344", "message": "Simulated publish recorded 竹纖維", "channel": "brand_site_faq"}
+{"torn": 

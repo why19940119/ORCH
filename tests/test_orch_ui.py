@@ -82,6 +82,8 @@ class OrchUiTests(unittest.TestCase):
                 "/locale",
                 "/login",
                 "/logout",
+                # v0.21.0: first-admin wizard (CSRF; only while no account exists).
+                "/setup",
             ],
         )
 

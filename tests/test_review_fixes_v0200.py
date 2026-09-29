@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 import commerce_demo
 import mini_orch
 import orch_auth
+import orch_db
 from auth_testing import TEST_PASSWORD, seed_users, sign_in, use_temp_auth
 from orch_ui import app
 from test_commerce_demo import DemoSandbox
@@ -128,16 +129,16 @@ class BootstrapTests(unittest.TestCase):
         self.assertFalse(orch_auth.bootstrap_open())
 
     def test_3_migration_of_old_stores(self):
-        path = orch_auth.auth_file()
-        data = json.loads(path.read_text(encoding="utf-8"))
+        path = orch_auth.auth_file()      # v0.21.0: docs['auth'] in orch.db
+        data = orch_db.load(path, {})
         data.pop("bootstrap")
-        path.write_text(json.dumps(data), encoding="utf-8")
+        orch_db.save(path, data)
         self.assertTrue(orch_auth.bootstrap_open())          # one admin, never a second
         seed_users((("Old Admin", "admin"),))
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = orch_db.load(path, {})
         data.pop("bootstrap", None)
         data["users"][orch_auth._key("Old Admin")]["disabled"] = True
-        path.write_text(json.dumps(data), encoding="utf-8")
+        orch_db.save(path, data)
         self.assertFalse(orch_auth.bootstrap_open())         # a second admin existed
 
 
@@ -198,7 +199,7 @@ class LoginEnumerationTests(unittest.TestCase):
         with patch.dict(os.environ, {"ORCH_LOGIN_MAX_FAILURES": "3"}):
             reasons = [orch_auth.authenticate("Ghost User", "x-x-x-x-x-1")[1] for _ in range(4)]
         self.assertEqual(reasons, ["invalid", "invalid", "locked", "locked"])
-        text = orch_auth.audit_file().read_text(encoding="utf-8")
+        text = json.dumps(orch_db.read_log(orch_auth.audit_file()), ensure_ascii=False)
         self.assertNotIn("Ghost User", text)                   # 5: typed name not stored raw
         self.assertNotIn("ghost user", text)
         record = orch_auth.read_audit()[0]

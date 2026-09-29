@@ -1,0 +1,21 @@
+{
+  "import_version": "v0.20.0",
+  "active": true,
+  "imported_at_utc": "2026-09-24T05:00:00+00:00",
+  "products": [
+    {
+      "sku": "HK-TOWEL-01",
+      "name": "竹纖維毛巾",
+      "price": 128.0
+    }
+  ],
+  "orders": [
+    {
+      "order_id": "O-1001",
+      "date": "2026-09-01",
+      "sku": "HK-TOWEL-01",
+      "qty": 2,
+      "revenue": 256.0
+    }
+  ]
+}

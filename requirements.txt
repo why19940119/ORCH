@@ -1,2 +1,4 @@
 Flask>=3.1,<4
 pypdf>=5,<6
+# v0.21.0: production WSGI server for serve.py / Docker
+waitress>=3,<4

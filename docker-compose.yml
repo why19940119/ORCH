@@ -1,0 +1,47 @@
+# ORCH v0.21.0 - docker compose up -d --build
+# Secrets: put OPENROUTER_API_KEY in .env next to this file (never in the image).
+# ORCH_UI_SECRET_KEY is optional: without it a key is generated on first start
+# and kept in the state volume (state/secret_key).
+services:
+  orch:
+    build: .
+    image: orch:0.21.0
+    container_name: orch
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ORCH_HOST: 0.0.0.0
+      ORCH_PORT: "5050"
+      ORCH_PERSIST_SECRET_KEY: "1"
+      # Branding (or put client_name / logo / target_market in state/branding.json)
+      ORCH_CLIENT_NAME: ${ORCH_CLIENT_NAME:-}
+      ORCH_LOGO: ${ORCH_LOGO:-}
+      ORCH_TARGET_MARKET: ${ORCH_TARGET_MARKET:-}
+      # Behind Caddy/nginx with HTTPS: SESSION_COOKIE_SECURE=1, ORCH_PROXY_FIX=1,
+      # ORCH_TRUSTED_HOSTS=orch.example.com (see docs/反向代理與HTTPS.md)
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-0}
+      ORCH_PROXY_FIX: ${ORCH_PROXY_FIX:-0}
+      ORCH_TRUSTED_HOSTS: ${ORCH_TRUSTED_HOSTS:-}
+      ORCH_SETUP_TOKEN: ${ORCH_SETUP_TOKEN:-}
+    ports:
+      # Local only by default; put a reverse proxy in front for other machines.
+      - "127.0.0.1:${ORCH_PUBLISH_PORT:-5050}:5050"
+    volumes:
+      - orch_state:/app/state
+      - orch_uploads:/app/uploads
+      - orch_data:/app/data
+      - orch_artifacts:/app/artifacts
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5050/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  orch_state:
+  orch_uploads:
+  orch_data:
+  orch_artifacts:
