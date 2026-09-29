@@ -32,7 +32,7 @@ def save_json(file_path, data):
     )
 
 
-def write_event(event, task, message):
+def write_event(event, task, message, events_file=None, extra=None):
     record = {
         "timestamp": now(),
         "event": event,
@@ -41,7 +41,14 @@ def write_event(event, task, message):
         "message": message,
     }
 
-    with EVENTS_FILE.open("a", encoding="utf-8") as file:
+    if extra:
+        for key, value in extra.items():
+            record.setdefault(key, value)
+
+    target = Path(events_file) if events_file is not None else EVENTS_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    with target.open("a", encoding="utf-8") as file:
         file.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     print(f"[{record['timestamp']}] {event}: {task['id']} - {message}")
@@ -429,6 +436,17 @@ def run_task(task, statuses):
     if task.get("requires_approval", False):
         approval_status = task_state.get("approval_status", "waiting_approval")
 
+        if approval_status == "rejected":
+            # v0.18.0: a human rejection is final for this task; never
+            # re-queue it for approval and never dispatch it.
+            if task_state.get("status") != "rejected":
+                task_state["status"] = "rejected"
+                task_state["updated_at"] = now()
+                statuses[task_id] = task_state
+                save_json(STATUS_FILE, statuses)
+            print(f"Task {task_id} was rejected by a human; not dispatched.")
+            return
+
         if approval_status != "approved":
             previous_status = task_state.get("status")
 
@@ -514,42 +532,132 @@ def run_task(task, statuses):
     write_event("task_abandoned", task, "No retries remain.")
 
 
-def approve_task(task_id):
-    tasks = load_json(QUEUE_FILE, [])
-    statuses = load_json(STATUS_FILE, {})
+def decide_approval(
+    task_id,
+    decision,
+    decided_by,
+    note=None,
+    *,
+    queue_file=None,
+    status_file=None,
+    events_file=None,
+    extra_state=None,
+    strict=True,
+):
+    """Record a human approval decision through the standard gate.
+
+    ``decision`` is ``"approved"`` or ``"rejected"``. Returns a result
+    dict (``ok`` plus ``reason`` on failure). This never dispatches
+    the task; an approved task runs on the next queue execution.
+    """
+    if decision not in {"approved", "rejected"}:
+        return {"ok": False, "reason": "invalid_decision"}
+
+    if not isinstance(decided_by, str) or not decided_by.strip():
+        return {"ok": False, "reason": "operator_required"}
+
+    decided_by = decided_by.strip()
+    queue_path = Path(queue_file) if queue_file is not None else QUEUE_FILE
+    status_path = (
+        Path(status_file) if status_file is not None else STATUS_FILE
+    )
+
+    tasks = load_json(queue_path, [])
+    statuses = load_json(status_path, {})
 
     task = next((item for item in tasks if item["id"] == task_id), None)
 
     if task is None:
-        print(f"Approval failed: task not found: {task_id}")
-        return
+        return {"ok": False, "reason": "task_not_found"}
 
     if not task.get("requires_approval", False):
-        print(f"Approval not required for task: {task_id}")
-        return
+        return {"ok": False, "reason": "approval_not_required"}
 
     task_state = get_task_state(task, statuses)
 
     if task_state.get("status") == "done":
-        print(f"Task is already completed: {task_id}")
-        return
+        return {"ok": False, "reason": "already_done"}
 
-    task_state["status"] = "approved"
-    task_state["approval_status"] = "approved"
-    task_state["approved_at"] = now()
-    task_state["approved_by"] = "local_terminal_user"
+    prior = task_state.get("approval_status")
 
+    if prior == "rejected" or (strict and prior == "approved"):
+        return {"ok": False, "reason": "already_decided"}
+
+    timestamp = now()
+
+    if decision == "approved":
+        task_state["status"] = "approved"
+        task_state["approval_status"] = "approved"
+        task_state["approved_at"] = timestamp
+        task_state["approved_by"] = decided_by
+        event_name = "task_approved"
+        message = (
+            f"Approved by {decided_by}. "
+            "Task can run on next queue execution."
+        )
+    else:
+        task_state["status"] = "rejected"
+        task_state["approval_status"] = "rejected"
+        task_state["rejected_at"] = timestamp
+        task_state["rejected_by"] = decided_by
+        event_name = "task_rejected"
+        message = f"Rejected by {decided_by}. Task will not be dispatched."
+
+    if note:
+        task_state["approval_note"] = str(note)[:500]
+        message += f" Note: {str(note)[:200]}"
+
+    if extra_state:
+        task_state.update(extra_state)
+
+    task_state["updated_at"] = timestamp
     statuses[task_id] = task_state
-    save_json(STATUS_FILE, statuses)
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    save_json(status_path, statuses)
 
     write_event(
-        "task_approved",
+        event_name,
         task,
-        "Approved by local_terminal_user. Task can run on next queue execution.",
+        message,
+        events_file=events_file,
+        extra={"operator": decided_by},
     )
 
-    print(f"Approved: {task_id}")
-    print("Next step: python3 mini_orch.py")
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "decision": decision,
+        "decided_by": decided_by,
+        "decided_at": timestamp,
+        "state": task_state,
+    }
+
+
+def approve_task(task_id):
+    result = decide_approval(
+        task_id,
+        "approved",
+        "local_terminal_user",
+        strict=False,
+    )
+
+    if result["ok"]:
+        print(f"Approved: {task_id}")
+        print("Next step: python3 mini_orch.py")
+        return
+
+    reason = result["reason"]
+
+    if reason == "task_not_found":
+        print(f"Approval failed: task not found: {task_id}")
+    elif reason == "approval_not_required":
+        print(f"Approval not required for task: {task_id}")
+    elif reason == "already_done":
+        print(f"Task is already completed: {task_id}")
+    elif reason == "already_decided":
+        print(f"Approval failed: task was rejected by a human: {task_id}")
+    else:
+        print(f"Approval failed ({reason}): {task_id}")
 
 
 def run_queue():
