@@ -52,7 +52,7 @@ IMPORT_DIR = PROJECT_ROOT / "data" / "import"
 IMPORT_STATE_FILE = PROJECT_ROOT / "state" / "ecom_import.json"
 LOCK_FILE = PROJECT_ROOT / "state" / ".ecom_demo.lock"
 
-IMPORT_VERSION = "v0.19.1"
+IMPORT_VERSION = "v0.21.0"   # app version recorded with an import
 SCHEMA_VERSION = "1.0"
 
 SCHEMAS = {

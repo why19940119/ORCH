@@ -50,6 +50,7 @@ import admin_ui
 import commerce_demo
 import commerce_import
 import commerce_ui
+import deploy_config
 import orch_db
 import orch_auth
 
@@ -115,7 +116,9 @@ load_local_dotenv()
 
 app = Flask(__name__)
 
-_secret = os.getenv("ORCH_UI_SECRET_KEY")
+# v0.21.0: env key, else (ORCH_PERSIST_SECRET_KEY=1, the Docker image) a key
+# generated once and kept in state/secret_key, else an ephemeral one.
+_secret, SECRET_KEY_SOURCE = deploy_config.resolve_secret_key()
 if _secret:
     app.secret_key = _secret
 else:
@@ -142,7 +145,17 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_REQUEST_MB * 1024 * 1024
 app.config["TRUSTED_HOSTS"] = [
     "127.0.0.1",
     "localhost",
-]
+] + deploy_config.extra_trusted_hosts()   # v0.21.0: ORCH_TRUSTED_HOSTS
+
+# v0.21.0: behind a reverse proxy (Caddy/nginx) set ORCH_PROXY_FIX=1 so the
+# client IP / scheme / host come from X-Forwarded-* of that one proxy only.
+if deploy_config.proxy_hops():
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    _hops = deploy_config.proxy_hops()
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_hops, x_proto=_hops,
+                            x_host=_hops, x_prefix=0)
+
+APP_VERSION = commerce_demo.DEMO_VERSION
 
 CHAT_MAX_HISTORY = 8
 CHAT_MIN_INTERVAL_SECONDS = 3
@@ -217,7 +230,7 @@ BASE_TEMPLATE = """
     name="viewport"
     content="width=device-width, initial-scale=1"
   >
-  <title>{{ title }} · ORCH Operator Console</title>
+  <title>{{ title }} · {{ branding.client_name ~ ' · ' if branding.client_name }}ORCH Operator Console</title>
   <style>
     :root {
       --bg: #120c1d;
@@ -1307,6 +1320,26 @@ BASE_TEMPLATE = """
       color: #fff;
     }
 
+    .brand-logo {
+      height: 28px;
+      margin-right: 8px;
+      max-width: 160px;
+      object-fit: contain;
+      vertical-align: middle;
+    }
+
+    .brand-market {
+      color: #a996bd;
+      font-size: 12px;
+      margin: 2px 0 0;
+    }
+
+    .version-chip {
+      color: #8a769d;
+      margin-left: 10px;
+      white-space: nowrap;
+    }
+
     .site-footer {
       border-top: 1px solid rgba(73, 54, 95, .45);
       color: #8a769d;
@@ -1835,7 +1868,11 @@ BASE_TEMPLATE = """
 </head>
 <body>
   <header>
-    <h1>{{ t.brand }}</h1>
+    <h1 class="brand-title">
+      {% if branding.logo_src %}<img class="brand-logo" src="{{ branding.logo_src }}" alt="" data-brand-logo>{% endif %}
+      {% if branding.client_name %}<span class="brand-client" data-brand-client>{{ branding.client_name }}</span> · {% endif %}{{ t.brand }}
+    </h1>
+    {% if branding.target_market %}<p class="brand-market" data-brand-market>{{ t.brand_market_label }}: {{ branding.target_market }}</p>{% endif %}
     {% if current_user %}
     <nav>
       <a href="/" class="{{ 'active' if active == 'dashboard' }}">
@@ -1914,6 +1951,7 @@ BASE_TEMPLATE = """
   </main>
   <footer class="site-footer">
     <span class="boundary-chip">{{ t.operator_boundary_short }}</span>
+    <span class="version-chip" data-app-version>ORCH · {{ t.footer_version }} {{ app_version }}</span>
   </footer>
   <script>
     document.addEventListener("click", async function(event) {
@@ -2925,6 +2963,8 @@ def render_page(title, active, body_template, **context):
         locale_choices=locale_choices,
         next_path=safe_next_path(request.path),
         current_user=g.get("user"),
+        branding=deploy_config.load_branding(),
+        app_version=APP_VERSION,
     )
 
 
@@ -2932,7 +2972,11 @@ def render_page(title, active, body_template, **context):
 # v0.20.0: local accounts (login required once any account exists)
 # ---------------------------------------------------------------------------
 
-AUTH_OPEN_ENDPOINTS = {"static", "login", "login_post", "set_locale", "setup_required"}
+AUTH_OPEN_ENDPOINTS = {"static", "login", "login_post", "set_locale", "setup_required",
+                       "setup_post", "healthz", "branding_logo"}
+# v0.21.0: reachable before the first account exists (setup mode).
+SETUP_OPEN_ENDPOINTS = {"static", "set_locale", "setup_required", "setup_post", "healthz",
+                        "branding_logo"}
 
 
 def _wants_json():
@@ -2949,7 +2993,7 @@ def require_login():
     _ = request.host  # trusted-host validation (400) runs before any redirect
     endpoint = request.endpoint or ""
     if not orch_auth.has_users():
-        if endpoint in {"static", "set_locale", "setup_required"}:
+        if endpoint in SETUP_OPEN_ENDPOINTS:
             return None
         if _wants_json():
             t = ui_strings(_current_locale())
@@ -2958,9 +3002,11 @@ def require_login():
     user = orch_auth.session_user(session)
     if user:
         g.user = user
-        if endpoint in {"login", "setup_required"}:
+        if endpoint in {"login", "setup_required", "setup_post"}:
             return redirect("/")
         return None
+    if endpoint in {"setup_required", "setup_post"}:
+        return redirect("/login")        # the wizard closes for good
     if endpoint in AUTH_OPEN_ENDPOINTS:
         return None
     if _wants_json():
@@ -3071,18 +3117,105 @@ def logout():
     return redirect("/login")
 
 
-@app.get("/setup")
-def setup_required():
-    t = ui_strings(get_locale())
-    body = """
+SETUP_TEMPLATE = """
   <div class="login-card section" data-setup-required>
     <h2>{{ t.auth_setup_title }}</h2>
     <p>{{ t.auth_setup_intro }}</p>
-    <pre class="draft-body">.venv/bin/python orch_auth.py create-admin</pre>
+    {% if error %}<div class="warning" role="alert" data-setup-error="{{ error }}">{{ t.get('auth_err_' ~ error, t.auth_err_generic) }}</div>{% endif %}
+    <form method="post" action="/setup" class="demo-form login-form" data-setup-form>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label class="demo-field"><span>{{ t.auth_username }}</span>
+        <input type="text" name="username" required maxlength="40" autocomplete="username" value="{{ username }}"></label>
+      <label class="demo-field"><span>{{ t.auth_password }}</span>
+        <input type="password" name="password" required maxlength="128" autocomplete="new-password"></label>
+      <label class="demo-field"><span>{{ t.setup_password_confirm }}</span>
+        <input type="password" name="password_confirm" required maxlength="128" autocomplete="new-password"></label>
+      {% if token_required %}
+      <label class="demo-field"><span>{{ t.setup_token_label }}</span>
+        <input type="password" name="setup_token" required maxlength="200" autocomplete="off"></label>
+      {% endif %}
+      <button type="submit">{{ t.setup_button }}</button>
+    </form>
     <p class="composer-help">{{ t.auth_setup_help }}</p>
+    <p class="composer-help">{{ t.setup_cli_alt }}</p>
+    <pre class="draft-body">python orch_auth.py create-admin</pre>
   </div>
 """
-    return render_page(t["auth_setup_title"], "setup", body), 503
+
+
+def _render_setup(error=None, username="", status=503):
+    t = ui_strings(get_locale())
+    return render_page(
+        t["auth_setup_title"], "setup", SETUP_TEMPLATE, error=error,
+        username=username, token_required=bool(deploy_config.setup_token()),
+    ), status
+
+
+@app.get("/setup")
+def setup_required():
+    # v0.21.0: first-admin wizard. Only while no account exists (the
+    # before_request hook redirects to / afterwards); CLI create-admin stays.
+    return _render_setup()
+
+
+@app.post("/setup")
+def setup_post():
+    csrf_token = get_csrf_token()
+    submitted = request.form.get("csrf_token", "")
+    if (
+        not submitted
+        or len(submitted) != len(csrf_token)
+        or not secrets.compare_digest(csrf_token, submitted)
+    ):
+        abort(400)
+    if orch_auth.has_users():
+        abort(403)
+    username = (request.form.get("username") or "").strip()[:40]
+    password = request.form.get("password") or ""
+    expected = deploy_config.setup_token()
+    if expected:
+        given = request.form.get("setup_token") or ""
+        if not secrets.compare_digest(expected.encode("utf-8"), given.encode("utf-8")):
+            return _render_setup("setup_token", username, 403)
+    if password != (request.form.get("password_confirm") or ""):
+        return _render_setup("password_mismatch", username, 400)
+    try:
+        orch_auth.bootstrap_admin(username, password, actor="web_setup")
+    except orch_auth.AuthError as exc:
+        code = str(exc.args[0]) if exc.args else "generic"
+        if code == "already_bootstrapped":
+            abort(403)
+        return _render_setup(code, username, 400)
+    session["auth_notice"] = "setup_done"
+    return redirect("/login")
+
+
+@app.get("/healthz")
+def healthz():
+    """v0.21.0: unauthenticated liveness + DB check for Docker HEALTHCHECK.
+    Reveals only the version and whether the state DB answers."""
+    try:
+        orch_db.ping(STATUS_FILE)
+        db_ok = True
+    except Exception:
+        db_ok = False
+    body = {"ok": db_ok, "version": APP_VERSION, "db": "ok" if db_ok else "error"}
+    response = jsonify(body)
+    response.headers["Cache-Control"] = "no-store"
+    return response, (200 if db_ok else 503)
+
+
+@app.get("/branding/logo")
+def branding_logo():
+    from flask import send_file
+    path = deploy_config.logo_file(deploy_config.load_branding()["logo"])
+    if path is None:
+        abort(404)
+    response = send_file(path, max_age=300)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    if path.suffix.lower() == ".svg":
+        response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
+    return response
 
 
 @app.post("/locale")
@@ -4159,9 +4292,19 @@ admin_ui.register(
 
 
 
+def startup():
+    """v0.21.0: one-time JSON -> SQLite migration before serving."""
+    for directory in {Path(STATUS_FILE).parent, Path(orch_auth.AUTH_DIR)}:
+        for row in orch_db.migrate(directory):
+            print(f"migrated {row['file']}: {row['records']} record(s) "
+                  f"-> {orch_db.db_path_for(directory)} (backup {row['backup']})",
+                  file=sys.stderr)
+
+
 if __name__ == "__main__":
+    startup()
     app.run(
-        host="127.0.0.1",
-        port=5050,
+        host=os.getenv("ORCH_HOST") or "127.0.0.1",
+        port=int(os.getenv("ORCH_PORT") or 5050),
         debug=False,
     )

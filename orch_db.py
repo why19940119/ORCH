@@ -618,6 +618,15 @@ def export_json(path, out_dir):
     return written
 
 
+def ping(path):
+    """Open (creating/migrating if needed) the DB and run a trivial query."""
+    conn = _open(db_path_for(path))
+    try:
+        return int(conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0])
+    finally:
+        conn.close()
+
+
 def integrity_check(path):
     return _run(path, lambda conn: conn.execute("PRAGMA integrity_check").fetchone()[0])
 

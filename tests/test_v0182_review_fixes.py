@@ -579,7 +579,7 @@ class ZhHantNamingTests(DemoStateSandbox):
 
     def test_version_bumped(self):
         # v0.20.0 (WP-ORCH-11) supersedes v0.19.1 / v0.18.2.
-        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.20.0")
+        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.21.0")
 
 
 # 9. fresh-clone test config ------------------------------------------------
