@@ -1,4 +1,4 @@
-"""ORCH cross-border e-commerce demo pages (v0.18.0).
+"""ORCH cross-border e-commerce demo pages (v0.18.0, i18n v0.18.1).
 
 Registers the seven client-facing modules on the existing Operator
 Console app. All data is SAMPLE data; every AI draft is a pending ORCH
@@ -151,8 +151,8 @@ LANGUAGE_FIELD = """
   <label class="demo-field">
     <span>{{ t.demo_language }}</span>
     <select name="language">
-      <option value="zh-Hant" {% if locale.startswith('zh') %}selected{% endif %}>繁體中文</option>
-      <option value="en" {% if not locale.startswith('zh') %}selected{% endif %}>English</option>
+      <option value="zh-Hant" {% if locale.startswith('zh') %}selected{% endif %}>{{ t.demo_lang_zh_hant }}</option>
+      <option value="en" {% if not locale.startswith('zh') %}selected{% endif %}>{{ t.demo_lang_en }}</option>
     </select>
   </label>
 """
@@ -235,7 +235,7 @@ def sales_hub():
   <div class="section">
     <h3>{{ t.demo_order_leads }}</h3>
     <div class="table-wrap"><table>
-      <tr><th>ID</th><th>SKU</th><th>{{ t.demo_th_qty }}</th><th>{{ t.demo_th_stage }}</th><th>{{ t.demo_th_value }}</th><th>{{ t.demo_th_inquiry }}</th></tr>
+      <tr><th>{{ t.demo_th_id }}</th><th>{{ t.demo_th_sku }}</th><th>{{ t.demo_th_qty }}</th><th>{{ t.demo_th_stage }}</th><th>{{ t.demo_th_value }}</th><th>{{ t.demo_th_inquiry }}</th></tr>
       {% for l in leads %}
         <tr>
           <td>{{ l.id }}</td>
@@ -252,7 +252,7 @@ def sales_hub():
   <div class="section">
     <h3>{{ t.demo_products }} ({{ skus|length }})</h3>
     <div class="table-wrap"><table>
-      <tr><th>SKU</th><th>{{ t.demo_th_name }}</th><th>{{ t.demo_th_category }}</th><th>{{ t.demo_th_price }}</th><th>{{ t.demo_th_stock }}</th></tr>
+      <tr><th>{{ t.demo_th_sku }}</th><th>{{ t.demo_th_name }}</th><th>{{ t.demo_th_category }}</th><th>{{ t.demo_th_price }}</th><th>{{ t.demo_th_stock }}</th></tr>
       {% for s in skus %}
         <tr>
           <td>{{ s.sku }}</td>
@@ -283,7 +283,7 @@ def content_studio():
     <h3>{{ t.demo_content_draft_title }}</h3>
     <form method="post" action="/demo/draft" class="demo-form">
       <input type="hidden" name="kind" value="content">
-      <label class="demo-field"><span>SKU</span>
+      <label class="demo-field"><span>{{ t.demo_th_sku }}</span>
         <select name="sku">
           {% for s in skus %}<option value="{{ s.sku }}">{{ s.sku }} · {{ s.name_zh if locale.startswith('zh') else s.name_en }}</option>{% endfor %}
         </select>
@@ -313,7 +313,7 @@ def knowledge_base():
   <div class="section">
     <h3>{{ t.demo_kb_policies }}</h3>
     <div class="table-wrap"><table>
-      <tr><th>ID</th><th>{{ t.demo_th_section }}</th><th>{{ t.demo_th_entry }}</th><th>{{ t.demo_th_version }}</th><th>{{ t.demo_th_approved_by }}</th></tr>
+      <tr><th>{{ t.demo_th_id }}</th><th>{{ t.demo_th_section }}</th><th>{{ t.demo_th_entry }}</th><th>{{ t.demo_th_version }}</th><th>{{ t.demo_th_approved_by }}</th></tr>
       {% for e in entries %}
         <tr>
           <td>{{ e.id }}</td>
@@ -358,7 +358,7 @@ def knowledge_base():
   <div class="section">
     <h3>{{ t.demo_kb_specs }} ({{ skus|length }})</h3>
     <div class="table-wrap"><table>
-      <tr><th>SKU</th><th>{{ t.demo_th_name }}</th><th>{{ t.demo_th_facts }}</th><th>{{ t.demo_th_claims }}</th></tr>
+      <tr><th>{{ t.demo_th_sku }}</th><th>{{ t.demo_th_name }}</th><th>{{ t.demo_th_facts }}</th><th>{{ t.demo_th_claims }}</th></tr>
       {% for s in skus %}
         <tr><td>{{ s.sku }}</td><td>{{ s.name_zh if locale.startswith('zh') else s.name_en }}</td><td>{{ s.approved_facts|join(' · ') }}</td><td class="muted">{{ s.claims_policy }}</td></tr>
       {% endfor %}
@@ -389,8 +389,8 @@ def lead_desk():
         <span>{{ t.demo_language }}</span>
         <select name="language">
           <option value="auto" selected>{{ t.demo_lang_auto }}</option>
-          <option value="zh-Hant">繁體中文</option>
-          <option value="en">English</option>
+          <option value="zh-Hant">{{ t.demo_lang_zh_hant }}</option>
+          <option value="en">{{ t.demo_lang_en }}</option>
         </select>
       </label>
       """ + OPERATOR_FIELDS + DRAFT_SUBMIT + """
@@ -401,7 +401,7 @@ def lead_desk():
     <h3>{{ t.demo_inquiry_triage }}</h3>
     <p class="composer-help">{{ t.demo_triage_note }}</p>
     <div class="table-wrap"><table>
-      <tr><th>{{ t.demo_th_score }}</th><th>ID</th><th>{{ t.demo_th_category }}</th><th>{{ t.demo_th_channel }}</th><th>{{ t.demo_th_customer }}</th><th>{{ t.demo_th_message }}</th></tr>
+      <tr><th>{{ t.demo_th_score }}</th><th>{{ t.demo_th_id }}</th><th>{{ t.demo_th_category }}</th><th>{{ t.demo_th_channel }}</th><th>{{ t.demo_th_customer }}</th><th>{{ t.demo_th_message }}</th></tr>
       {% for r in rows %}
         <tr id="{{ r.id }}">
           <td><span class="badge {{ 'waiting_approval' if r.triage.priority == 'high' else ('running' if r.triage.priority == 'medium' else 'todo') }}">{{ r.triage.score }} · {{ t.get('prio_' ~ r.triage.priority, r.triage.priority) }}</span></td>
@@ -430,7 +430,7 @@ def campaign_engine():
     <h3>{{ t.demo_campaign_draft_title }}</h3>
     <form method="post" action="/demo/draft" class="demo-form">
       <input type="hidden" name="kind" value="campaign">
-      <label class="demo-field"><span>SKU</span>
+      <label class="demo-field"><span>{{ t.demo_th_sku }}</span>
         <select name="sku">{% for s in skus %}<option value="{{ s.sku }}">{{ s.sku }} · {{ s.name_zh if locale.startswith('zh') else s.name_en }}</option>{% endfor %}</select>
       </label>
       <label class="demo-field"><span>{{ t.demo_audience }}</span>

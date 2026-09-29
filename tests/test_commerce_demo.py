@@ -466,9 +466,128 @@ class DemoI18nTests(unittest.TestCase):
 
     def test_zh_hant_stays_default_and_uses_client_names(self):
         strings = ui_strings(None)
-        self.assertEqual(strings["nav_sales"], "Sales Hub")
-        self.assertEqual(strings["mod_approval_inbox_title"], "Approval Inbox")
+        self.assertEqual(strings["nav_sales"], "銷售中心")
+        self.assertEqual(strings["mod_approval_inbox_title"], "審批收件箱")
         self.assertIn("示範數據", strings["demo_sample_badge"])
+        self.assertEqual(ui_strings("en")["nav_sales"], "Sales Hub")
+
+
+# v0.18.1: zh-Hant / zh-Hans module names and page labels are localised.
+ENGLISH_MODULE_NAMES = (
+    "Sales Hub", "Content Studio", "Knowledge Base", "Lead Desk",
+    "Campaign Engine", "Market Dashboard", "Approval Inbox", "Audit Log",
+)
+
+EXPECTED_ZH_HANT_NAV = {
+    "nav_sales": "銷售中心",
+    "nav_content": "內容工作室",
+    "nav_knowledge": "知識庫",
+    "nav_leads": "線索處理",
+    "nav_campaigns": "推廣活動",
+    "nav_market": "市場儀表板",
+    "nav_inbox": "審批收件箱",
+    "nav_audit": "審計紀錄",
+}
+
+V0181_KEYS = (
+    "demo_th_id", "demo_th_sku", "demo_lang_zh_hant", "demo_lang_en",
+)
+
+
+class DemoI18nV0181Tests(unittest.TestCase):
+    def test_new_keys_exist_in_every_locale(self):
+        for code in SUPPORTED_LOCALES:
+            strings = ui_strings(code)
+            for key in V0181_KEYS + tuple(EXPECTED_ZH_HANT_NAV):
+                self.assertIn(key, strings, (code, key))
+                self.assertTrue(strings[key].strip(), (code, key))
+
+    def test_zh_hant_nav_names(self):
+        strings = ui_strings("zh-Hant")
+        for key, value in EXPECTED_ZH_HANT_NAV.items():
+            self.assertEqual(strings[key], value, key)
+
+    def test_chinese_locales_have_no_english_module_names(self):
+        for code in ("zh-Hant", "zh-Hans"):
+            strings = ui_strings(code)
+            for key, value in strings.items():
+                for name in ENGLISH_MODULE_NAMES:
+                    self.assertNotIn(name, value, (code, key))
+
+    def test_demo_strings_are_translated(self):
+        english = ui_strings("en")
+        allowed_same = {"advisory_not_enabled", "ch_whatsapp"}
+        for code in ("zh-Hant", "zh-Hans"):
+            strings = ui_strings(code)
+            same = sorted(
+                key for key, value in strings.items()
+                if value == english[key] and key not in allowed_same
+            )
+            self.assertEqual(same, [], code)
+
+    def test_commerce_templates_have_no_hardcoded_labels(self):
+        source = (PROJECT_ROOT / "commerce_ui.py").read_text(encoding="utf-8")
+        for literal in ("<th>ID</th>", "<th>SKU</th>", "<span>SKU</span>",
+                        ">English</option>", ">繁體中文</option>"):
+            self.assertNotIn(literal, source)
+
+
+class DemoZhHantRenderingTests(DemoSandbox):
+    def test_default_locale_renders_zh_hant_nav_and_titles(self):
+        for path in DEMO_PAGES:
+            html = self.client.get(path).get_data(as_text=True)
+            for value in EXPECTED_ZH_HANT_NAV.values():
+                self.assertIn(value, html, path)
+            for name in ENGLISH_MODULE_NAMES:
+                self.assertNotIn(name, html, (path, name))
+        html = self.client.get("/sales").get_data(as_text=True)
+        self.assertIn("ORCH 銷售中心", html)
+        self.assertIn("貨號（SKU）", html)
+
+    def test_english_locale_still_renders_english_nav(self):
+        with self.client.session_transaction() as stored:
+            stored["locale"] = "en"
+        html = self.client.get("/sales").get_data(as_text=True)
+        self.assertIn("Sales Hub", html)
+        self.assertIn("Approval Inbox", html)
+
+
+class DemoChatContextTests(unittest.TestCase):
+    QUESTION = "SAMPLE-001・竹纖維毛巾套裝（2 條）係咩？"
+
+    def test_sample_001_is_included(self):
+        context = commerce_demo.chat_context(self.QUESTION)
+        self.assertEqual(context["scope"], "read_only_sample_data")
+        self.assertEqual(context["mentioned_ids"], ["SAMPLE-001"])
+        sku = context["matching_skus"][0]
+        self.assertEqual(sku["sku"], "SAMPLE-001")
+        self.assertEqual(sku["name_zh"], "竹纖維毛巾套裝（2 條）")
+        self.assertEqual(sku["list_price_hkd"], 199)
+        self.assertIn("INQ-S-002", [i["id"] for i in context["matching_inquiries"]])
+        self.assertIn("LEAD-S-001", [lead["id"] for lead in context["matching_leads"]])
+
+    def test_id_touching_cjk_and_keyword_matches(self):
+        self.assertEqual(
+            commerce_demo.chat_context("SAMPLE-001係咩")["mentioned_ids"],
+            ["SAMPLE-001"],
+        )
+        by_name = commerce_demo.chat_context("竹纖維毛巾幾耐送到？")
+        self.assertIn("SAMPLE-001", [s["sku"] for s in by_name["matching_skus"]])
+        self.assertIn("KB-LOG-01", [k["id"] for k in by_name["matching_kb_entries"]])
+
+    def test_unknown_id_is_unresolved(self):
+        context = commerce_demo.chat_context("SAMPLE-999 有冇貨？")
+        self.assertEqual(context["unresolved_ids"], ["SAMPLE-999"])
+        self.assertEqual(context["matching_skus"], [])
+
+    def test_context_is_compact_and_secret_free(self):
+        context = commerce_demo.chat_context(self.QUESTION)
+        text = json.dumps(context, ensure_ascii=False)
+        self.assertLess(len(text), 8000)
+        self.assertEqual(context["catalog_summary"]["sku_count"], 30)
+        for forbidden in ("OPENROUTER", "api_key", "ORCH_UI_SECRET_KEY", "sk-or-"):
+            self.assertNotIn(forbidden, text)
+        self.assertLessEqual(len(context["matching_skus"]), commerce_demo.CHAT_MAX_SKUS)
 
 
 if __name__ == "__main__":

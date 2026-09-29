@@ -54,6 +54,59 @@ class OrchChatModePromptTests(unittest.TestCase):
         self.assertIn('execution_authority": "none"', system)
         self.assertIn("General\nConversation mode", system)
 
+    def test_orch_context_prompt_covers_ecommerce_sample_data(self):
+        self.assertIn("ecommerce_demo", ORCH_CONTEXT_SYSTEM_PROMPT)
+        self.assertIn("ARE in scope", ORCH_CONTEXT_SYSTEM_PROMPT)
+        self.assertIn("Approval Inbox", ORCH_CONTEXT_SYSTEM_PROMPT)
+
+    def test_locale_instruction_is_appended(self):
+        for mode in ("orch_context", "general"):
+            messages = build_messages(
+                question="SAMPLE-001係咩？",
+                mode=mode,
+                context={"ecommerce_demo": {}},
+                history=[],
+                locale="zh-Hant",
+            )
+            system = messages[0]["content"]
+            self.assertIn("UI_LOCALE: zh-Hant", system)
+            self.assertIn("Traditional Chinese", system)
+            self.assertIn("refusals", system)
+            self.assertIn('execution_authority": "none"', system)
+
+    def test_unknown_locale_adds_nothing(self):
+        messages = build_messages(
+            question="hi", mode="orch_context", context={}, history=[],
+            locale="xx",
+        )
+        self.assertEqual(messages[0]["content"], ORCH_CONTEXT_SYSTEM_PROMPT)
+
+    def test_ask_orch_sends_locale_without_network(self):
+        from unittest.mock import patch, MagicMock
+        import json as _json
+        import orch_chat
+
+        body = _json.dumps({
+            "id": "r1", "model": "m",
+            "choices": [{"message": {"content": _json.dumps({
+                "answer": "示範商品。", "referenced_task_ids": [],
+                "referenced_artifact_ids": [], "limitations": [],
+                "execution_authority": "none",
+            })}}],
+        }).encode("utf-8")
+        response = MagicMock()
+        response.read.return_value = body
+        response.__enter__.return_value = response
+        with patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}), \
+             patch.object(orch_chat.urllib.request, "urlopen", return_value=response) as urlopen:
+            result = orch_chat.ask_orch(
+                "SAMPLE-001係咩？", "orch_context", {"ecommerce_demo": {}}, [],
+                locale="zh-Hant",
+            )
+        payload = _json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
+        self.assertIn("UI_LOCALE: zh-Hant", payload["messages"][0]["content"])
+        self.assertEqual(result["chat"]["answer"], "示範商品。")
+
     def test_validate_rejects_non_none_authority(self):
         with self.assertRaisesRegex(
             Exception,

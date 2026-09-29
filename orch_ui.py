@@ -43,6 +43,7 @@ from chat_attachments import (
     history_attachment_meta,
     process_uploaded_files,
 )
+import commerce_demo
 import commerce_ui
 
 
@@ -2488,6 +2489,17 @@ def chat_task_summary(task, statuses):
     }
 
 
+def build_demo_chat_context(question=""):
+    """v0.18.1: allowlisted, read-only e-commerce SAMPLE data for Chat."""
+    try:
+        return commerce_demo.chat_context(question)
+    except Exception:
+        return {
+            "scope": "read_only_sample_data",
+            "available": False,
+        }
+
+
 def build_chat_context(question=""):
     statuses = load_statuses()
     source_tasks = load_tasks()
@@ -2551,7 +2563,7 @@ def build_chat_context(question=""):
     ]
 
     return {
-        "context_version": "1.1",
+        "context_version": "1.2",
         "scope": "read_only_operator_summary",
         "task_lookup": {
             "lookup_type": (
@@ -2567,8 +2579,10 @@ def build_chat_context(question=""):
         },
         "tasks": tasks,
         "latest_events": latest_events,
+        "ecommerce_demo": build_demo_chat_context(question),
         "limitations": [
             "Task lookup uses exact task_id matches only.",
+            "ecommerce_demo is read-only SAMPLE data from demo/sample_data.json.",
             "No raw artifact payloads are included.",
             "No environment variables are included.",
             "No API keys are included.",
@@ -3402,6 +3416,7 @@ def chat_page():
                     context=context,
                     history=history,
                     attachments=attachments,
+                    locale=get_locale(),
                 )
 
             except ChatProviderError as error_value:

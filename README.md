@@ -40,6 +40,8 @@ v0.16       Local Operator Console (dashboard, tasks, events, artifacts, chat, i
 v0.17       Chat attachments engine (chat_attachments + orch_chat vision)
 v0.18       Cross-border e-commerce demo (7 modules, Approval Inbox + Audit Log),
             chat upload wiring
+v0.18.1     zh-Hant/zh-Hans module names (銷售中心 … 審計紀錄), demo sample
+            data in ORCH Context chat, chat replies follow the UI locale
 ```
 
 ## Core Architecture
@@ -493,6 +495,16 @@ Files are validated and contained under `uploads/chat/` (gitignored) by
 audit artifact keep metadata only (name, kind, mime, size, sha256),
 never bytes or stored paths. A rejected file is shown as a normal user
 error.
+
+ORCH Context chat and the e-commerce demo (v0.18.1): `build_chat_context`
+adds an `ecommerce_demo` block from `commerce_demo.chat_context`. It is a
+compact, read-only slice of `demo/sample_data.json`: SKUs, inquiries,
+order leads and Knowledge Base entries whose IDs (for example
+`SAMPLE-001`, `INQ-S-002`) or names/keywords appear in the question,
+plus a one-line-per-SKU catalog summary. No secrets, no state writes,
+no execution authority. The UI locale is passed to `ask_orch(locale=...)`
+so answers, refusals and guidance come back in the user's language
+(zh-Hant by default).
 
 ## Cross-border e-commerce demo
 

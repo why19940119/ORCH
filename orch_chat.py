@@ -165,6 +165,17 @@ context (or purely off-topic questions with no ORCH data), say you
 cannot answer from the provided context and suggest General
 Conversation mode for non-ORCH questions.
 
+ORCH_CONTEXT.ecommerce_demo is allowlisted, read-only SAMPLE data from
+the cross-border e-commerce demo (SKUs/products, customer inquiries,
+order leads, Knowledge Base policies, catalog summary). Questions about
+these SKUs, inquiries, leads or policies ARE in scope: answer them
+directly from matching_skus, matching_inquiries, matching_leads,
+matching_kb_entries and catalog_summary, and say the values are sample
+data. Only cite approved_facts for product claims. If an ID is listed
+in unresolved_ids, say it is not in the sample data. You may suggest
+next steps or draft wording, but pricing, discounts, refunds and any
+outward message still need a named person in the Approval Inbox.
+
 You have no tools and no authority to execute commands, approve
 tasks, modify task state, create tasks, edit policies, access
 environment variables, reveal API keys, call connectors, or write
@@ -302,16 +313,51 @@ def _build_user_content(question, mode, context, attachments):
     return parts
 
 
-def build_messages(question, mode, context, history, attachments=None):
+LOCALE_LANGUAGE_NAMES = {
+    "zh-Hant": "Traditional Chinese",
+    "zh-Hans": "Simplified Chinese",
+    "en": "English",
+}
+
+
+def locale_instruction(locale):
+    """v0.18.1: answers, refusals and guidance follow the user / UI locale."""
+    language = LOCALE_LANGUAGE_NAMES.get(locale)
+    if not language:
+        return ""
+    return (
+        f"UI_LOCALE: {locale} ({language}).\n"
+        "Write the answer and every limitations entry in the language of "
+        "the user's message. If that is unclear (for example only IDs or "
+        f"mixed text), use {language}. This also applies to refusals, "
+        "scope notes and guidance such as suggesting General Conversation "
+        "mode or the Approval Inbox. Cantonese questions may be answered "
+        "in Cantonese-style Traditional Chinese. Keep the JSON keys and "
+        "the value "
+        '"none" for execution_authority in English.'
+    )
+
+
+def build_system_prompt(mode, locale=None):
+    if mode == "orch_context":
+        system_prompt = ORCH_CONTEXT_SYSTEM_PROMPT
+    else:
+        system_prompt = GENERAL_SYSTEM_PROMPT
+    extra = locale_instruction(locale)
+    if extra:
+        system_prompt = system_prompt + "\n\n" + extra
+    return system_prompt
+
+
+def build_messages(
+    question, mode, context, history, attachments=None, locale=None
+):
     if mode not in ALLOWED_MODES:
         raise ChatProviderError(
             f"Unsupported chat mode: {mode}"
         )
 
-    if mode == "orch_context":
-        system_prompt = ORCH_CONTEXT_SYSTEM_PROMPT
-    else:
-        system_prompt = GENERAL_SYSTEM_PROMPT
+    system_prompt = build_system_prompt(mode, locale)
 
     messages = [
         {
@@ -352,7 +398,9 @@ def build_messages(question, mode, context, history, attachments=None):
     return messages
 
 
-def ask_orch(question, mode, context, history, attachments=None):
+def ask_orch(
+    question, mode, context, history, attachments=None, locale=None
+):
     if question is None:
         question = ""
     if not isinstance(question, str):
@@ -386,6 +434,7 @@ def ask_orch(question, mode, context, history, attachments=None):
             context,
             history,
             attachments=attachments,
+            locale=locale,
         ),
         "temperature": temperature,
         "stream": False,

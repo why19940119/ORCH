@@ -49,7 +49,7 @@ TASK_PREFIX = "task_ecom_"
 DRAFT_LOGICAL_PREFIX = "ecom_draft_"
 AUDIT_LOGICAL_NAME = "ecom_audit"
 AUDIT_SCHEMA_VERSION = "1.0"
-DEMO_VERSION = "v0.18.0"
+DEMO_VERSION = "v0.18.1"
 
 MAX_DRAFT_CHARS = 4000
 MAX_NOTE_CHARS = 300
@@ -162,6 +162,215 @@ def sku_name(sku, locale):
 # ---------------------------------------------------------------------------
 # Lead Desk: deterministic classification + scoring (AI-assist stand-in)
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# v0.18.1: read-only allowlisted sample-data context for Chat (orch_context).
+# Compact by design: exact ID / keyword matches plus a short catalog summary.
+# Only fields from demo/sample_data.json; no secrets, no ORCH state writes.
+# ---------------------------------------------------------------------------
+
+CHAT_ID_PATTERN = re.compile(
+    # Lookarounds instead of \b: CJK text often touches the ID ("SAMPLE-001係咩").
+    r"(?<![A-Za-z0-9-])(SAMPLE-\d{3}|INQ-S-\d{3}|LEAD-S-\d{3}|KB-[A-Z]{3}-\d{2})(?![0-9])",
+    re.IGNORECASE,
+)
+CHAT_MAX_SKUS = 5
+CHAT_MAX_INQUIRIES = 5
+CHAT_MAX_LEADS = 5
+CHAT_MAX_KB = 4
+CHAT_TEXT_LIMIT = 240
+
+CHAT_KB_KEYWORDS = {
+    "logistics": (
+        "ship", "shipping", "deliver", "delivery", "dispatch", "courier",
+        "運", "寄", "送貨", "送到", "物流", "出貨", "发货", "出货",
+    ),
+    "returns": (
+        "return", "refund", "exchange", "defect",
+        "退", "換貨", "换货", "瑕疵",
+    ),
+    "payment": (
+        "pay", "payment", "bank transfer", "card",
+        "付款", "付錢", "轉賬", "转账", "信用卡", "支付",
+    ),
+}
+
+
+def _chat_clip(value, limit=CHAT_TEXT_LIMIT):
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _name_stem(name):
+    # "竹纖維毛巾套裝（2 條）" -> "竹纖維毛巾套裝"; "Towel set (2 pcs)" -> "towel set"
+    return re.split(r"[（(]", str(name or ""), maxsplit=1)[0].strip().lower()
+
+
+def _chat_sku(item):
+    return {
+        "sku": item["sku"],
+        "name_en": item.get("name_en"),
+        "name_zh": item.get("name_zh"),
+        "category": item.get("category"),
+        "material": item.get("material"),
+        "size": item.get("size"),
+        "weight_g": item.get("weight_g"),
+        "list_price_hkd": item.get("list_price_hkd"),
+        "stock_units": item.get("stock_units"),
+        "approved_facts": list(item.get("approved_facts") or [])[:6],
+        "claims_policy": _chat_clip(item.get("claims_policy")),
+    }
+
+
+def _chat_inquiry(item):
+    return {
+        "id": item["id"],
+        "channel": item.get("channel"),
+        "lang": item.get("lang"),
+        "customer": item.get("customer"),
+        "sku": item.get("sku"),
+        "text": _chat_clip(item.get("text")),
+        "triage": classify_inquiry(item),
+    }
+
+
+def _chat_lead(item):
+    return {
+        key: item.get(key)
+        for key in ("id", "inquiry_id", "sku", "qty", "stage", "est_value_hkd", "owner")
+    }
+
+
+def _chat_kb(item):
+    return {
+        "id": item["id"],
+        "section": item.get("section"),
+        "title_en": item.get("title_en"),
+        "title_zh": item.get("title_zh"),
+        "body_en": _chat_clip(item.get("body_en")),
+        "body_zh": _chat_clip(item.get("body_zh")),
+        "version": item.get("version"),
+    }
+
+
+def chat_context(question="", data=None):
+    """Compact, read-only slice of the SAMPLE demo data for ORCH Chat."""
+    data = data or load_sample_data()
+    question = str(question or "")
+    lowered = question.lower()
+
+    skus = sku_index(data)
+    inquiries = inquiry_index(data)
+    leads = lead_index(data)
+    kb = {entry["id"]: entry for entry in kb_entries(data)}
+
+    mentioned = []
+    for match in CHAT_ID_PATTERN.findall(question):
+        ident = match.upper()
+        if ident not in mentioned:
+            mentioned.append(ident)
+
+    sku_ids, inquiry_ids, lead_ids, kb_ids = [], [], [], []
+
+    def _add(bucket, value):
+        if value and value not in bucket:
+            bucket.append(value)
+
+    for ident in mentioned:
+        if ident in skus:
+            _add(sku_ids, ident)
+        elif ident in inquiries:
+            _add(inquiry_ids, ident)
+        elif ident in leads:
+            _add(lead_ids, ident)
+        elif ident in kb:
+            _add(kb_ids, ident)
+
+    # Keyword match on product names (zh / en stem) when no explicit SKU id.
+    for sku_id, item in skus.items():
+        en_stem = _name_stem(item.get("name_en"))
+        zh_stem = _name_stem(item.get("name_zh"))
+        zh_windows = {
+            zh_stem[i:i + 4] for i in range(max(len(zh_stem) - 3, 0))
+        }
+        if (len(en_stem) >= 5 and en_stem in lowered) or any(
+            window in question for window in zh_windows
+        ):
+            _add(sku_ids, sku_id)
+
+    for section, words in CHAT_KB_KEYWORDS.items():
+        if any(word in lowered for word in words):
+            for entry_id, entry in kb.items():
+                if entry["section"] == section:
+                    _add(kb_ids, entry_id)
+
+    # Pull in directly related records (inquiry -> sku / lead, sku -> inquiries / leads).
+    for inquiry_id in list(inquiry_ids):
+        _add(sku_ids, inquiries[inquiry_id].get("sku"))
+        for lead in data["order_leads"]:
+            if lead.get("inquiry_id") == inquiry_id:
+                _add(lead_ids, lead["id"])
+    for lead_id in list(lead_ids):
+        _add(inquiry_ids, leads[lead_id].get("inquiry_id"))
+        _add(sku_ids, leads[lead_id].get("sku"))
+    for sku_id in list(sku_ids[:CHAT_MAX_SKUS]):
+        for inquiry in data["inquiries"]:
+            if inquiry.get("sku") == sku_id:
+                _add(inquiry_ids, inquiry["id"])
+        for lead in data["order_leads"]:
+            if lead.get("sku") == sku_id:
+                _add(lead_ids, lead["id"])
+
+    unresolved = [
+        ident for ident in mentioned
+        if ident not in skus and ident not in inquiries
+        and ident not in leads and ident not in kb
+    ]
+    meta = data.get("_meta", {})
+
+    return {
+        "scope": "read_only_sample_data",
+        "dataset": "demo/sample_data.json",
+        "sample_data_notice": (
+            "All brand, SKU, customer, price, KPI and policy values are "
+            "fictional SAMPLE data for the e-commerce demo."
+        ),
+        "meta": {
+            key: meta.get(key)
+            for key in ("brand", "target_market", "currency", "version")
+        },
+        "mentioned_ids": mentioned,
+        "unresolved_ids": unresolved,
+        "matching_skus": [
+            _chat_sku(skus[i]) for i in sku_ids if i in skus
+        ][:CHAT_MAX_SKUS],
+        "matching_inquiries": [
+            _chat_inquiry(inquiries[i]) for i in inquiry_ids if i in inquiries
+        ][:CHAT_MAX_INQUIRIES],
+        "matching_leads": [
+            _chat_lead(leads[i]) for i in lead_ids if i in leads
+        ][:CHAT_MAX_LEADS],
+        "matching_kb_entries": [
+            _chat_kb(kb[i]) for i in kb_ids if i in kb
+        ][:CHAT_MAX_KB],
+        "catalog_summary": {
+            "sku_count": len(data["skus"]),
+            "inquiry_count": len(data["inquiries"]),
+            "lead_count": len(data["order_leads"]),
+            "kb_entry_count": len(kb),
+            "skus": [
+                f"{item['sku']} | {item.get('name_zh', '')} | "
+                f"{item.get('name_en', '')} | HK${item.get('list_price_hkd')}"
+                for item in data["skus"]
+            ],
+        },
+        "rules": [
+            "Advisory only: no publishing, pricing, refund or discount decision.",
+            "Outward messages must be drafted in a module and approved by a named person in the Approval Inbox.",
+            "Use only approved_facts for product claims.",
+        ],
+    }
+
 
 INQUIRY_RULES = (
     ("refund", ("refund", "return", "torn", "broken", "defect", "退款",

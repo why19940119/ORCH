@@ -791,6 +791,87 @@ class TaskAwareChatContextTests(unittest.TestCase):
         )
 
 
+class OrchChatDemoContextTests(unittest.TestCase):
+    """v0.18.1: orch_context carries read-only e-commerce sample data."""
+
+    QUESTION = "SAMPLE-001・竹纖維毛巾套裝（2 條）係咩？"
+
+    def setUp(self):
+        app.config["TESTING"] = True
+        CHAT_SESSIONS.clear()
+        self.client = app.test_client()
+
+    def test_build_chat_context_includes_sample_001(self):
+        context = build_chat_context(self.QUESTION)
+        demo = context["ecommerce_demo"]
+        self.assertEqual(demo["scope"], "read_only_sample_data")
+        self.assertEqual(demo["matching_skus"][0]["sku"], "SAMPLE-001")
+        self.assertEqual(
+            demo["matching_skus"][0]["name_zh"], "竹纖維毛巾套裝（2 條）"
+        )
+        text = json.dumps(context, ensure_ascii=False)
+        self.assertNotIn("OPENROUTER_API_KEY", text)
+        self.assertNotIn("ORCH_UI_SECRET_KEY", text)
+
+    @patch("orch_ui.publish_chat_audit_artifact")
+    @patch("orch_ui.record_chat_usage")
+    @patch("orch_ui.ask_orch")
+    def test_orch_context_chat_passes_demo_data_and_locale(
+        self, mock_ask_orch, mock_record_usage, mock_publish_audit
+    ):
+        mock_publish_audit.return_value = {"artifact_id": "artifact_chat_demo"}
+        mock_ask_orch.return_value = {
+            "provider": "openrouter",
+            "requested_model": "m",
+            "response_model": "m",
+            "response_id": "chat-demo-001",
+            "usage": {"total_tokens": 0, "cost": 0},
+            "chat": {
+                "answer": "SAMPLE-001 係示範商品：竹纖維毛巾套裝（2 條）。",
+                "referenced_task_ids": [],
+                "referenced_artifact_ids": [],
+                "limitations": ["示範數據"],
+                "execution_authority": "none",
+            },
+        }
+        self.client.get("/chat")
+        with self.client.session_transaction() as stored:
+            csrf_token = stored["csrf_token"]
+        response = self.client.post(
+            "/chat",
+            data={
+                "csrf_token": csrf_token,
+                "mode": "orch_context",
+                "question": self.QUESTION,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        kwargs = mock_ask_orch.call_args.kwargs
+        self.assertEqual(kwargs["mode"], "orch_context")
+        self.assertEqual(kwargs["locale"], "zh-Hant")
+        demo = kwargs["context"]["ecommerce_demo"]
+        self.assertIn("SAMPLE-001", [s["sku"] for s in demo["matching_skus"]])
+        mock_publish_audit.assert_called_once()
+
+    @patch("orch_ui.publish_chat_audit_artifact")
+    @patch("orch_ui.record_chat_usage")
+    @patch("orch_ui.ask_orch")
+    def test_chat_locale_follows_ui_locale(
+        self, mock_ask_orch, mock_record_usage, mock_publish_audit
+    ):
+        mock_publish_audit.return_value = {"artifact_id": "artifact_chat_demo"}
+        mock_ask_orch.side_effect = RuntimeError("stop")
+        self.client.get("/chat")
+        with self.client.session_transaction() as stored:
+            stored["locale"] = "en"
+            csrf_token = stored["csrf_token"]
+        self.client.post(
+            "/chat",
+            data={"csrf_token": csrf_token, "mode": "general", "question": "hi"},
+        )
+        self.assertEqual(mock_ask_orch.call_args.kwargs["locale"], "en")
+
+
 class OrchUiSecretAndCookieTests(unittest.TestCase):
     def test_session_cookie_flags(self):
         self.assertIs(app.config["SESSION_COOKIE_HTTPONLY"], True)
