@@ -422,9 +422,14 @@ class ChatDataSourceUiTests(ImportSandbox):
         html = self.client.get("/chat").get_data(as_text=True)
         self.assertIn('class="composer-help chat-data-source" role="note"', html)
         css = html.split(".chat-page p.chat-data-source {", 1)[1].split("}", 1)[0]
-        for rule in ("font-size: 12px", "line-height: 1.5", "margin: 12px 2px 12px",
+        for rule in ("font-size: 12px", "line-height: 1.5", "margin: 2px 4px 12px",
                      "overflow-wrap: anywhere", "white-space: normal"):
             self.assertIn(rule, css)
+        # Full-width line above the controls, not an item of the 3-column grid.
+        form = html.split('id="chat-form"', 1)[1]
+        self.assertLess(form.index("chat-data-source"), form.index('class="composer-grid"'))
+        grid = form.split('class="composer-grid"', 1)[1].split("</form>", 1)[0]
+        self.assertNotIn("chat-data-source", grid)
 
     def test_i18n_parity_and_version(self):
         keys = {code: set(ui_strings(code)) for code in SUPPORTED_LOCALES}

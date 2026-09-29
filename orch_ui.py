@@ -1710,11 +1710,10 @@ BASE_TEMPLATE = """
       font-size: 12px;
       font-weight: 400;
       line-height: 1.5;
-      margin: 12px 2px 12px;
+      margin: 2px 4px 12px;
       max-width: 100%;
       overflow-wrap: anywhere;
       white-space: normal;
-      flex-basis: 100%;
     }
 
     .import-notices { list-style: none; margin: 10px 0 0; padding: 0; }
@@ -4066,6 +4065,11 @@ def chat_page():
             accept="{{ attachment_accept }}"
           >
 
+          {# v0.20.1: full-width help line above the controls (it used to be
+             a grid item and squeezed the textarea / send button). #}
+          <p class="composer-help chat-data-source" role="note" data-chat-data-source="{{ chat_data_source.kind }}">
+            {% if chat_data_source.kind == 'imported' %}{{ t.chat_data_imported.format(date=chat_data_source.as_of or '—') }}{% else %}{{ t.chat_data_sample }}{% endif %}
+          </p>
           <div class="composer-grid">
             <div class="composer-tools">
             <button
@@ -4101,9 +4105,6 @@ def chat_page():
             </div>
             </div>
 
-            <p class="composer-help chat-data-source" role="note" data-chat-data-source="{{ chat_data_source.kind }}">
-              {% if chat_data_source.kind == 'imported' %}{{ t.chat_data_imported.format(date=chat_data_source.as_of or '—') }}{% else %}{{ t.chat_data_sample }}{% endif %}
-            </p>
             <textarea
               id="question"
               name="question"
