@@ -727,6 +727,84 @@ def compute_metrics(state=None, today=None):
             key=lambda row: (-row["revenue"], -row["units"], row["sku"]),
         )
 
+    # v0.20.1: complete weekly series with the date range each (possibly
+    # partial) ISO week actually covers inside the order period.
+    if order_dates:
+        first_day = date.fromisoformat(order_dates[0])
+        last_day = date.fromisoformat(order_dates[-1])
+        for row in revenue_by_week:
+            monday = date.fromisoformat(row["week_start"])
+            start = max(monday, first_day)
+            end = min(monday + timedelta(days=6), last_day)
+            row["covered_start"] = start.isoformat()
+            row["covered_end"] = end.isoformat()
+            row["covered_days"] = (end - start).days + 1
+            row["partial"] = row["covered_days"] < 7
+
+    # v0.20.1: weekly_series has every ISO week of the order period, weeks
+    # without orders included (revenue_by_week keeps only weeks with orders).
+    weekly_series = []
+    if order_dates:
+        by_label = {row["week"]: row for row in revenue_by_week}
+        monday = first_day - timedelta(days=first_day.weekday())
+        while monday <= last_day:
+            label, _ = _iso_week(monday.isoformat())
+            start = max(monday, first_day)
+            end = min(monday + timedelta(days=6), last_day)
+            row = by_label.get(label) or {"revenue": 0.0, "orders": 0, "units": 0}
+            weekly_series.append({
+                "week": label, "week_start": monday.isoformat(),
+                "covered_start": start.isoformat(), "covered_end": end.isoformat(),
+                "covered_days": (end - start).days + 1,
+                "partial": (end - start).days + 1 < 7,
+                "revenue": row["revenue"], "orders": row["orders"], "units": row["units"],
+            })
+            monday += timedelta(days=7)
+
+    # v0.20.1: precomputed period totals (the model must not do arithmetic).
+    period_totals = {}
+    if order_dates:
+        as_of_day = date.fromisoformat(order_dates[-1])
+        first_day = date.fromisoformat(order_dates[0])
+
+        def _window(start, end):
+            rows = [row for row in orders
+                    if start <= date.fromisoformat(row["date"]) <= end]
+            return {
+                "start": start.isoformat(), "end": end.isoformat(),
+                "revenue": round(sum(row["amount_hkd"] for row in rows), 2),
+                "orders": len({row["order_id"] for row in rows}),
+                "units": sum(row["quantity"] for row in rows),
+            }
+
+        def _change(now_value, prev_value, money=False):
+            delta = round(now_value - prev_value, 2) if money else now_value - prev_value
+            pct = round(100.0 * delta / prev_value, 1) if prev_value else None
+            return {"abs": delta, "pct": pct}
+
+        for days_n in PERIOD_DAYS:
+            current = _window(as_of_day - timedelta(days=days_n - 1), as_of_day)
+            prev_end = as_of_day - timedelta(days=days_n)
+            prev_start = prev_end - timedelta(days=days_n - 1)
+            previous = _window(prev_start, prev_end)
+            previous["fully_covered"] = first_day <= prev_start
+            period_totals[str(days_n)] = {
+                "days": days_n,
+                "current": current,
+                "previous": previous,
+                "change": {
+                    "revenue": _change(current["revenue"], previous["revenue"], money=True),
+                    "orders": _change(current["orders"], previous["orders"]),
+                    "units": _change(current["units"], previous["units"]),
+                },
+            }
+
+    ranked_days = sorted(revenue_by_day, key=lambda row: (-row["revenue"], row["date"]))
+    best_days = ranked_days[:BEST_WORST_DAYS]
+    worst_days = sorted(revenue_by_day, key=lambda row: (row["revenue"], row["date"]))[:BEST_WORST_DAYS]
+    span_days = ((date.fromisoformat(order_dates[-1]) - date.fromisoformat(order_dates[0])).days + 1
+                 if order_dates else 0)
+
     # Days of cover: stock / average daily units over the last N days
     # (window ends on the latest order date, not "today").
     window_end = date.fromisoformat(order_dates[-1]) if order_dates else None
@@ -768,6 +846,17 @@ def compute_metrics(state=None, today=None):
             row["days_of_cover"] if row["days_of_cover"] is not None else 1e9,
             row["sku"],
         )
+    )
+
+    by_page = defaultdict(int)
+    for row in traffic:
+        by_page[row["page"]] += row["pageviews"]
+    traffic_by_page = sorted(
+        (
+            {"page": page, "pageviews": views, "share_pct": _pct(views, pageviews)}
+            for page, views in by_page.items()
+        ),
+        key=lambda row: (-row["pageviews"], row["page"]),
     )
 
     by_source = defaultdict(int)
@@ -815,8 +904,15 @@ def compute_metrics(state=None, today=None):
         "traffic_period": [traffic_dates[0], traffic_dates[-1]] if traffic_dates else None,
         "sales_by_sku": sales_by_sku,
         "revenue_by_week": revenue_by_week,
+        "weekly_series": weekly_series,
         "revenue_by_day": revenue_by_day,
         "latest_day_skus": latest_day_skus,
+        "period_totals": period_totals,
+        "best_days": best_days,
+        "worst_days": worst_days,
+        "days_with_orders": len(revenue_by_day),
+        "days_in_order_period": span_days,
+        "traffic_by_page": traffic_by_page,
         "stock_cover": stock_cover,
         "velocity_window_days": VELOCITY_WINDOW_DAYS,
         "low_cover_days": LOW_COVER_DAYS,
@@ -826,6 +922,8 @@ def compute_metrics(state=None, today=None):
     }
 
 
+PERIOD_DAYS = (7, 30)
+BEST_WORST_DAYS = 3
 DIGEST_TOP_SKUS = 10
 DIGEST_LOW_COVER = 20
 DIGEST_TRAFFIC_SOURCES = 10

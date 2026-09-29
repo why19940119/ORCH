@@ -568,7 +568,7 @@ class I18nTests(unittest.TestCase):
             self.assertIn(t["auth_err_login_invalid"], html)
 
     def test_version(self):
-        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.20.0")
+        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.20.1")
         self.assertEqual(orch_auth.AUTH_VERSION, "v0.20.0")
         self.assertIn("v0.20.0", (PROJECT_ROOT / "README.md").read_text(encoding="utf-8"))
 

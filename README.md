@@ -63,6 +63,12 @@ v0.20.0     Accounts and governance: login (local accounts, admin / editor /
             deadlines + overdue escalation, second-admin approval of account
             changes, retention / purge, 權限清單 (permissions list) + CSV export;
             ORCH Context chat answers from imported store data (as-of date)
+v0.20.1     Chat accuracy: precomputed last 7 / 30 day totals with previous
+            period + change, best / worst days, top pages, complete weekly
+            series (partial ISO weeks flagged with their dates), HK$ money,
+            「匯入數據」 label, no-estimation rule, Cantonese register;
+            internal labels filtered from replies; sample won leads unranked;
+            stale account-change requests refused / auto-closed (audited)
 ```
 
 ## Core Architecture
@@ -558,6 +564,36 @@ from the latest date in the data and say so (「數據截至 2026-09-25」), and
 never to claim real-time data. The context label is neutral
 (`REFERENCE_DATA`) and the model is told not to mention internal labels,
 keys or file names. The Chat page shows which data ORCH Context uses.
+
+### Chat accuracy (v0.20.1)
+
+A real-API test (12 questions) found one fabricated 30-day figure and a few
+partial answers, so the imported-data summary (`commerce_demo.chat_summary`)
+now gives the model every figure it needs, precomputed, in HK$:
+
+```text
+數據來源 / data source: 匯入數據 (imported data), as of 2026-09-28
+last_7_days / previous_7_days / change_7_days     revenue, orders, units, abs + %
+last_30_days / previous_30_days / change_30_days  (never dropped)
+all_time_totals, days_with_orders, best / worst days by revenue
+latest-day ranking, top products by revenue and by units
+weekly_series   every ISO week, e.g. 2026-W40 (2026-09-28 to 2026-09-28,
+                PARTIAL: 1 of 7 days)
+recent days, low stock, traffic by source, top pages, conversion
+```
+
+The summary has a 6,000-character budget. When a store is large, lists shrink
+level by level (top N, weeks, days) and say "x of y"; the period totals are
+always kept. The prompt says: quote only given figures, never estimate,
+extrapolate or do arithmetic, say when a metric is not in the data, always
+use HK$, call the data 匯入數據 (zh-Hant) / 导入数据 (zh-Hans), never 進口,
+and reply in Cantonese when asked in Cantonese. Internal labels
+(`REFERENCE_DATA`, `store_data`, `data_source`, `*.json` file names) are
+replaced with plain words in ORCH Context replies before they are shown or
+stored (`orch_chat.sanitize_reply`). Account-change requests that no longer
+apply (a second disable, the current role, a disabled or deleted target) are
+refused when requested and auto-closed on approval or after another change
+applies, with an `account_change_auto_closed` audit record.
 
 ## Cross-border e-commerce demo
 

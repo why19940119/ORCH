@@ -72,14 +72,14 @@ class ChatStoreDataTests(ImportSandbox):
         self.assertIn("2026-09-25", store["as_of_note"])
         summary = "\n".join(store["summary"])
         # Top SKUs by revenue (TEA-01 616.00) and by units, latest-day ranking.
-        by_revenue = summary.split("top_skus_by_sales")[1]
+        by_revenue = summary.split("top_products_by_revenue")[1]
         self.assertTrue(by_revenue.split("\n")[1].startswith('- "TEA-01"|'), by_revenue[:200])
         self.assertIn("616.00", by_revenue)
-        self.assertTrue(summary.split("top_skus_by_units")[1].split("\n")[1].startswith('- "TEA-01"|'))
+        self.assertTrue(summary.split("top_products_by_units")[1].split("\n")[1].startswith('- "TEA-01"|'))
         latest = summary.split("latest_day 2026-09-25")[1]
         self.assertTrue(latest.split("\n")[1].startswith('- "LOW-01"|'), latest[:200])
-        self.assertIn("as_of_date (latest order date in the data): 2026-09-25", summary)
-        self.assertIn("revenue_by_day", summary)
+        self.assertIn("as of 2026-09-25 (latest order date; not real-time)", summary)
+        self.assertIn("recent_order_days", summary)
         self.assertIn("low_stock", summary)
         self.assertIn("traffic_by_source", summary)
         self.assertIn("conversion:", summary)
@@ -102,7 +102,7 @@ class ChatStoreDataTests(ImportSandbox):
         _, user = self.prompt()
         store = self.context_of(user)["store_data"]
         self.assertEqual(store["unmatched_order_lines"], 3)
-        self.assertIn("excluded_order_lines (SKU not in products): 3", "\n".join(store["summary"]))
+        self.assertIn("excluded_order_lines (SKU not in products, left out of every figure): 3", "\n".join(store["summary"]))
 
     def test_keyword_lookup_on_top_of_summary(self):
         self.upload()
@@ -125,8 +125,10 @@ class ChatStoreDataTests(ImportSandbox):
         # Ranking only uses values present in the sample (won leads).
         data = commerce_demo.load_sample_data()
         won = {lead["sku"]: lead for lead in data["order_leads"] if lead["stage"] == "won"}
-        self.assertEqual({row["sku"] for row in ranking["won_order_leads_by_sku"]}, set(won))
-        for row in ranking["won_order_leads_by_sku"]:
+        leads = ranking["won_order_leads_not_sales_ranking"]
+        self.assertEqual({row["sku"] for row in leads}, set(won))
+        for row in leads:
+            self.assertNotIn("rank", row)   # v0.20.1: not read as a best-seller list
             self.assertEqual(row["est_value_hkd"], won[row["sku"]]["est_value_hkd"])
         self.assertEqual([w["orders"] for w in ranking["weekly_order_counts_all_products"]],
                          data["kpi"]["orders"])
