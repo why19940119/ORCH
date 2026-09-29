@@ -11,10 +11,11 @@ from datetime import datetime
 import secrets
 import time
 
-from flask import Blueprint, abort, redirect, request, session
+from flask import Blueprint, abort, g, redirect, request, session
 
 import commerce_demo
 import commerce_import
+import orch_auth
 from commerce_demo import DemoError
 
 
@@ -92,19 +93,27 @@ def _pop_flash():
     return session.pop("demo_flash", None)
 
 
-def _remember_operator(value):
-    value = (value or "").strip()
-    if commerce_demo.OPERATOR_PATTERN.fullmatch(value):
-        session["demo_operator"] = value
+def _actor():
+    """v0.20.0: the logged-in account is the operator/approver."""
+    user = g.get("user")
+    if not user:
+        abort(403)
+    return user["username"]
+
+
+def _require_role(*roles):
+    if (g.get("user") or {}).get("role") not in roles:
+        abort(403)
 
 
 def _page(title_key, active, body, **context):
     t = _t()
     context.setdefault("flash", _pop_flash())
-    context.setdefault("operator_name", session.get("demo_operator", ""))
     context.setdefault("meta", commerce_demo.load_sample_data()["_meta"])
     context.setdefault("ai_mode", commerce_demo.ai_mode())
     context.setdefault("imp", _import_banner())
+    context.setdefault("deadline_choices", orch_auth.DEADLINE_CHOICES)
+    context.setdefault("default_deadline", orch_auth.settings()["default_deadline_hours"])
     return _HOOKS["render_page"](
         t[title_key], active, COMMON_HEAD + body, **context
     )
@@ -169,12 +178,9 @@ MODULE_HEAD = """
   <p class="demo-positioning">{{ t.demo_positioning }}</p>
 """
 
+# v0.20.0: no typed names; the signed-in account acts.
 OPERATOR_FIELDS = """
-  <label class="demo-field">
-    <span>{{ t.demo_operator }}</span>
-    <input type="text" name="operator" required minlength="2" maxlength="40"
-           value="{{ operator_name }}" placeholder="{{ t.demo_operator_ph }}">
-  </label>
+  <span class="composer-help acting-as">{{ t.auth_acting_as.format(user=current_user.username if current_user else '—') }}</span>
 """
 
 LANGUAGE_FIELD = """
@@ -189,8 +195,17 @@ LANGUAGE_FIELD = """
 
 DRAFT_SUBMIT = """
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-  <button type="submit">{{ t.demo_draft_button }}</button>
-  <p class="composer-help">{{ t.demo_draft_help }}</p>
+  {% if current_user and current_user.role == 'editor' %}
+    <label class="demo-field"><span>{{ t.gov_deadline }}</span>
+      <select name="deadline_hours">
+        {% for h in deadline_choices %}<option value="{{ h }}" {% if h == default_deadline %}selected{% endif %}>{{ t.gov_deadline_hours.format(h=h) }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="submit">{{ t.demo_draft_button }}</button>
+    <p class="composer-help">{{ t.demo_draft_help }}</p>
+  {% else %}
+    <p class="composer-help" data-editor-only>{{ t.auth_editor_only }}</p>
+  {% endif %}
 """
 
 def sample_note(what_key):
@@ -579,7 +594,7 @@ def market_dashboard():
     body = MODULE_HEAD + """
   {% if m %}
   <h3 data-imp-metrics>{{ t.imp_metrics_title }}</h3>
-  """ + IMPORT_UNMATCHED_WARNING + """
+  {# v0.20.0: the unmatched-orders warning comes once, via IMPORT_METRICS_SALES. #}
   {% if m.order_period %}<p class="composer-help">{{ t.imp_period.format(start=m.order_period[0], end=m.order_period[1]) }}</p>{% endif %}
   <div class="grid">
     <div class="card"><span class="metric-label">{{ t.imp_kpi_revenue }}</span><span class="metric-value">HK${{ '{:,.0f}'.format(m.totals.revenue) }}</span></div>
@@ -822,6 +837,7 @@ def _after_import(report):
 @bp.post("/import")
 def import_upload():
     require_csrf()
+    _require_role("editor", "admin")
     files = {}
     for kind in commerce_import.FILE_ORDER:
         storage = request.files.get(kind)
@@ -842,6 +858,7 @@ def import_upload():
 @bp.post("/import/folder")
 def import_folder():
     require_csrf()
+    _require_role("editor", "admin")
     report = commerce_import.import_from_folder(source="folder")
     if report is None:
         _flash("error", "import_folder_empty")
@@ -853,6 +870,7 @@ def import_folder():
 @bp.post("/import/toggle")
 def import_toggle():
     require_csrf()
+    _require_role("editor", "admin")
     active = request.form.get("active") == "1"
     if not commerce_import.set_active(active):
         _flash("error", "no_import_data")
@@ -864,6 +882,7 @@ def import_toggle():
 @bp.post("/import/reset")
 def import_reset():
     require_csrf()
+    _require_role("editor", "admin")
     commerce_import.reset_import()
     _flash("ok", "import_reset")
     return redirect("/import")
@@ -874,7 +893,32 @@ def approval_inbox():
     drafts = commerce_demo.draft_views(locale=_HOOKS["get_locale"]())
     pending = [d for d in drafts if d["approval_status"] == "waiting_approval"]
     decided = [d for d in drafts if d["approval_status"] in {"approved", "rejected"}]
+    user = g.get("user") or {}
+    store = orch_auth.load_store()
+    for d in pending:
+        d["approvers"] = orch_auth.approvers_for(d["module"], store)
+        if user.get("role") != "approver":
+            d["decide_block"] = "role"
+        elif any(commerce_demo._same_person(user["username"], a) for a in d["authors"]):
+            d["decide_block"] = "self"
+        elif not orch_auth.can_approve(user["username"], d["module"], store):
+            d["decide_block"] = "not_assigned"
+        else:
+            d["decide_block"] = None
+    overdue = [d for d in pending if d["overdue"]]
     body = MODULE_HEAD + """
+  {% if overdue %}
+    <div class="section"><div class="warning escalation" role="alert" data-escalation>
+      <strong>{{ t.gov_overdue_banner.format(n=overdue|length) }}</strong>
+      <ul>
+        {% for d in overdue %}
+          <li><a href="#{{ d.id }}">{{ d.title }}</a> · {{ t.gov_due }} {{ d.due_at_utc|local_time }} ·
+            {{ t.gov_escalate_to }} {{ d.approvers|join(', ') if d.approvers else t.gov_no_approver }}</li>
+        {% endfor %}
+      </ul>
+      <p class="composer-help">{{ t.gov_overdue_note }}</p>
+    </div></div>
+  {% endif %}
   <div class="grid">
     <div class="card"><span class="metric-label">{{ t.demo_inbox_pending }}</span><span class="metric-value">{{ pending|length }}</span></div>
     <div class="card"><span class="metric-label">{{ t.demo_inbox_high_risk }}</span><span class="metric-value">{{ pending|selectattr('high_risk')|list|length }}</span></div>
@@ -890,6 +934,8 @@ def approval_inbox():
         <div>
           <span class="badge waiting_approval">{{ d.status|status_label }}</span>
           <strong>{{ t.get('mod_' ~ d.module ~ '_title', d.module) }}</strong> · {{ t.get('kind_' ~ d.kind, d.kind) }} · v{{ d.version }}
+          {% if d.overdue %}<span class="overdue-tag" data-overdue>{{ t.gov_overdue }}</span>{% endif %}
+          {% if d.legacy %}<span class="legacy-tag">{{ t.gov_legacy }}</span>{% endif %}
           <div class="muted">{{ d.title }}</div>
         </div>
         <div>{% for r in d.risk_tags %}<span class="risk-tag risk-{{ r }}">{{ t.get('risk_' ~ r, r) }}</span>{% endfor %}</div>
@@ -897,10 +943,15 @@ def approval_inbox():
       <dl class="kv">
         <dt>{{ t.demo_th_source }}</dt><dd>{{ d.source.refs|join(', ') }} · <span class="muted">{{ d.source.dataset }}</span></dd>
         <dt>{{ t.demo_th_generator }}</dt><dd>{{ d.provenance.provider }}{% if d.provenance.model %} · {{ d.provenance.model }}{% endif %}{% if d.provenance.fallback_reason %} <span class="muted">({{ t.demo_fallback }})</span>{% endif %}{% if d.provenance.edited_by_human %} · {{ t.demo_edited }}{% endif %}</dd>
-        <dt>{{ t.demo_th_operator }}</dt><dd>{{ d.versions[-1].created_by }} · {{ d.versions[-1].created_at_utc|local_time }}</dd>
+        <dt>{{ t.demo_th_operator }}</dt><dd>{{ d.versions[-1].created_by }} · {{ d.versions[-1].created_at_utc|local_time }}{% if d.legacy %} <span class="legacy-tag">{{ t.gov_legacy_typed }}</span>{% endif %}</dd>
+        <dt>{{ t.gov_due }}</dt><dd>{{ d.due_at_utc|local_time if d.due_at_utc else '—' }}</dd>
+        <dt>{{ t.gov_approvers }}</dt><dd>{{ d.approvers|join(', ') if d.approvers else t.gov_no_approver }}</dd>
         <dt>{{ t.demo_th_task }}</dt><dd><a href="/tasks/{{ d.id }}"><code>{{ d.id }}</code></a></dd>
       </dl>
       <pre class="draft-body">{{ d.body }}</pre>
+      {% if d.decide_block %}
+        <p class="composer-help" data-decide-block="{{ d.decide_block }}">{% if d.decide_block == 'self' %}<span class="self-tag">{{ t.gov_self_tag }}</span> {% endif %}{{ t['gov_block_' ~ d.decide_block] }}</p>
+      {% else %}
       <div class="inbox-actions">
         <form method="post" action="/inbox/{{ d.id }}/approve" class="demo-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -920,6 +971,8 @@ def approval_inbox():
           <button type="submit" class="btn-reject">{{ t.demo_reject }}</button>
         </form>
       </div>
+      {% endif %}
+      {% if current_user and current_user.role == 'editor' %}
       <details class="quiet-details">
         <summary>{{ t.demo_edit_version }}</summary>
         <form method="post" action="/inbox/{{ d.id }}/revise" class="demo-form">
@@ -931,6 +984,7 @@ def approval_inbox():
           <button type="submit">{{ t.demo_save_version }}</button>
         </form>
       </details>
+      {% endif %}
     </div>
   {% endfor %}
 
@@ -958,7 +1012,7 @@ def approval_inbox():
 """
     return _page(
         "mod_approval_inbox_title", "inbox", body,
-        pending=pending, decided=decided,
+        pending=pending, decided=decided, overdue=overdue,
         **_module_context("approval_inbox"),
     )
 
@@ -979,8 +1033,8 @@ def audit_log():
             <td>{{ t.get('mod_' ~ a.module ~ '_title', a.module) }}<br><a class="muted" href="/tasks/{{ a.task_id }}">{{ a.task_id|short_id(14, 6) }}</a></td>
             <td>v{{ a.version }}<br><code>{{ a.content_sha256|short_id(14, 4) }}</code></td>
             <td>{{ a.source.refs|join(', ') }}<br><span class="muted">{{ a.source.provider }}{% if a.source.edited_by_human %} · {{ t.demo_edited }}{% endif %}</span></td>
-            <td>{{ a.operator }}</td>
-            <td>{{ a.approver }}</td>
+            <td>{{ a.operator }}{% if a.get('draft_identity', 'typed') != 'account' %} <span class="legacy-tag">{{ t.gov_legacy }}</span>{% endif %}</td>
+            <td>{{ a.approver }}{% if a.get('identity', 'typed') != 'account' %} <span class="legacy-tag">{{ t.gov_legacy }}</span>{% endif %}</td>
             <td>{{ t.get('ch_' ~ a.publish_channel, a.publish_channel) if a.publish_channel else '—' }}<br><span class="muted">{{ t.get('pubmode_' ~ a.publish_mode, a.publish_mode) }}</span></td>
             <td><a href="/artifacts/ecom_audit"><code>{{ a.audit_artifact_id|short_id(18, 6) }}</code></a></td>
           </tr>
@@ -990,6 +1044,23 @@ def audit_log():
       <div class="empty">{{ t.demo_audit_empty }}</div>
     {% endif %}
   </div>
+  {% if current_user and current_user.role == "admin" %}
+  <div class="section" data-governance-audit>
+    <h3>{{ t.gov_audit_title }} ({{ gov|length }})</h3>
+    <p class="composer-help">{{ t.gov_audit_note }}</p>
+    {% if gov %}
+      <div class="table-wrap"><table>
+        <tr><th>{{ t.demo_th_time }}</th><th>{{ t.gov_th_event }}</th><th>{{ t.gov_th_actor }}</th><th>{{ t.gov_th_details }}</th></tr>
+        {% for r in gov[:100] %}
+          <tr><td>{{ r.ts_utc|local_time }}</td><td>{{ t.get('gov_ev_' ~ r.event, r.event) }}</td><td>{{ r.actor }}</td>
+            <td class="muted">{% for k, v in r.items() if k not in ('ts_utc', 'event', 'actor', 'audit_version') %}{{ k }}={{ v }}{% if not loop.last %}; {% endif %}{% endfor %}</td></tr>
+        {% endfor %}
+      </table></div>
+    {% else %}
+      <div class="empty">{{ t.demo_audit_empty }}</div>
+    {% endif %}
+  </div>
+  {% endif %}
   <div class="section">
     <h3>{{ t.demo_audit_events }}</h3>
     {% if events %}
@@ -1010,6 +1081,7 @@ def audit_log():
         "mod_audit_log_title", "audit", body,
         records=commerce_demo.audit_records(),
         events=commerce_demo.demo_events(),
+        gov=orch_auth.read_audit(200) if (g.get("user") or {}).get("role") == "admin" else [],
         **_module_context("audit_log"),
     )
 
@@ -1036,8 +1108,8 @@ def create_draft():
     if kind not in commerce_demo.DRAFT_KINDS:
         abort(400)
     back = KIND_RETURN[kind]
-    operator = request.form.get("operator", "")
-    _remember_operator(operator)
+    _require_role("editor")
+    operator = _actor()
 
     last = session.get("demo_last_draft_at", 0)
     if time.time() - last < DRAFT_MIN_INTERVAL_SECONDS:
@@ -1064,6 +1136,7 @@ def create_draft():
             operator,
             language=language,
             session_id_sha256=commerce_demo.sha256_value(session_key),
+            deadline_hours=request.form.get("deadline_hours") or None,
         )
     except DemoError as error:
         _flash("error", error.code)
@@ -1078,8 +1151,8 @@ def _decision_route(task_id, action):
     require_csrf()
     if not commerce_demo.is_demo_task_id(task_id):
         abort(404)
-    operator = request.form.get("operator", "")
-    _remember_operator(operator)
+    _require_role("editor" if action == "revise" else "approver")
+    operator = _actor()
     version = request.form.get("version", "")
     try:
         if action == "revise":

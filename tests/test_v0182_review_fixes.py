@@ -24,6 +24,7 @@ import commerce_ui
 import mini_orch
 import orch_chat
 import orch_ui
+from auth_testing import demo_signed_in, sign_in, signed_in
 from chat_attachments import AttachmentError, process_uploaded_files
 from orch_chat import ChatProviderError
 from orch_ui import CHAT_SESSIONS, app
@@ -71,6 +72,7 @@ class UploadsSandbox(unittest.TestCase):
         app.config["TESTING"] = True
         CHAT_SESSIONS.clear()
         self.client = app.test_client()
+        signed_in(self, self.client)  # v0.20.0: login required
         self.client.get("/chat")
         with self.client.session_transaction() as stored:
             self.token = stored["csrf_token"]
@@ -358,6 +360,7 @@ class DemoStateSandbox(unittest.TestCase):
             item.start()
         app.config["TESTING"] = True
         self.client = app.test_client()
+        demo_signed_in(self, self.client)  # v0.20.0: login required
 
     def tearDown(self):
         for item in reversed(self.patches):
@@ -394,6 +397,7 @@ class DemoQueueTests(DemoStateSandbox):
         self.assertIn("[示範] 內容工作室：", tasks_html)
         self.assertEqual(self.client.get("/").status_code, 200)
         self.assertEqual(self.client.get(f"/tasks/{task_id}").status_code, 200)
+        sign_in(self.client, "Ben Lee")  # v0.20.0: approvers see decide forms
         inbox = self.client.get("/inbox").get_data(as_text=True)
         self.assertIn(f"/inbox/{task_id}/approve", inbox)
 
@@ -574,8 +578,8 @@ class ZhHantNamingTests(DemoStateSandbox):
         self.assertEqual(en_views[0]["id"], task_id)
 
     def test_version_bumped(self):
-        # v0.19.1 (WP-ORCH-10 review fixes) supersedes v0.19.0 / v0.18.2.
-        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.19.1")
+        # v0.20.0 (WP-ORCH-11) supersedes v0.19.1 / v0.18.2.
+        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.20.0")
 
 
 # 9. fresh-clone test config ------------------------------------------------

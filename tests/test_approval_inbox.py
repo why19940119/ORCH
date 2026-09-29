@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from approval_inbox import classify_risk, inbox_item, is_waiting_approval
 from orch_ui import app
+from auth_testing import signed_in
 
 
 class ApprovalInboxHelperTests(unittest.TestCase):
@@ -46,6 +47,8 @@ class ApprovalInboxRouteTests(unittest.TestCase):
     def setUp(self):
         app.config["TESTING"] = True
         self.client = app.test_client()
+        # v0.20.0: the approver is the logged-in account.
+        signed_in(self, self.client, "Amy Chan", "approver")
 
     def test_approve_without_csrf_is_rejected(self):
         response = self.client.post("/inbox/task_demo/approve")
@@ -65,7 +68,7 @@ class ApprovalInboxRouteTests(unittest.TestCase):
                 f"/inbox/{task_id}/approve",
                 data={
                     "csrf_token": token,
-                    "operator": "Amy Chan",
+                    "operator": "Mallory Typed",  # ignored since v0.20.0
                     "version": "1",
                     "channel": "email",
                     "note": "ok",

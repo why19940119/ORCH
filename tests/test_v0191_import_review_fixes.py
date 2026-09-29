@@ -175,6 +175,42 @@ class PromptTextTests(unittest.TestCase):
                          commerce_demo.MAX_IMPORT_PROMPT_CHARS)
 
 
+class ReReviewFollowUpTests(ImportSandbox):
+    """v0.20.0: low follow-ups from the PR #4 re-review."""
+
+    real_prompt = RealPromptTests.real_prompt
+
+    def test_content_prompt_product_line_has_stock(self):
+        self.upload()
+        prompt = self.real_prompt(kind="content", sku="TEA-01", content_type="product_page", language="en")
+        self.assertIn('product: sku="TEA-01"', prompt)
+        self.assertIn(" stock=12 ", prompt)
+        self.assertNotIn("stock=-", prompt)
+        self.assertEqual(commerce_demo.draft_views(locale="en")[0]["source"]["sku"]["stock_units"], 12)
+
+    def test_out_of_stock_is_zero_not_dash(self):
+        self.upload()
+        prompt = self.real_prompt(kind="content", sku="CUP-01", content_type="faq", language="en")
+        self.assertIn(" stock=0 ", prompt)
+
+    def test_missing_stock_shows_dash(self):
+        lines = commerce_demo._product_lines({"sku": "S-1", "name_en": "x", "list_price_hkd": 1})
+        self.assertIn(" stock=- ", lines[0])
+        sample = dict(commerce_demo.sku_index(commerce_demo.load_sample_data())["SAMPLE-001"])
+        self.assertEqual(commerce_demo._sku_facts(sample)["stock_units"], sample["stock_units"])
+        sample.pop("stock_units")
+        self.assertNotIn("stock_units", commerce_demo._sku_facts(sample))
+
+    def test_market_unmatched_warning_once(self):
+        self.upload()
+        self.upload(products=ProductsOnlyUploadTests.NEW_PRODUCTS, orders=None, traffic=None)
+        warning = ui_strings("zh-Hant")["imp_warn_unmatched_orders"].format(n=2)
+        for path in ("/market", "/campaigns"):
+            html = self.client.get(path).get_data(as_text=True)
+            self.assertEqual(html.count('data-unmatched-orders="2"'), 1, path)
+            self.assertEqual(html.count(warning), 1, path)
+
+
 class ProductsOnlyUploadTests(ImportSandbox):
     """Item 2: stored orders survive a products-only upload."""
 

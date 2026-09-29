@@ -58,6 +58,11 @@ v0.19.1     CSV import review fixes: compact sized metrics block for real-AI
             excluded from metrics with a warning), skipped rows counted,
             trailing empty header cells ignored, same order_id + sku rows
             merged, Big5 (cp950 / big5hkscs) fallback, reset confirmation
+v0.20.0     Accounts and governance: login (local accounts, admin / editor /
+            approver roles), no self-approval, per-module approvers, approval
+            deadlines + overdue escalation, second-admin approval of account
+            changes, retention / purge, 權限清單 (permissions list) + CSV export;
+            ORCH Context chat answers from imported store data (as-of date)
 ```
 
 ## Core Architecture
@@ -531,6 +536,29 @@ no execution authority. The UI locale is passed to `ask_orch(locale=...)`
 so answers, refusals and guidance come back in the user's language
 (zh-Hant by default).
 
+### Chat uses imported data (v0.20.0)
+
+The block is now `store_data` from `commerce_demo.store_chat_context`:
+
+```text
+import active   the store's imported products / orders / traffic: the same
+                compact summary as the AI insight drafts (top SKUs by revenue
+                and by units, latest-day ranking, last 7 order dates, recent
+                weeks, low stock / days of cover, traffic by source,
+                conversion, excluded order lines) + matching products by SKU
+                or name; labelled as imported data with as_of_date = latest
+                order date. KB / inquiries / leads stay sample (labelled).
+import off      the sample data, labelled SAMPLE, with a sales ranking note:
+                the sample has no per-product sales, so only won order leads
+                and weekly order counts are listed (no invented numbers).
+```
+
+For "today / this week / this month" questions the model is told to answer
+from the latest date in the data and say so (「數據截至 2026-09-25」), and
+never to claim real-time data. The context label is neutral
+(`REFERENCE_DATA`) and the model is told not to mention internal labels,
+keys or file names. The Chat page shows which data ORCH Context uses.
+
 ## Cross-border e-commerce demo
 
 A demo prototype of the Advolution ORCH AI cross-border e-commerce plan
@@ -587,7 +615,8 @@ fallback reason is stored in the draft provenance (no retry).
 
 ### Approve flow
 
-1. On any module page enter your name as operator and click
+1. Sign in as an **editor** (v0.20.0; the operator is your account, not a
+   typed name), pick an approval deadline and click
    **產生 AI 草稿 / Generate AI draft**.
 2. The draft becomes an ORCH task `task_ecom_<kind>_<id>` in the
    gitignored demo queue `state/ecom_demo_queue.json` (v0.18.2; the
@@ -600,8 +629,8 @@ fallback reason is stored in the draft provenance (no retry).
    `parent_artifact_id` is the previous one).
 3. In **Approval Inbox**, review the text and risk tags (price / refund /
    product claim / outward message, from `approval_inbox.py`), optionally
-   edit and save a new version, then approve with a named operator and a
-   publish channel, or reject with a reason. Approval is locked to the
+   edit and save a new version (editors), then approve with a publish
+   channel or reject with a reason (approvers; never your own draft). Approval is locked to the
    version shown: approving a stale version is refused.
 4. The decision goes through `mini_orch.decide_approval` (the same gate
    `mini_orch.py approve` uses), so the Tasks page and dashboard show it.
@@ -754,6 +783,147 @@ pytest            # conftest.py + pytest.ini make this work from a fresh clone
 sample data unless you import CSVs (v0.19.0: products, orders, traffic only)
 no external publishing, ads, email, WhatsApp or marketplace calls
 lead scoring / classification is rule-based (stand-in for AI assist)
-operator names are typed, not authenticated (local single-user console)
+local accounts on one machine (v0.20.0); no OAuth / SSO / 2FA
 ```
+
+## Accounts and governance (v0.20.0)
+
+Every page now needs a signed-in account. There is no public sign-up.
+
+### First start (bootstrap)
+
+```bash
+cd ~/my-orch-v0
+.venv/bin/python orch_auth.py create-admin      # asks for username + password (hidden)
+.venv/bin/python orch_ui.py                     # restart the console
+```
+
+Until an admin exists, every page shows a setup notice with that command.
+`create-admin` refuses to run once any account exists. Passwords: 10-128
+characters, stored as salted hashes (werkzeug), never logged.
+
+### Roles
+
+```text
+admin     manages accounts, module approvers, retention, 權限清單;
+          cannot create or approve drafts
+editor    creates drafts, edits (new version), imports CSV data
+approver  approves / rejects drafts in the Approval Inbox
+```
+
+The operator and approver in drafts, the audit log and `task_status.json`
+are the signed-in usernames. Typed names on the forms are ignored.
+
+### Rules enforced in code
+
+```text
+no self-approval   anyone who created or edited a version of a draft
+                   cannot approve it (checked in commerce_demo.decide AND in
+                   mini_orch.decide_approval via requested_by)
+module approvers   /admin/approvers assigns approvers per module; a module
+                   with nobody assigned can be approved by any approver
+deadlines          each draft gets a deadline (4h / 24h / 48h / 72h / 7 days;
+                   default in /admin/retention). Overdue drafts are flagged
+                   in the Inbox and a reminder banner on the dashboard lists
+                   who can approve them (escalation is on-screen only; no
+                   email / chat is sent)
+account changes    creating users, role changes, disable / enable and password
+                   resets are requested by one admin and applied only after a
+                   DIFFERENT admin approves (/admin/users). While only one
+                   active admin exists, changes apply immediately and are
+                   marked "single-admin exception" in the governance log.
+                   The last active admin cannot be disabled or demoted; admins
+                   cannot change their own account.
+sessions           idle timeout (ORCH_SESSION_IDLE_MINUTES) and an absolute
+                   limit (ORCH_SESSION_MAX_HOURS, default 12); signing out
+                   or any change to an account ends that account's sessions
+                   in every browser (a copied cookie stops working)
+lockout            too many failed sign-ins lock the account for a while;
+                   unknown usernames are counted and locked the same way,
+                   the page shows one generic "sign-in failed" message and a
+                   password hash is checked on every path (no username
+                   enumeration). Admins can unlock in /admin/users (audited)
+```
+
+First-run rule for the single-admin exception: it applies only until two
+active admins exist for the first time. After that it never comes back
+on its own, even if only one admin is left: changes wait for a second
+admin. To re-open it on purpose (for example the other admin left), run
+`.venv/bin/python orch_auth.py allow-single-admin` on this machine; it
+is audited with the OS user and closes again when a second admin exists.
+The account a change targets can never decide it, so with exactly two
+admins, removing one needs a third admin (or the CLI recovery above).
+
+Authors can neither approve nor reject their own draft. The governance
+audit section on /audit is shown to admins only; failed sign-ins for
+unknown usernames store only a short hash of the typed name. The
+權限清單 CSV neutralises cells starting with = + - @ tab or CR (leading
+apostrophe) and shows times in HKT with an explicit +08:00 offset
+(`ORCH_DISPLAY_TZ` to change).
+
+Shell access to this machine is trusted: `orch_auth.py` CLI commands
+(create-admin, unlock, reset-password, purge, allow-single-admin) and
+`mini_orch.py approve` are not behind the web login. They record the OS
+user (`getpass.getuser()`) in the audit trail.
+
+### Retention and purge
+
+`/admin/retention` sets how long decided (approved / rejected) drafts and
+chat uploads are kept (defaults 180 days / 1 day). **Purge now** (or
+`orch_auth.py purge`) removes decided demo tasks older than the limit,
+their draft artifacts and old upload batches. Audit records
+(`ecom_audit`), `state/events.jsonl` and the governance log are always
+kept. Pending drafts are never purged. Purge is manual (no scheduler).
+
+### 權限清單 (permissions list)
+
+`/admin/permissions` lists every account, its role, status and the
+modules it can approve. **匯出 CSV** downloads the same table (UTF-8 with
+BOM, opens in Excel / Sheets). Each export is recorded in the governance log.
+
+### Where it is stored (gitignored)
+
+```text
+state/auth.json          accounts (password hashes), module approvers,
+                         pending account changes, settings (file mode 0600)
+state/auth_audit.jsonl   governance log: logins, lockouts, account changes,
+                         approver changes, purges, exports (append-only)
+state/.auth.lock         file lock
+```
+
+### CLI (for recovery)
+
+```bash
+.venv/bin/python orch_auth.py create-admin [--username NAME]
+.venv/bin/python orch_auth.py status            # list accounts
+.venv/bin/python orch_auth.py unlock NAME       # clear a lockout
+.venv/bin/python orch_auth.py reset-password NAME   # break-glass reset (logged)
+.venv/bin/python orch_auth.py purge             # run the retention purge
+.venv/bin/python orch_auth.py allow-single-admin    # re-open the single-admin exception (audited)
+```
+
+`python3 mini_orch.py approve` still works for normal (non-demo) tasks.
+It is a local CLI and has no accounts. Demo tasks are refused there, as
+before.
+
+### Environment variables
+
+```text
+ORCH_UI_SECRET_KEY          session signing key (set a fixed value so
+                            sessions survive restarts)
+ORCH_SESSION_IDLE_MINUTES   idle sign-out, default 30
+ORCH_SESSION_MAX_HOURS      absolute session lifetime, default 12
+ORCH_DISPLAY_TZ             time zone for exported times, default Asia/Hong_Kong
+ORCH_LOGIN_MAX_FAILURES     wrong passwords before lockout, default 5
+ORCH_LOGIN_LOCKOUT_MINUTES  lockout length, default 15
+SESSION_COOKIE_SECURE       1 = cookie only over HTTPS (set behind HTTPS)
+ORCH_AUTH_DIR               where auth.json / auth_audit.jsonl live, default state/
+```
+
+### Existing data
+
+No migration is needed. Drafts and audit records made before v0.20.0
+keep their typed names and show a "legacy (typed name)" tag. A pending
+legacy draft can be approved by an approver whose username differs from
+the typed creator.
 
