@@ -44,6 +44,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import mini_orch
+import orch_db
 from ui_i18n import DEFAULT_LOCALE, normalize_locale, ui_strings
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -489,17 +490,15 @@ def _finish(file_report, valid_rows, file_errors, merged=0):
 # ---------------------------------------------------------------------------
 
 def load_state():
-    path = Path(IMPORT_STATE_FILE)
-    if not path.is_file():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    # v0.21.0: docs['ecom_import'] in state/orch.db.
+    data = orch_db.load(Path(IMPORT_STATE_FILE), None)
     return data if isinstance(data, dict) else None
 
 
 def _atomic_write(path, payload):
+    if orch_db.is_managed(path):
+        orch_db.save(Path(path), payload)
+        return
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, temp_name = tempfile.mkstemp(prefix=".ecom_import_", dir=str(path.parent))
@@ -563,11 +562,7 @@ def set_active(active):
 
 def reset_import():
     with mini_orch.state_lock(LOCK_FILE):
-        path = Path(IMPORT_STATE_FILE)
-        if path.exists():
-            path.unlink()
-            return True
-    return False
+        return orch_db.delete(Path(IMPORT_STATE_FILE))
 
 
 def active_import():

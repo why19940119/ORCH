@@ -1,3 +1,10 @@
+# v0.21.0: historical script (JSON state). State now lives in state/orch.db;
+# running this would write stale JSON into state/, so it refuses to run.
+import sys as _sys
+from pathlib import Path as _Path
+if (_Path("state") / "orch.db").exists():
+    _sys.exit("Historical script: ORCH state is in state/orch.db now. Use mini_orch.py.")
+
 from datetime import datetime
 from pathlib import Path
 import json

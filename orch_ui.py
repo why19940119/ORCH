@@ -50,6 +50,7 @@ import admin_ui
 import commerce_demo
 import commerce_import
 import commerce_ui
+import orch_db
 import orch_auth
 
 
@@ -2397,6 +2398,8 @@ BASE_TEMPLATE = """
 
 
 def load_json(path, default_value):
+    if orch_db.is_managed(path):      # v0.21.0: state lives in state/orch.db
+        return orch_db.load(path, default_value)
     if not path.exists():
         return default_value
 
@@ -2508,20 +2511,7 @@ def load_statuses():
 
 
 def load_events(limit=100):
-    if not EVENTS_FILE.exists():
-        return []
-
-    events = deque(maxlen=limit)
-
-    for line in EVENTS_FILE.read_text(
-        encoding="utf-8"
-    ).splitlines():
-        try:
-            events.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-
-    return list(reversed(events))
+    return orch_db.read_log(EVENTS_FILE, limit=limit, newest_first=True)
 
 
 def task_view(task, statuses):

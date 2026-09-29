@@ -4,6 +4,8 @@ import hashlib
 import json
 import uuid
 
+import orch_db
+
 QUEUE_FILE = Path("task_queue.json")
 STATUS_FILE = Path("state/task_status.json")
 POLICY_CONTRACTS_FILE = Path("policy_contracts.json")
@@ -62,6 +64,8 @@ def sha256_value(data):
 
 
 def load_json(path, default_value=None):
+    if orch_db.is_managed(path):   # v0.21.0: task_status lives in orch.db
+        return orch_db.load(path, {} if default_value is None else default_value)
     if not path.exists():
         if default_value is not None:
             return default_value
