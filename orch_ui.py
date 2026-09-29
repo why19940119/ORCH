@@ -36,6 +36,14 @@ from chat_security import (
     record_chat_usage,
     sha256_value,
 )
+from chat_attachments import (
+    MAX_FILES_PER_REQUEST as CHAT_MAX_ATTACHMENTS,
+    AttachmentError,
+    accept_attribute as attachment_accept_attribute,
+    history_attachment_meta,
+    process_uploaded_files,
+)
+import commerce_ui
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -1462,6 +1470,285 @@ BASE_TEMPLATE = """
       table { min-width: 720px; }
       .table-wrap { overflow-x: auto; }
     }
+
+    /* v0.18.0 cross-border e-commerce demo modules + chat attachments */
+    .rejected { background: #4c2330; color: #ff9eaa; }
+
+    .nav-sep {
+      background: rgba(117, 83, 155, .55);
+      display: inline-block;
+      height: 16px;
+      margin: 0 4px;
+      width: 1px;
+    }
+
+    .nav-group-label {
+      color: #8a769d;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+    }
+
+    .sample-banner {
+      align-items: center;
+      background: rgba(255, 205, 87, .08);
+      border: 1px dashed rgba(255, 205, 87, .55);
+      border-radius: 8px;
+      color: #f6d78d;
+      display: flex;
+      flex-wrap: wrap;
+      font-size: 12px;
+      gap: 8px 12px;
+      margin-bottom: 14px;
+      padding: 8px 12px;
+    }
+
+    .sample-banner strong {
+      background: #4a3b16;
+      border-radius: 999px;
+      color: #ffdc70;
+      font-size: 11px;
+      letter-spacing: .4px;
+      padding: 3px 8px;
+    }
+
+    .sample-meta { color: #b9aacb; margin-left: auto; }
+
+    .demo-flash {
+      border-radius: 7px;
+      font-size: 13px;
+      margin-bottom: 14px;
+      padding: 9px 12px;
+    }
+
+    .demo-flash-ok {
+      background: #153d2d;
+      border-left: 3px solid var(--green);
+      color: #bff3d6;
+    }
+
+    .demo-flash-error {
+      background: #4a2323;
+      border-left: 3px solid var(--red);
+      color: #ffc1c1;
+    }
+
+    .module-hero {
+      align-items: flex-start;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .module-ai {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      font-size: 13px;
+      gap: 4px;
+      max-width: 420px;
+      padding: 10px 12px;
+    }
+
+    .ai-mode-chip {
+      color: #8a769d;
+      font-size: 11px;
+    }
+
+    .demo-positioning {
+      border-left: 3px solid var(--blue);
+      color: #cdbfe0;
+      font-size: 12px;
+      line-height: 1.5;
+      margin: 0 0 16px;
+      padding: 4px 10px;
+    }
+
+    .demo-form {
+      align-items: flex-end;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 14px;
+    }
+
+    .demo-form button { margin-top: 0; }
+
+    .demo-form .composer-help {
+      flex-basis: 100%;
+      margin: 0;
+    }
+
+    .demo-field {
+      display: flex;
+      flex-direction: column;
+      font-size: 11px;
+      gap: 4px;
+      min-width: 160px;
+    }
+
+    .demo-field > span {
+      color: var(--muted);
+      font-weight: 700;
+      letter-spacing: .3px;
+      text-transform: uppercase;
+    }
+
+    .demo-field-wide { flex: 1 1 100%; }
+
+    .demo-field input[type="text"] {
+      background: #120c1d;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      padding: 9px 10px;
+    }
+
+    .demo-field select,
+    .demo-field textarea {
+      font-size: 13px;
+      min-height: 0;
+    }
+
+    .muted { color: var(--muted); font-size: 12px; }
+
+    main p.composer-help {
+      color: #9a86b0;
+      font-size: 12px;
+      line-height: 1.45;
+      margin: 6px 0 0;
+    }
+
+    .risk-tag {
+      background: #303040;
+      border-radius: 999px;
+      color: var(--muted);
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      margin: 0 4px 4px 0;
+      padding: 3px 7px;
+      text-transform: uppercase;
+    }
+
+    .risk-price, .risk-refund, .risk-claim {
+      background: #573216;
+      color: #ffd18a;
+    }
+
+    .risk-outbound { background: #2c3657; color: #a9c8ff; }
+
+    .inbox-item { border-left: 3px solid var(--line); }
+    .inbox-high { border-left-color: var(--yellow); }
+
+    .inbox-head {
+      align-items: flex-start;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .draft-body {
+      background: #120c1d;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 13px;
+      line-height: 1.55;
+      margin: 12px 0;
+      max-height: 360px;
+      overflow: auto;
+      padding: 12px;
+      white-space: pre-wrap;
+    }
+
+    .inbox-actions {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    }
+
+    .btn-approve { background: var(--green); color: #071321; }
+    .btn-approve:hover { background: #7ae8b0; }
+    .btn-reject { background: #ff9eaa; color: #2a0b12; }
+    .btn-reject:hover { background: #ffbcc4; }
+
+    .kpi-bar {
+      background: #251a38;
+      border-radius: 999px;
+      height: 8px;
+      overflow: hidden;
+    }
+
+    .kpi-bar span {
+      background: linear-gradient(90deg, #75539b, var(--blue));
+      display: block;
+      height: 100%;
+    }
+
+    .composer-tools {
+      align-items: center;
+      display: flex;
+      gap: 6px;
+    }
+
+    .chat-page .attach-btn {
+      background: transparent;
+      border: 1px solid #59406e;
+      border-radius: 999px;
+      color: #d3a8ff;
+      font-size: 14px;
+      line-height: 1;
+      margin: 0;
+      padding: 7px 9px;
+    }
+
+    .chat-page .attach-btn:hover { background: rgba(61, 40, 96, .45); }
+
+    .attach-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .attach-chip {
+      align-items: center;
+      background: #251a38;
+      border: 1px solid #59406e;
+      border-radius: 999px;
+      color: #e8d4ff;
+      display: inline-flex;
+      font-size: 12px;
+      gap: 6px;
+      padding: 3px 4px 3px 10px;
+    }
+
+    .attach-chip button {
+      background: transparent;
+      border-radius: 999px;
+      color: #b9aacb;
+      font-size: 13px;
+      line-height: 1;
+      margin: 0;
+      padding: 2px 6px;
+    }
+
+    .attach-chip button:hover { background: #3d2860; color: #fff; }
+
+    .chat-attachments {
+      color: #cdbfe0;
+      font-size: 12px;
+      margin-top: 6px;
+    }
   </style>
 </head>
 <body>
@@ -1483,6 +1770,20 @@ BASE_TEMPLATE = """
       <a href="/chat" class="{{ 'active' if active == 'chat' }}">
         {{ t.nav_chat }}
       </a>
+      <span class="nav-sep" aria-hidden="true"></span>
+      <span class="nav-group-label">{{ t.nav_demo_group }}</span>
+      {% for href, key, label in [
+        ('/sales', 'sales', t.nav_sales),
+        ('/content', 'content', t.nav_content),
+        ('/knowledge', 'knowledge', t.nav_knowledge),
+        ('/leads', 'leads', t.nav_leads),
+        ('/campaigns', 'campaigns', t.nav_campaigns),
+        ('/market', 'market', t.nav_market),
+        ('/inbox', 'inbox', t.nav_inbox),
+        ('/audit', 'audit', t.nav_audit),
+      ] %}
+        <a href="{{ href }}" class="{{ 'active' if active == key }}">{{ label }}</a>
+      {% endfor %}
     </nav>
     <div class="lang-switch" aria-label="{{ t.lang_label }}">
       <span class="lang-switch-label">{{ t.lang_label }}</span>
@@ -1542,6 +1843,78 @@ BASE_TEMPLATE = """
     const chatForm = document.getElementById("chat-form");
     const chatQuestion = document.getElementById("question");
     const chatModeValue = document.getElementById("chat-mode-value");
+    // v0.18.0 chat attachments (max 3, chips with remove)
+    const chatFileInput = document.getElementById("chat-attachments");
+    const chatAttachButton = document.getElementById("chat-attach-button");
+    const chatChips = document.getElementById("chat-attach-chips");
+    const CHAT_MAX_FILES = chatForm
+      ? parseInt(chatForm.getAttribute("data-max-files") || "3", 10)
+      : 3;
+    let chatSelectedFiles = [];
+
+    function syncChatFileInput() {
+      if (!chatFileInput) return;
+      try {
+        const transfer = new DataTransfer();
+        chatSelectedFiles.forEach(function(file) {
+          transfer.items.add(file);
+        });
+        chatFileInput.files = transfer.files;
+      } catch (error) {}
+    }
+
+    function renderChatChips() {
+      if (!chatChips) return;
+      chatChips.innerHTML = "";
+      chatSelectedFiles.forEach(function(file, index) {
+        const chip = document.createElement("span");
+        chip.className = "attach-chip";
+        chip.setAttribute("data-attach-chip", "");
+        const label = document.createElement("span");
+        label.textContent = file.name;
+        chip.appendChild(label);
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.setAttribute(
+          "aria-label",
+          chatLabel("attach-remove", "Remove") + " " + file.name
+        );
+        remove.textContent = "×";
+        remove.addEventListener("click", function() {
+          chatSelectedFiles.splice(index, 1);
+          renderChatChips();
+        });
+        chip.appendChild(remove);
+        chatChips.appendChild(chip);
+      });
+      chatChips.hidden = chatSelectedFiles.length === 0;
+      syncChatFileInput();
+    }
+
+    if (chatAttachButton && chatFileInput) {
+      chatAttachButton.addEventListener("click", function() {
+        chatFileInput.click();
+      });
+      chatFileInput.addEventListener("change", function() {
+        const incoming = Array.prototype.slice.call(chatFileInput.files || []);
+        let overflow = false;
+        incoming.forEach(function(file) {
+          const duplicate = chatSelectedFiles.some(function(existing) {
+            return existing.name === file.name && existing.size === file.size;
+          });
+          if (duplicate) return;
+          if (chatSelectedFiles.length >= CHAT_MAX_FILES) {
+            overflow = true;
+            return;
+          }
+          chatSelectedFiles.push(file);
+        });
+        if (overflow) {
+          showChatError(chatLabel("attach-max", "At most 3 files."));
+        }
+        renderChatChips();
+      });
+    }
 
     function chatLabel(name, fallback) {
       if (!chatForm) return fallback;
@@ -1682,6 +2055,16 @@ BASE_TEMPLATE = """
       content.textContent = message.content || "";
       inner.appendChild(content);
 
+      if (message.attachments && message.attachments.length) {
+        const files = document.createElement("div");
+        files.className = "chat-attachments";
+        files.setAttribute("data-chat-attachments", "");
+        files.textContent = "📎 " + message.attachments.map(function(item) {
+          return (item && item.name) ? item.name : String(item);
+        }).join(", ");
+        inner.appendChild(files);
+      }
+
       if (message.role === "assistant" && message.metadata) {
         const actions = document.createElement("div");
         actions.className = "chat-message-actions";
@@ -1786,7 +2169,8 @@ BASE_TEMPLATE = """
 
       const mode = getSelectedMode();
       const question = (chatQuestion && chatQuestion.value || "").trim();
-      if (!question) {
+      const files = chatSelectedFiles.slice(0, CHAT_MAX_FILES);
+      if (!question && !files.length) {
         return false;
       }
 
@@ -1798,6 +2182,7 @@ BASE_TEMPLATE = """
         role: "user",
         content: question,
         mode: mode,
+        attachments: files.map(function(file) { return { name: file.name }; }),
       });
       if (chatQuestion) {
         chatQuestion.value = "";
@@ -1819,6 +2204,9 @@ BASE_TEMPLATE = """
       formData.set("mode", mode);
       formData.set("question", question);
       formData.set("format", "json");
+      files.forEach(function(file) {
+        formData.append("attachments", file, file.name);
+      });
 
       try {
         const response = await fetch("/chat", {
@@ -1852,6 +2240,8 @@ BASE_TEMPLATE = """
 
         appendChatBubble(payload.assistant);
         setSelectedMode(payload.mode || mode);
+        chatSelectedFiles = [];
+        renderChatChips();
         setChatPending(false);
         return false;
       } catch (error) {
@@ -2970,6 +3360,8 @@ def chat_page():
 
         session["last_chat_mode"] = mode
         last_chat_at = session.get("last_chat_at", 0)
+        uploads = request.files.getlist("attachments")
+        attachments = []
 
         if (
             time.time() - last_chat_at
@@ -2977,6 +3369,22 @@ def chat_page():
         ):
             error = t["err_chat_rate_limit"]
         else:
+            try:
+                attachments = process_uploaded_files(
+                    uploads,
+                    session_key=session.get("chat_id"),
+                )
+            except AttachmentError as attachment_error:
+                error = (
+                    t["err_chat_attachment"]
+                    + " "
+                    + str(attachment_error)
+                )
+            else:
+                if not question and not attachments:
+                    error = t["err_chat_empty"]
+
+        if error is None:
             try:
                 context = (
                     build_chat_context(question)
@@ -2993,6 +3401,7 @@ def chat_page():
                     mode=mode,
                     context=context,
                     history=history,
+                    attachments=attachments,
                 )
 
             except ChatProviderError as error_value:
@@ -3016,6 +3425,9 @@ def chat_page():
                             answer=chat["answer"],
                             provider_result=result,
                             context=context,
+                            attachments=history_attachment_meta(
+                                attachments
+                            ),
                         )
                     )
 
@@ -3033,6 +3445,11 @@ def chat_page():
                         "content": question,
                         "mode": mode,
                     }
+                    if attachments:
+                        # Metadata only: no bytes, no stored paths.
+                        user_message["attachments"] = (
+                            history_attachment_meta(attachments)
+                        )
                     assistant_message = {
                         "role": "assistant",
                         "content": chat["answer"],
@@ -3155,6 +3572,11 @@ def chat_page():
                 </div>
 
                 <div class="chat-content">{{ message.content }}</div>
+                {% if message.attachments %}
+                  <div class="chat-attachments" data-chat-attachments>
+                    📎 {% for item in message.attachments %}{{ item.name }}{% if not loop.last %}, {% endif %}{% endfor %}
+                  </div>
+                {% endif %}
 
                 {% if message.role == 'assistant'
                       and message.metadata %}
@@ -3201,6 +3623,10 @@ def chat_page():
           id="chat-form"
           method="post"
           action="/chat"
+          enctype="multipart/form-data"
+          data-max-files="{{ max_attachments }}"
+          data-label-attach-remove="{{ t.chat_attach_remove }}"
+          data-label-attach-max="{{ t.chat_attach_max }}"
           data-label-role-user="{{ t.role_user }}"
           data-label-role-assistant="{{ t.role_assistant }}"
           data-label-mode-general="{{ t.mode_general }}"
@@ -3228,7 +3654,24 @@ def chat_page():
             value="{{ chat_mode }}"
           >
 
+          <input
+            type="file"
+            id="chat-attachments"
+            name="attachments"
+            multiple
+            hidden
+            accept="{{ attachment_accept }}"
+          >
+
           <div class="composer-grid">
+            <div class="composer-tools">
+            <button
+              type="button"
+              id="chat-attach-button"
+              class="attach-btn"
+              title="{{ t.chat_attach }}"
+              aria-label="{{ t.chat_attach }}"
+            >📎</button>
             <div class="mode-seg" role="group" aria-label="{{ t.chat_mode_label }}">
               <label>
                 <input
@@ -3253,12 +3696,12 @@ def chat_page():
                 <span>{{ t.mode_orch_context }}</span>
               </label>
             </div>
+            </div>
 
             <textarea
               id="question"
               name="question"
               maxlength="800"
-              required
               rows="1"
               aria-label="{{ t.chat_question_label }}"
               placeholder="{{ t.chat_placeholder }}"
@@ -3274,6 +3717,13 @@ def chat_page():
             </button>
           </div>
 
+          <div
+            id="chat-attach-chips"
+            class="attach-chips"
+            aria-live="polite"
+            hidden
+          ></div>
+
           <p
             id="chat-pending"
             class="chat-pending"
@@ -3286,7 +3736,7 @@ def chat_page():
             {{ t.chat_pending }}
           </p>
 
-          <p class="composer-help">{{ t.chat_help }}</p>
+          <p class="composer-help">{{ t.chat_help }} {{ t.chat_attach_help }}</p>
         </form>
       </div>
       </div>
@@ -3300,7 +3750,20 @@ def chat_page():
         csrf_token=csrf_token,
         error=error,
         chat_mode=chat_mode,
+        attachment_accept=attachment_accept_attribute(),
+        max_attachments=CHAT_MAX_ATTACHMENTS,
     )
+
+
+# v0.18.0: cross-border e-commerce demo modules (sample data only).
+commerce_ui.register(
+    app,
+    render_page=render_page,
+    get_csrf_token=get_csrf_token,
+    get_locale=get_locale,
+    ui_strings=ui_strings,
+    format_short_time=format_short_time,
+)
 
 
 
