@@ -46,7 +46,7 @@ else
   echo "== local: git archive HEAD -> $WORK/app, serve.py on $PORT"
   mkdir -p "$WORK/app"
   git -C "$ROOT" archive HEAD | tar -x -C "$WORK/app"
-  (cd "$WORK/app" && env -u ORCH_UI_SECRET_KEY -u ORCH_AUTH_DIR ORCH_PERSIST_SECRET_KEY=1 \
+  (cd "$WORK/app" && exec env -u ORCH_UI_SECRET_KEY -u ORCH_AUTH_DIR ORCH_PERSIST_SECRET_KEY=1 \
      ORCH_DEMO_FORCE_MOCK=1 ORCH_HOST=127.0.0.1 ORCH_PORT="$PORT" \
      "$PY" serve.py >"$WORK/server.log" 2>&1) &
   PID=$!
