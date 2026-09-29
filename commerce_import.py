@@ -1,4 +1,4 @@
-"""ORCH store-data CSV importer (v0.19.0, WP-ORCH-10).
+"""ORCH store-data CSV importer (v0.19.1, WP-ORCH-10).
 
 Fixed schema (Google Sheets tabs exported as CSV):
 
@@ -15,8 +15,16 @@ Usage:
 Rules:
 - Valid rows are kept, invalid rows are reported per row (partial import).
 - A file whose header is wrong is skipped entirely.
-- A UTF-8 BOM (Google Sheets / Excel export) is accepted.
-- Files not supplied in a run keep their previously imported rows.
+- A UTF-8 BOM (Google Sheets / Excel export) is accepted. v0.19.1: a file
+  that is not UTF-8 is retried as Big5 (cp950, then big5hkscs; zh-HK Excel
+  "CSV" exports); the encoding used is recorded in the report.
+- v0.19.1: trailing empty header cells (``...,category,,``) and their empty
+  cells are ignored.
+- v0.19.1: order rows with the same order_id + sku (and date) are merged:
+  quantity and amount_hkd are summed and the report counts merged rows.
+- Files not supplied in a run keep their previously imported rows. A
+  products-only upload keeps stored orders; orders whose SKU is no longer
+  in products are excluded from the metrics and counted as a warning.
 - The normalised result goes to gitignored state/ecom_import.json with
   the import time. Nothing here calls a model or an external system.
 """
@@ -43,7 +51,7 @@ IMPORT_DIR = PROJECT_ROOT / "data" / "import"
 IMPORT_STATE_FILE = PROJECT_ROOT / "state" / "ecom_import.json"
 LOCK_FILE = PROJECT_ROOT / "state" / ".ecom_demo.lock"
 
-IMPORT_VERSION = "v0.19.0"
+IMPORT_VERSION = "v0.19.1"
 SCHEMA_VERSION = "1.0"
 
 SCHEMAS = {
@@ -52,6 +60,9 @@ SCHEMAS = {
     "traffic": ("date", "page", "pageviews", "source"),
 }
 FILE_ORDER = ("products", "orders", "traffic")
+
+# v0.19.1: tried in order; zh-HK Excel saves "CSV" as Big5 (cp950).
+FALLBACK_ENCODINGS = ("cp950", "big5hkscs")
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_ROWS_PER_FILE = 20_000
@@ -129,15 +140,35 @@ def _parse_date(value):
         return None
 
 
+def decode_csv_bytes_with_encoding(data):
+    """Returns ``(text, encoding)`` or ``(None, None)``.
+
+    UTF-8 (with or without BOM) first, then Big5 (cp950, big5hkscs) for
+    zh-HK Excel exports. Text containing NUL characters (UTF-16 and other
+    binary data) is refused for every encoding.
+    """
+    for encoding in ("utf-8-sig",) + FALLBACK_ENCODINGS:
+        try:
+            text = data.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+        if "\x00" in text:
+            return None, None
+        return text, ("utf-8" if encoding == "utf-8-sig" else encoding)
+    return None, None
+
+
 def decode_csv_bytes(data):
-    """UTF-8 (with or without BOM). Returns text or None."""
-    try:
-        return data.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        return None
+    """Text or None (see decode_csv_bytes_with_encoding)."""
+    return decode_csv_bytes_with_encoding(data)[0]
 
 
-def _read_rows(file_kind, text, errors):
+def _read_rows(file_kind, text, errors, stats=None):
+    """Header check + raw rows. ``stats`` (dict) receives ``skipped`` (rows
+    over the row cap) and ``trailing_empty_columns``."""
+    stats = stats if stats is not None else {}
+    stats.setdefault("skipped", 0)
+    stats.setdefault("trailing_empty_columns", 0)
     reader = csv.reader(io.StringIO(text))
     try:
         header = next(reader)
@@ -148,6 +179,11 @@ def _read_rows(file_kind, text, errors):
         errors.append(_error(file_kind, 1, "empty_file"))
         return None, []
     normalized = [cell.strip().lstrip("\ufeff").strip().lower() for cell in header]
+    # v0.19.1: Excel/Sheets often add empty trailing columns ("...,category,,").
+    while len(normalized) > 1 and not normalized[-1]:
+        normalized.pop()
+        header = header[:-1]
+        stats["trailing_empty_columns"] += 1
     expected = list(SCHEMAS[file_kind])
     if sorted(normalized) != sorted(expected) or len(normalized) != len(expected):
         errors.append(
@@ -160,16 +196,26 @@ def _read_rows(file_kind, text, errors):
         )
         return None, []
     rows = []
+    cap_error = None
+    width = len(normalized)
     try:
         for line_number, cells in enumerate(reader, start=2):
             if not any((cell or "").strip() for cell in cells):
                 continue
-            if len(rows) >= MAX_ROWS_PER_FILE:
-                errors.append(
-                    _error(file_kind, line_number, "too_many_rows",
-                           max=MAX_ROWS_PER_FILE)
-                )
-                break
+            if len(rows) >= MAX_ROWS_PER_FILE or cap_error is not None:
+                # v0.19.1: keep counting so the report shows how many rows
+                # were skipped (the file is already capped at MAX_FILE_BYTES).
+                if cap_error is None:
+                    cap_error = _error(file_kind, line_number, "too_many_rows",
+                                       max=MAX_ROWS_PER_FILE, skipped=0)
+                    errors.append(cap_error)
+                stats["skipped"] += 1
+                cap_error["params"]["skipped"] = stats["skipped"]
+                continue
+            if len(cells) > width and not any(
+                (cell or "").strip() for cell in cells[width:]
+            ):
+                cells = cells[:width]
             if len(cells) != len(normalized):
                 errors.append(
                     _error(file_kind, line_number, "wrong_columns",
@@ -252,7 +298,9 @@ def validate_products(rows, errors):
     return out
 
 
-def validate_orders(rows, errors, known_skus):
+def validate_orders(rows, errors, known_skus, merged=None):
+    """``merged`` (list) receives the line numbers merged into an earlier
+    row with the same order_id + sku."""
     out, seen = [], {}
     known = {sku.upper(): sku for sku in known_skus}
     for line, record in rows:
@@ -270,12 +318,24 @@ def validate_orders(rows, errors, known_skus):
             continue
         key = (order_id.upper(), sku.upper())
         if key in seen:
-            errors.append(_error("orders", line, "duplicate", "order_id",
-                                 f"{order_id} / {sku}", first_row=seen[key]))
+            first = seen[key]
+            if first["date"] != day:
+                errors.append(_error("orders", line, "order_date_conflict", "date",
+                                     f"{order_id} / {sku} / {day}",
+                                     first_row=first["row"], first_date=first["date"]))
+                continue
+            # v0.19.1: same order_id + sku on several rows (a common export
+            # shape, e.g. one row per variant or per discount line) is merged.
+            first["quantity"] += quantity
+            first["amount_hkd"] = round(first["amount_hkd"] + amount, 2)
+            first.setdefault("merged_rows", []).append(line)
+            if merged is not None:
+                merged.append(line)
             continue
-        seen[key] = line
-        out.append({"order_id": order_id, "date": day, "sku": known[sku.upper()],
-                    "quantity": quantity, "amount_hkd": amount, "row": line})
+        item = {"order_id": order_id, "date": day, "sku": known[sku.upper()],
+                "quantity": quantity, "amount_hkd": amount, "row": line}
+        seen[key] = item
+        out.append(item)
     return out
 
 
@@ -311,6 +371,7 @@ def run_import(files, previous=None, source="cli"):
     """
     previous = previous or {}
     errors = []
+    notices = []
     file_reports = {}
     parsed = {}
 
@@ -320,19 +381,29 @@ def run_import(files, previous=None, source="cli"):
         filename, data = files[kind]
         report = {"filename": filename, "sha256": hashlib.sha256(data).hexdigest(),
                   "bytes": len(data), "rows_total": 0, "rows_valid": 0,
-                  "rows_rejected": 0, "accepted": False}
+                  "rows_rejected": 0, "rows_skipped": 0, "rows_merged": 0,
+                  "encoding": None, "accepted": False}
         file_reports[kind] = report
         if len(data) > MAX_FILE_BYTES:
             errors.append(_error(kind, 0, "file_too_large",
                                  max_mb=MAX_FILE_BYTES // (1024 * 1024)))
             continue
-        text = decode_csv_bytes(data)
+        text, encoding = decode_csv_bytes_with_encoding(data)
         if text is None:
             errors.append(_error(kind, 0, "not_utf8"))
             continue
+        report["encoding"] = encoding
+        if encoding != "utf-8":
+            notices.append(_notice(kind, "encoding_fallback", encoding=encoding))
         before = len(errors)
-        header, rows = _read_rows(kind, text, errors)
-        report["rows_total"] = len(rows) + sum(
+        stats = {}
+        header, rows = _read_rows(kind, text, errors, stats)
+        report["rows_skipped"] = stats.get("skipped", 0)
+        report["trailing_empty_columns"] = stats.get("trailing_empty_columns", 0)
+        if report["rows_skipped"]:
+            notices.append(_notice(kind, "rows_skipped", n=report["rows_skipped"],
+                                   max=MAX_ROWS_PER_FILE))
+        report["rows_total"] = len(rows) + report["rows_skipped"] + sum(
             1 for item in errors[before:] if item["code"] == "wrong_columns"
         )
         if header is None:
@@ -349,12 +420,17 @@ def run_import(files, previous=None, source="cli"):
     orders = previous.get("orders") or []
     if "orders" in parsed:
         before = len(errors)
-        orders = validate_orders(parsed["orders"], errors, known_skus)
-        _finish(file_reports["orders"], orders, errors[before:])
-    elif "products" in parsed and orders:
-        # Products were replaced: drop earlier orders for vanished SKUs.
-        known = {sku.upper() for sku in known_skus}
-        orders = [row for row in orders if row["sku"].upper() in known]
+        merged = []
+        orders = validate_orders(parsed["orders"], errors, known_skus, merged)
+        _finish(file_reports["orders"], orders, errors[before:], merged=len(merged))
+        if merged:
+            notices.append(_notice("orders", "orders_merged", n=len(merged)))
+    # v0.19.1: a products-only upload keeps every stored order (see README);
+    # orders whose SKU is not in the current products are only excluded
+    # from the metrics and reported as a warning.
+    unmatched = count_unmatched_orders(products, orders)
+    if unmatched and ("products" in parsed or "orders" in parsed):
+        notices.append(_notice("orders", "orders_unmatched", n=unmatched))
 
     traffic = previous.get("traffic") or []
     if "traffic" in parsed:
@@ -371,6 +447,7 @@ def run_import(files, previous=None, source="cli"):
         "missing_files": [kind for kind in FILE_ORDER if kind not in files],
         "error_count": len(errors),
         "errors": errors[:MAX_STORED_ERRORS],
+        "notices": notices,
         "accepted": accepted_any,
     }
     if not accepted_any:
@@ -384,12 +461,26 @@ def run_import(files, previous=None, source="cli"):
     return dataset, report
 
 
-def _finish(file_report, valid_rows, file_errors):
-    rejected = len({(e["row"]) for e in file_errors if e["row"]})
-    file_report["rows_valid"] = len(valid_rows)
+def _notice(file_kind, code, **params):
+    return {"file": file_kind, "code": code, "params": params}
+
+
+def count_unmatched_orders(products, orders):
+    known = {row["sku"].upper() for row in products or []}
+    return sum(1 for row in orders or [] if row["sku"].upper() not in known)
+
+
+def _finish(file_report, valid_rows, file_errors, merged=0):
+    # Rows over the row cap are counted once each (v0.19.1), not via the
+    # single too_many_rows error.
+    rejected = len({e["row"] for e in file_errors
+                    if e["row"] and e["code"] != "too_many_rows"})
+    rejected += file_report.get("rows_skipped", 0)
+    valid = len(valid_rows) + merged
+    file_report["rows_valid"] = valid
+    file_report["rows_merged"] = merged
     file_report["rows_rejected"] = rejected
-    file_report["rows_total"] = max(file_report["rows_total"],
-                                    len(valid_rows) + rejected)
+    file_report["rows_total"] = max(file_report["rows_total"], valid + rejected)
     file_report["accepted"] = len(valid_rows) > 0
 
 
@@ -439,6 +530,8 @@ def import_files(files, source="cli"):
                     "active": True,
                     "data": dataset,
                     "counts": {key: len(dataset[key]) for key in FILE_ORDER},
+                    "orders_unmatched": count_unmatched_orders(
+                        dataset["products"], dataset["orders"]),
                 }
             )
         state["last_report"] = report
@@ -547,9 +640,18 @@ def compute_metrics(state=None, today=None):
         return None
     data = state["data"]
     products = data.get("products") or []
-    orders = data.get("orders") or []
+    stored_orders = data.get("orders") or []
     traffic = data.get("traffic") or []
     names = {row["sku"]: row["name"] for row in products}
+    # v0.19.1: stored orders whose SKU is not in the current products are
+    # kept in the state file but excluded from every metric (and counted).
+    canonical = {row["sku"].upper(): row["sku"] for row in products}
+    orders = [
+        {**row, "sku": canonical[row["sku"].upper()]}
+        for row in stored_orders
+        if row["sku"].upper() in canonical
+    ]
+    unmatched_order_lines = len(stored_orders) - len(orders)
 
     revenue = round(sum(row["amount_hkd"] for row in orders), 2)
     order_ids = {row["order_id"] for row in orders}
@@ -693,26 +795,39 @@ def compute_metrics(state=None, today=None):
         "low_cover_days": LOW_COVER_DAYS,
         "traffic_by_source": traffic_by_source,
         "conversion": conversion,
+        "unmatched_order_lines": unmatched_order_lines,
     }
 
 
+DIGEST_TOP_SKUS = 10
+DIGEST_LOW_COVER = 20
+DIGEST_TRAFFIC_SOURCES = 10
+
+
 def metrics_digest(metrics, sku=None):
-    """Compact, model-safe summary used as draft source."""
+    """Compact summary used as draft source (v0.19.1: more rows; the
+    prompt builder sizes and sanitises it, see commerce_demo)."""
+    low_rows = [row for row in metrics["stock_cover"] if row["status"] in {"out", "low"}]
     digest = {
         "totals": metrics["totals"],
         "order_period": metrics["order_period"],
+        "traffic_period": metrics.get("traffic_period"),
         "top_skus": [
             {k: row[k] for k in ("sku", "name", "units", "revenue", "share_pct")}
-            for row in metrics["sales_by_sku"][:5]
+            for row in metrics["sales_by_sku"][:DIGEST_TOP_SKUS]
         ],
+        "sku_count_with_sales": len(metrics["sales_by_sku"]),
         "low_cover": [
             {k: row[k] for k in ("sku", "name", "stock", "velocity_per_day",
                                  "days_of_cover", "status")}
-            for row in metrics["stock_cover"]
-            if row["status"] in {"out", "low"}
-        ][:5],
-        "traffic_by_source": metrics["traffic_by_source"][:5],
+            for row in low_rows
+        ][:DIGEST_LOW_COVER],
+        "low_cover_total": len(low_rows),
+        "low_cover_days": metrics.get("low_cover_days", LOW_COVER_DAYS),
+        "traffic_by_source": metrics["traffic_by_source"][:DIGEST_TRAFFIC_SOURCES],
+        "traffic_sources_total": len(metrics["traffic_by_source"]),
         "conversion": metrics["conversion"],
+        "unmatched_order_lines": metrics.get("unmatched_order_lines", 0),
         "revenue_last_weeks": [
             {k: row[k] for k in ("week", "revenue", "orders")}
             for row in metrics["revenue_by_week"][-4:]
@@ -746,6 +861,16 @@ def error_message(error, t):
         return t["imp_err_generic"]
 
 
+def notice_message(notice, t):
+    template = t.get(f"imp_notice_{notice.get('code')}")
+    if not template:
+        return ""
+    try:
+        return template.format(**(notice.get("params") or {}))
+    except (KeyError, IndexError, ValueError):
+        return ""
+
+
 def print_report(report, locale):
     t = ui_strings(locale)
     for kind in FILE_ORDER:
@@ -762,6 +887,11 @@ def print_report(report, locale):
                 rejected=info["rows_rejected"],
             )
         )
+    for notice in report.get("notices") or []:
+        message = notice_message(notice, t)
+        if message:
+            print(t["imp_cli_notice_line"].format(
+                file=t[f"imp_file_{notice['file']}"], message=message))
     for error in report["errors"]:
         print(
             t["imp_cli_error_line"].format(

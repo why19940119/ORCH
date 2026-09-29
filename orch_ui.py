@@ -1677,12 +1677,28 @@ BASE_TEMPLATE = """
 
     .muted { color: var(--muted); font-size: 12px; }
 
-    main p.composer-help {
+    main p.composer-help,
+    main span.composer-help,
+    main ul.composer-help {
       color: #9a86b0;
       font-size: 12px;
+      font-weight: 400;
       line-height: 1.45;
       margin: 6px 0 0;
     }
+
+    /* v0.19.1: inline hint next to a button (e.g. /import reset). */
+    .demo-form span.composer-help.import-hint {
+      align-self: center;
+      flex-basis: auto;
+      flex: 1 1 200px;
+      margin: 0;
+    }
+
+    main ul.composer-help { padding-left: 18px; }
+
+    .import-notices { list-style: none; margin: 10px 0 0; padding: 0; }
+    .import-warning { font-size: 12px; }
 
     .risk-tag {
       background: #303040;

@@ -406,8 +406,15 @@ def build_messages(
     return messages
 
 
+# v0.19.1: chat questions stay at 800 characters; e-commerce drafts built
+# from imported store data may ask for more (never above the hard cap).
+MAX_QUESTION_CHARS = 800
+MAX_QUESTION_CHARS_HARD_CAP = 4000
+
+
 def ask_orch(
-    question, mode, context, history, attachments=None, locale=None
+    question, mode, context, history, attachments=None, locale=None,
+    max_question_chars=MAX_QUESTION_CHARS,
 ):
     if question is None:
         question = ""
@@ -424,9 +431,11 @@ def ask_orch(
             "Chat question cannot be empty.", code="empty_question"
         )
 
-    if len(question) > 800:
+    limit = max(1, min(int(max_question_chars or MAX_QUESTION_CHARS),
+                       MAX_QUESTION_CHARS_HARD_CAP))
+    if len(question) > limit:
         raise ChatProviderError(
-            "Chat question exceeds the 800-character limit.", code="too_long", limit=800
+            f"Chat question exceeds the {limit}-character limit.", code="too_long", limit=limit
         )
 
     use_vision = _has_images(attachments)

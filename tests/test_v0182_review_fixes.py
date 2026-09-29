@@ -578,7 +578,7 @@ class ZhHantNamingTests(DemoStateSandbox):
         self.assertEqual(en_views[0]["id"], task_id)
 
     def test_version_bumped(self):
-        # v0.19.0 (WP-ORCH-10) supersedes v0.18.2.
+        # v0.20.0 (WP-ORCH-11) supersedes v0.19.1 / v0.18.2.
         self.assertEqual(commerce_demo.DEMO_VERSION, "v0.20.0")
 
 
