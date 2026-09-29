@@ -47,6 +47,17 @@ v0.18.2     Review fixes: safe PDF/magic-byte upload validation, 16MB request
             in gitignored state/ecom_demo_queue.json, locked run_queue status
             writes, CLI refuses demo approvals, audit after the gate,
             localised upload/chat errors and draft titles, pytest config
+v0.19.0     Store-data CSV import (products / orders / traffic): /import page +
+            commerce_import.py CLI, per-row validation report, 真實匯入數據
+            banner, real metrics in Market Dashboard / Campaign Engine, AI
+            suggestion drafts via the Approval Inbox, Content Studio uses
+            imported products
+v0.19.1     CSV import review fixes: compact sized metrics block for real-AI
+            drafts (up to 3,000 chars, CSV text sanitised and quoted as data),
+            products-only upload keeps stored orders (unmatched ones are
+            excluded from metrics with a warning), skipped rows counted,
+            trailing empty header cells ignored, same order_id + sku rows
+            merged, Big5 (cp950 / big5hkscs) fallback, reset confirmation
 ```
 
 ## Core Architecture
@@ -571,6 +582,7 @@ fallback reason is stored in the draft provenance (no retry).
 /inbox      Approval Inbox        pending drafts, risk tags, edit → new version,
                                   approve (channel) / reject (reason)
 /audit      Audit Log             decision records + demo events
+/import     Data import (數據匯入)   CSV import of real store data (v0.19.0)
 ```
 
 ### Approve flow
@@ -633,6 +645,102 @@ are de-duplicated by id):
 python3 commerce_demo.py --import-legacy
 ```
 
+### Import real store data (CSV, v0.19.0; review fixes v0.19.1)
+
+Replace the sample products, orders and traffic with your own store
+data. Export each Google Sheet tab as CSV (File → Download → CSV). The
+header row must contain exactly these columns (order and letter case do
+not matter; a UTF-8 BOM from Sheets/Excel is fine; empty trailing header
+cells such as `...,category,,` and their empty cells are ignored):
+
+```text
+products.csv  sku, name, price_hkd, stock, category
+orders.csv    order_id, date, sku, quantity, amount_hkd
+traffic.csv   date, page, pageviews, source
+```
+
+Rules: `date` is `YYYY-MM-DD`; `price_hkd` / `amount_hkd` are numbers
+≥ 0 (`HK$` and thousands separators are accepted); `stock` / `pageviews`
+are whole numbers ≥ 0; `quantity` is a whole number ≥ 1; every order
+`sku` must exist in products.csv. Duplicates are rejected: `sku` in
+products, `date + page + source` in traffic. In orders, rows with the
+same `order_id + sku` (and the same date) are merged, not rejected: their
+`quantity` and `amount_hkd` are added together (a common export shape,
+e.g. one row per variant or discount line) and the report counts the
+merged rows; the same `order_id + sku` with a different date is rejected.
+Limits: 5MB and 20,000 rows per file (rows over the limit are skipped and
+counted as rejected in the report), 16MB per upload request.
+
+Encoding: UTF-8 (Google Sheets, or Excel "CSV UTF-8 (Comma delimited)")
+is preferred. A file that is not UTF-8 is retried as Big5 (cp950, then
+big5hkscs), which is what Traditional Chinese (zh-HK/zh-TW) Excel saves
+as plain "CSV"; the report shows the encoding used. If none works, the
+file is skipped with a message asking you to save it as 「CSV UTF-8」.
+
+Option A (command line):
+
+```bash
+mkdir -p data/import                  # gitignored
+cp ~/Downloads/products.csv ~/Downloads/orders.csv ~/Downloads/traffic.csv data/import/
+.venv/bin/python commerce_import.py   # prints the validation report (zh-Hant)
+.venv/bin/python commerce_import.py --lang en      # report in English
+.venv/bin/python commerce_import.py --status
+.venv/bin/python commerce_import.py --reset        # back to sample data
+```
+
+Option B (browser): open `/import` (nav → 數據匯入), choose one to
+three CSV files and click **驗證並匯入**, or click **從資料夾匯入** to
+read `data/import/`. The page shows a report per file (rows, imported,
+rejected) and per row (row number, column, value, problem). It also has
+a toggle between imported and sample data, and a delete button (asks
+for confirmation first).
+
+Behaviour:
+
+```text
+partial import   valid rows are imported; every rejected row is listed
+bad header       that file is skipped (other files still import)
+missing file     a file not supplied keeps its previously imported rows
+products only    a products-only upload keeps the stored orders; orders whose
+                 SKU is not in the new products are kept in the state file
+                 but excluded from every metric, and a warning with their
+                 count is shown in the report, on /import, Market Dashboard
+                 and Campaign Engine (they count again once the SKU returns)
+nothing valid    previous data stays; only the report is stored
+stored in        state/ecom_import.json (gitignored), with imported_at_utc
+```
+
+While imported data is in use, every demo page shows a green
+**真實匯入數據** banner with the import time instead of 示範數據:
+
+```text
+Sales Hub         products table = imported products (inquiries/leads: sample, labelled)
+Content Studio    SKU list + drafts use the imported product rows
+                  (unknown specs/shipping are written as [HUMAN TO CONFIRM])
+Campaign Engine   sales by SKU, low stock vs velocity, traffic by source,
+                  AI campaign suggestion for an imported SKU (audiences: sample)
+Market Dashboard  revenue, orders, units, AOV, pageviews, conversion,
+                  revenue by week, sales by SKU, days of cover, traffic by
+                  source + AI insight suggestion (sample KPIs hidden)
+Knowledge Base,   still sample data; each section says so
+Lead Desk
+```
+
+Metric definitions: days of cover = stock ÷ (units sold in the 30 days up
+to the latest order date ÷ 30), flagged low under 14 days. Conversion =
+distinct orders ÷ pageviews on the dates covered by both files; pageviews
+are not unique visitors, so it is a rough ratio (the page states this).
+AI suggestions use the same OpenRouter path (one call per click, mock
+fallback). Their prompt carries a compact metrics summary sized to fit
+3,000 characters (revenue totals, conversion, top SKUs by sales, every
+low-stock SKU up to 20, traffic by source, recent weeks); product names
+and other CSV text are stripped of control characters, length-capped,
+quoted and placed in a delimited data block that the model is told is
+data, not instructions. Ordinary chat questions keep the 800-character
+limit. The drafts are drafts: they land in the Approval Inbox and nothing goes
+out without a named approver. The import itself makes no model or
+network calls.
+
 ### Tests
 
 ```bash
@@ -643,7 +751,7 @@ pytest            # conftest.py + pytest.ini make this work from a fresh clone
 ### Limits (demo only)
 
 ```text
-sample data only; no real SKUs, customers or metrics
+sample data unless you import CSVs (v0.19.0: products, orders, traffic only)
 no external publishing, ads, email, WhatsApp or marketplace calls
 lead scoring / classification is rule-based (stand-in for AI assist)
 operator names are typed, not authenticated (local single-user console)

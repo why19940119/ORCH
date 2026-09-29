@@ -30,3 +30,8 @@ state/.ecom_demo.lock
 # v0.18.2 e-commerce demo queue (demo drafts never touch task_queue.json)
 state/ecom_demo_queue.json
 .pytest_cache/
+
+# v0.19.0 store-data CSV import: drop folder + normalised imported state
+data/import/
+state/ecom_import.json
+state/.ecom_import_*

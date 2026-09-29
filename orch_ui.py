@@ -1521,6 +1521,24 @@ BASE_TEMPLATE = """
 
     .sample-meta { color: #b9aacb; margin-left: auto; }
 
+    .sample-banner.imported-banner {
+      background: rgba(94, 214, 160, .08);
+      border-color: rgba(94, 214, 160, .6);
+      color: #a9ecd0;
+    }
+
+    .sample-banner.imported-banner strong { background: #174a36; color: #7ff0c0; }
+
+    .sample-note {
+      border-left: 3px solid rgba(255, 205, 87, .7);
+      color: #f6d78d;
+      font-size: 12px;
+      margin: 4px 0 10px;
+      padding: 4px 10px;
+    }
+
+    .import-error-row td { vertical-align: top; }
+
     .demo-flash {
       border-radius: 7px;
       font-size: 13px;
@@ -1624,12 +1642,28 @@ BASE_TEMPLATE = """
 
     .muted { color: var(--muted); font-size: 12px; }
 
-    main p.composer-help {
+    main p.composer-help,
+    main span.composer-help,
+    main ul.composer-help {
       color: #9a86b0;
       font-size: 12px;
+      font-weight: 400;
       line-height: 1.45;
       margin: 6px 0 0;
     }
+
+    /* v0.19.1: inline hint next to a button (e.g. /import reset). */
+    .demo-form span.composer-help.import-hint {
+      align-self: center;
+      flex-basis: auto;
+      flex: 1 1 200px;
+      margin: 0;
+    }
+
+    main ul.composer-help { padding-left: 18px; }
+
+    .import-notices { list-style: none; margin: 10px 0 0; padding: 0; }
+    .import-warning { font-size: 12px; }
 
     .risk-tag {
       background: #303040;
@@ -1787,6 +1821,7 @@ BASE_TEMPLATE = """
         ('/market', 'market', t.nav_market),
         ('/inbox', 'inbox', t.nav_inbox),
         ('/audit', 'audit', t.nav_audit),
+        ('/import', 'import', t.nav_import),
       ] %}
         <a href="{{ href }}" class="{{ 'active' if active == key }}">{{ label }}</a>
       {% endfor %}
@@ -2388,6 +2423,14 @@ def request_too_large(_error):
                 "mode": session.get("last_chat_mode", "orch_context"),
             }
         ), 413
+    if request.path.startswith("/import"):
+        # v0.19.0: the CSV import page has its own way back.
+        body = (
+            '<div class="section"><div class="warning" role="alert">'
+            "{{ message }}</div>"
+            '<p><a href="/import">{{ t.nav_import }}</a></p></div>'
+        )
+        return render_page(t["nav_import"], "import", body, message=message), 413
     body = (
         '<div class="section"><div class="warning" role="alert">'
         "{{ message }}</div>"

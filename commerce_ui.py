@@ -14,6 +14,7 @@ import time
 from flask import Blueprint, abort, redirect, request, session
 
 import commerce_demo
+import commerce_import
 from commerce_demo import DemoError
 
 
@@ -30,6 +31,7 @@ MODULE_ROUTES = {
     "lead_desk": "/leads",
     "campaign_engine": "/campaigns",
     "market_dashboard": "/market",
+    "data_import": "/import",
 }
 
 
@@ -102,17 +104,45 @@ def _page(title_key, active, body, **context):
     context.setdefault("operator_name", session.get("demo_operator", ""))
     context.setdefault("meta", commerce_demo.load_sample_data()["_meta"])
     context.setdefault("ai_mode", commerce_demo.ai_mode())
+    context.setdefault("imp", _import_banner())
     return _HOOKS["render_page"](
         t[title_key], active, COMMON_HEAD + body, **context
     )
 
 
+def _import_banner():
+    """Banner facts when imported store data is in use (v0.19.0)."""
+    state = commerce_import.active_import()
+    if not state:
+        return None
+    counts = state.get("counts") or {}
+    return {
+        "products": counts.get("products", 0),
+        "orders": counts.get("orders", 0),
+        "traffic": counts.get("traffic", 0),
+        "time": local_short_time(state.get("imported_at_utc")),
+    }
+
+
+def _active_skus(data):
+    """Imported products (sku dict shape) when active, else sample SKUs."""
+    return commerce_import.imported_skus() or data["skus"]
+
+
 COMMON_HEAD = """
+  {% if imp %}
+  <div class="sample-banner imported-banner" data-imported-banner>
+    <strong>{{ t.imp_badge }}</strong>
+    <span>{{ t.imp_banner.format(products=imp.products, orders=imp.orders, traffic=imp.traffic, time=imp.time) }}</span>
+    <span class="sample-meta"><a href="/import">{{ t.nav_import }}</a></span>
+  </div>
+  {% else %}
   <div class="sample-banner" data-sample-banner>
     <strong>{{ t.demo_sample_badge }}</strong>
     <span>{{ t.demo_sample_banner }}</span>
     <span class="sample-meta">{{ meta.brand }} · {{ meta.target_market }} · {{ meta.version }}</span>
   </div>
+  {% endif %}
   {% if flash %}
     <div class="demo-flash demo-flash-{{ flash.kind }}" role="status">
       {{ t.get('demo_msg_' ~ flash.code, t.get('demo_err_' ~ flash.code, t.demo_err_generic)) }}
@@ -163,6 +193,14 @@ DRAFT_SUBMIT = """
   <p class="composer-help">{{ t.demo_draft_help }}</p>
 """
 
+def sample_note(what_key):
+    """Per-section label: still SAMPLE data while an import is in use."""
+    return (
+        "{% if imp %}<p class=\"sample-note\" data-sample-note>"
+        "{{ t.imp_sample_section.format(what=t." + what_key + ") }}</p>{% endif %}"
+    )
+
+
 DRAFT_LIST = """
   <div class="section">
     <h3>{{ t.demo_recent_drafts }}</h3>
@@ -186,8 +224,8 @@ DRAFT_LIST = """
 """
 
 
-def _drafts_for(kind):
-    return [d for d in commerce_demo.draft_views(locale=_HOOKS["get_locale"]()) if d["kind"] == kind][:10]
+def _drafts_for(*kinds):
+    return [d for d in commerce_demo.draft_views(locale=_HOOKS["get_locale"]()) if d["kind"] in kinds][:10]
 
 
 def _module_context(key):
@@ -207,6 +245,7 @@ def _module_context(key):
 def sales_hub():
     data = commerce_demo.load_sample_data()
     skus = commerce_demo.sku_index(data)
+    active_skus = _active_skus(data)
     leads = [
         {**lead, "sku_obj": skus[lead["sku"]]} for lead in data["order_leads"]
     ]
@@ -221,6 +260,7 @@ def sales_hub():
 
   <div class="section">
     <h3>{{ t.demo_sales_draft_title }}</h3>
+    """ + sample_note("imp_what_leads") + """
     <form method="post" action="/demo/draft" class="demo-form">
       <input type="hidden" name="kind" value="sales_next_step">
       <label class="demo-field"><span>{{ t.demo_lead }}</span>
@@ -234,6 +274,7 @@ def sales_hub():
 
   <div class="section">
     <h3>{{ t.demo_order_leads }}</h3>
+    """ + sample_note("imp_what_leads") + """
     <div class="table-wrap"><table>
       <tr><th>{{ t.demo_th_id }}</th><th>{{ t.demo_th_sku }}</th><th>{{ t.demo_th_qty }}</th><th>{{ t.demo_th_stage }}</th><th>{{ t.demo_th_value }}</th><th>{{ t.demo_th_inquiry }}</th></tr>
       {% for l in leads %}
@@ -250,7 +291,7 @@ def sales_hub():
   </div>
 
   <div class="section">
-    <h3>{{ t.demo_products }} ({{ skus|length }})</h3>
+    <h3>{% if imp %}{{ t.imp_products_from_import }}{% else %}{{ t.demo_products }}{% endif %} ({{ skus|length }})</h3>
     <div class="table-wrap"><table>
       <tr><th>{{ t.demo_th_sku }}</th><th>{{ t.demo_th_name }}</th><th>{{ t.demo_th_category }}</th><th>{{ t.demo_th_price }}</th><th>{{ t.demo_th_stock }}</th></tr>
       {% for s in skus %}
@@ -268,7 +309,7 @@ def sales_hub():
     pipeline = sum(lead["est_value_hkd"] for lead in open_leads)
     return _page(
         "mod_sales_hub_title", "sales", body,
-        skus=data["skus"], inquiries=data["inquiries"], leads=leads,
+        skus=active_skus, inquiries=data["inquiries"], leads=leads,
         open_leads=open_leads, pipeline=pipeline,
         drafts=_drafts_for("sales_next_step"),
         **_module_context("sales_hub"),
@@ -281,6 +322,7 @@ def content_studio():
     body = MODULE_HEAD + """
   <div class="section">
     <h3>{{ t.demo_content_draft_title }}</h3>
+    {% if imp %}<p class="composer-help">{{ t.imp_products_from_import }} ({{ skus|length }})</p>{% endif %}
     <form method="post" action="/demo/draft" class="demo-form">
       <input type="hidden" name="kind" value="content">
       <label class="demo-field"><span>{{ t.demo_th_sku }}</span>
@@ -299,7 +341,7 @@ def content_studio():
 """ + DRAFT_LIST
     return _page(
         "mod_content_studio_title", "content", body,
-        skus=data["skus"], content_types=commerce_demo.CONTENT_TYPES,
+        skus=_active_skus(data), content_types=commerce_demo.CONTENT_TYPES,
         drafts=_drafts_for("content"),
         **_module_context("content_studio"),
     )
@@ -312,6 +354,7 @@ def knowledge_base():
     body = MODULE_HEAD + """
   <div class="section">
     <h3>{{ t.demo_kb_policies }}</h3>
+    """ + sample_note("imp_what_kb") + """
     <div class="table-wrap"><table>
       <tr><th>{{ t.demo_th_id }}</th><th>{{ t.demo_th_section }}</th><th>{{ t.demo_th_entry }}</th><th>{{ t.demo_th_version }}</th><th>{{ t.demo_th_approved_by }}</th></tr>
       {% for e in entries %}
@@ -343,6 +386,7 @@ def knowledge_base():
 
   <div class="section">
     <h3>{{ t.demo_kb_propose_title }}</h3>
+    """ + sample_note("imp_what_kb") + """
     <form method="post" action="/demo/draft" class="demo-form">
       <input type="hidden" name="kind" value="kb_update">
       <label class="demo-field"><span>{{ t.demo_th_entry }}</span>
@@ -357,6 +401,7 @@ def knowledge_base():
 
   <div class="section">
     <h3>{{ t.demo_kb_specs }} ({{ skus|length }})</h3>
+    """ + sample_note("imp_what_kb") + """
     <div class="table-wrap"><table>
       <tr><th>{{ t.demo_th_sku }}</th><th>{{ t.demo_th_name }}</th><th>{{ t.demo_th_facts }}</th><th>{{ t.demo_th_claims }}</th></tr>
       {% for s in skus %}
@@ -380,6 +425,7 @@ def lead_desk():
     body = MODULE_HEAD + """
   <div class="section">
     <h3>{{ t.demo_lead_draft_title }}</h3>
+    """ + sample_note("imp_what_inquiries") + """
     <form method="post" action="/demo/draft" class="demo-form">
       <input type="hidden" name="kind" value="lead_reply">
       <label class="demo-field"><span>{{ t.demo_th_inquiry }}</span>
@@ -399,6 +445,7 @@ def lead_desk():
 
   <div class="section">
     <h3>{{ t.demo_inquiry_triage }}</h3>
+    """ + sample_note("imp_what_inquiries") + """
     <p class="composer-help">{{ t.demo_triage_note }}</p>
     <div class="table-wrap"><table>
       <tr><th>{{ t.demo_th_score }}</th><th>{{ t.demo_th_id }}</th><th>{{ t.demo_th_category }}</th><th>{{ t.demo_th_channel }}</th><th>{{ t.demo_th_customer }}</th><th>{{ t.demo_th_message }}</th></tr>
@@ -422,10 +469,81 @@ def lead_desk():
     )
 
 
+IMPORT_UNMATCHED_WARNING = """
+  {% if m.unmatched_order_lines %}<p class="sample-note import-warning" data-unmatched-orders="{{ m.unmatched_order_lines }}">{{ t.imp_warn_unmatched_orders.format(n=m.unmatched_order_lines) }}</p>{% endif %}
+"""
+
+IMPORT_METRICS_SALES = IMPORT_UNMATCHED_WARNING + """
+  <div class="section">
+    <h3>{{ t.imp_sales_by_sku }}</h3>
+    {% if m.sales_by_sku %}
+    <div class="table-wrap"><table data-imp-sales>
+      <tr><th>{{ t.imp_th_sku }}</th><th>{{ t.imp_th_name }}</th><th>{{ t.imp_th_units }}</th><th>{{ t.imp_th_orders }}</th><th>{{ t.imp_th_revenue }}</th><th>{{ t.imp_th_share }}</th></tr>
+      {% for r in m.sales_by_sku[:15] %}
+        <tr><td>{{ r.sku }}</td><td>{{ r.name }}</td><td>{{ r.units }}</td><td>{{ r.orders }}</td><td>HK${{ '{:,.2f}'.format(r.revenue) }}</td><td>{{ r.share_pct }}%</td></tr>
+      {% endfor %}
+    </table></div>
+    {% else %}<div class="empty">{{ t.imp_no_orders }}</div>{% endif %}
+  </div>
+"""
+
+IMPORT_METRICS_COVER = """
+  <div class="section">
+    <h3>{{ t.imp_stock_cover }}</h3>
+    <p class="composer-help">{{ t.imp_stock_cover_note.format(days=m.velocity_window_days, low=m.low_cover_days) }}</p>
+    <div class="table-wrap"><table data-imp-cover>
+      <tr><th>{{ t.imp_th_sku }}</th><th>{{ t.imp_th_name }}</th><th>{{ t.imp_th_stock }}</th><th>{{ t.imp_th_velocity }}</th><th>{{ t.imp_th_cover }}</th><th>{{ t.imp_th_status }}</th></tr>
+      {% for r in m.stock_cover[:15] %}
+        <tr>
+          <td>{{ r.sku }}</td><td>{{ r.name }}</td><td>{{ r.stock }}</td><td>{{ r.velocity_per_day }}</td>
+          <td>{{ r.days_of_cover if r.days_of_cover is not none else '—' }}</td>
+          <td><span class="badge {{ 'failed' if r.status == 'out' else ('waiting_approval' if r.status == 'low' else 'done') }}">{{ t['imp_cover_' ~ r.status] }}</span></td>
+        </tr>
+      {% endfor %}
+    </table></div>
+  </div>
+"""
+
+IMPORT_METRICS_TRAFFIC = """
+  <div class="section">
+    <h3>{{ t.imp_traffic_by_source }}</h3>
+    {% if m.traffic_by_source %}
+    <div class="table-wrap"><table data-imp-traffic>
+      <tr><th>{{ t.imp_th_source }}</th><th>{{ t.imp_th_pageviews }}</th><th></th><th>{{ t.imp_th_share }}</th></tr>
+      {% for r in m.traffic_by_source %}
+        <tr><td>{{ r.source }}</td><td>{{ '{:,}'.format(r.pageviews) }}</td>
+          <td style="width:30%"><div class="kpi-bar"><span style="width: {{ r.share_pct }}%"></span></div></td>
+          <td>{{ r.share_pct }}%</td></tr>
+      {% endfor %}
+    </table></div>
+    {% else %}<div class="empty">{{ t.imp_no_traffic }}</div>{% endif %}
+  </div>
+"""
+
+
 @bp.get("/campaigns")
 def campaign_engine():
     data = commerce_demo.load_sample_data()
+    metrics = commerce_import.compute_metrics()
     body = MODULE_HEAD + """
+  {% if m %}
+  <div class="section">
+    <h3>{{ t.imp_campaign_title }}</h3>
+    <form method="post" action="/demo/draft" class="demo-form" data-import-campaign-form>
+      <input type="hidden" name="kind" value="import_campaign">
+      <label class="demo-field"><span>{{ t.demo_th_sku }}</span>
+        <select name="sku">{% for s in skus %}<option value="{{ s.sku }}">{{ s.sku }} · {{ s.name_en }}</option>{% endfor %}</select>
+      </label>
+      <label class="demo-field"><span>{{ t.demo_objective }}</span>
+        <select name="objective">{% for o in objectives %}<option value="{{ o }}">{{ t.get('obj_' ~ o, o) }}</option>{% endfor %}</select>
+      </label>
+      """ + LANGUAGE_FIELD + OPERATOR_FIELDS + DRAFT_SUBMIT + """
+    </form>
+    <p class="composer-help">{{ t.imp_insight_help }}</p>
+    """ + sample_note("imp_what_audiences") + """
+  </div>
+  """ + IMPORT_METRICS_SALES + IMPORT_METRICS_COVER + IMPORT_METRICS_TRAFFIC + """
+  {% else %}
   <div class="section">
     <h3>{{ t.demo_campaign_draft_title }}</h3>
     <form method="post" action="/demo/draft" class="demo-form">
@@ -442,20 +560,62 @@ def campaign_engine():
       """ + LANGUAGE_FIELD + OPERATOR_FIELDS + DRAFT_SUBMIT + """
     </form>
   </div>
+  {% endif %}
 """ + DRAFT_LIST
     return _page(
         "mod_campaign_engine_title", "campaigns", body,
-        skus=data["skus"], audiences=data["campaign"]["audiences"],
+        m=metrics,
+        skus=_active_skus(data), audiences=data["campaign"]["audiences"],
         objectives=commerce_demo.CAMPAIGN_OBJECTIVES,
-        drafts=_drafts_for("campaign"),
+        drafts=_drafts_for("campaign", "import_campaign"),
         **_module_context("campaign_engine"),
     )
 
 
 @bp.get("/market")
 def market_dashboard():
-    summary = commerce_demo.kpi_summary()
+    metrics = commerce_import.compute_metrics()
+    summary = None if metrics else commerce_demo.kpi_summary()
     body = MODULE_HEAD + """
+  {% if m %}
+  <h3 data-imp-metrics>{{ t.imp_metrics_title }}</h3>
+  """ + IMPORT_UNMATCHED_WARNING + """
+  {% if m.order_period %}<p class="composer-help">{{ t.imp_period.format(start=m.order_period[0], end=m.order_period[1]) }}</p>{% endif %}
+  <div class="grid">
+    <div class="card"><span class="metric-label">{{ t.imp_kpi_revenue }}</span><span class="metric-value">HK${{ '{:,.0f}'.format(m.totals.revenue) }}</span></div>
+    <div class="card"><span class="metric-label">{{ t.imp_kpi_orders }}</span><span class="metric-value">{{ m.totals.orders }}</span></div>
+    <div class="card"><span class="metric-label">{{ t.imp_kpi_units }}</span><span class="metric-value">{{ m.totals.units }}</span></div>
+    <div class="card"><span class="metric-label">{{ t.imp_kpi_aov }}</span><span class="metric-value">HK${{ '{:,.0f}'.format(m.totals.aov) }}</span></div>
+    <div class="card"><span class="metric-label">{{ t.imp_kpi_pageviews }}</span><span class="metric-value">{{ '{:,}'.format(m.totals.pageviews) }}</span></div>
+    <div class="card"><span class="metric-label">{{ t.imp_kpi_conversion }}</span><span class="metric-value">{{ m.conversion.rate_pct ~ '%' if m.conversion else '—' }}</span></div>
+  </div>
+  <p class="composer-help" data-conversion-assumption>{% if m.conversion %}{{ t.imp_conversion_assumption.format(start=m.conversion.start, end=m.conversion.end, orders=m.conversion.orders, pageviews='{:,}'.format(m.conversion.pageviews)) }}{% else %}{{ t.imp_conversion_na }}{% endif %}</p>
+
+  <div class="section">
+    <h3>{{ t.imp_insight_title }}</h3>
+    <form method="post" action="/demo/draft" class="demo-form" data-import-insight-form>
+      <input type="hidden" name="kind" value="import_insight">
+      """ + LANGUAGE_FIELD + OPERATOR_FIELDS + DRAFT_SUBMIT + """
+    </form>
+    <p class="composer-help">{{ t.imp_insight_help }}</p>
+  </div>
+
+  <div class="section">
+    <h3>{{ t.imp_revenue_by_week }}</h3>
+    {% if m.revenue_by_week %}
+    <div class="table-wrap"><table data-imp-weeks>
+      <tr><th>{{ t.imp_th_week }}</th><th>{{ t.imp_th_revenue }}</th><th></th><th>{{ t.imp_th_orders }}</th><th>{{ t.imp_th_units }}</th></tr>
+      {% for r in m.revenue_by_week %}
+        <tr><td>{{ r.week }} · {{ r.week_start }}</td><td>HK${{ '{:,.2f}'.format(r.revenue) }}</td>
+          <td style="width:30%"><div class="kpi-bar"><span style="width: {{ r.bar_pct }}%"></span></div></td>
+          <td>{{ r.orders }}</td><td>{{ r.units }}</td></tr>
+      {% endfor %}
+    </table></div>
+    {% else %}<div class="empty">{{ t.imp_no_orders }}</div>{% endif %}
+  </div>
+  """ + IMPORT_METRICS_SALES + IMPORT_METRICS_COVER + IMPORT_METRICS_TRAFFIC + """
+  <p class="sample-note">{{ t.imp_sample_hidden_note }} {{ t.imp_sample_section.format(what=t.imp_what_inquiries) }}</p>
+  {% else %}
   <div class="grid">
     <div class="card"><span class="metric-label">{{ t.demo_kpi_sessions }}</span><span class="metric-value">{{ '{:,}'.format(k.totals.sessions) }}</span></div>
     <div class="card"><span class="metric-label">{{ t.demo_kpi_inquiries }}</span><span class="metric-value">{{ k.totals.inquiries }}</span></div>
@@ -495,12 +655,218 @@ def market_dashboard():
       """ + LANGUAGE_FIELD + OPERATOR_FIELDS + DRAFT_SUBMIT + """
     </form>
   </div>
+  {% endif %}
 """ + DRAFT_LIST
     return _page(
         "mod_market_dashboard_title", "market", body,
-        k=summary, drafts=_drafts_for("market_insight"),
+        m=metrics, k=summary,
+        drafts=_drafts_for("market_insight", "import_insight"),
         **_module_context("market_dashboard"),
     )
+
+
+# ---------------------------------------------------------------------------
+# v0.19.0: /import (CSV upload, folder import, toggle, reset)
+# ---------------------------------------------------------------------------
+
+IMPORT_BODY = """
+  <div class="section">
+    <h3>{{ t.imp_status_title }}</h3>
+    {% if state and state.data %}
+      <p data-import-status="{{ 'active' if state.active else 'inactive' }}"><strong>{{ t.imp_status_active if state.active else t.imp_status_inactive }}</strong></p>
+      <p class="composer-help">{{ t.imp_status_detail.format(time=state.imported_at_utc|local_time, products=state.counts.products, orders=state.counts.orders, traffic=state.counts.traffic) }}</p>
+      {% if unmatched_orders %}<p class="sample-note import-warning" data-unmatched-orders="{{ unmatched_orders }}">{{ t.imp_warn_unmatched_orders.format(n=unmatched_orders) }}</p>{% endif %}
+      <div class="inbox-actions">
+        <form method="post" action="/import/toggle" class="demo-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="active" value="{{ '0' if state.active else '1' }}">
+          <button type="submit" data-import-toggle>{{ t.imp_toggle_off if state.active else t.imp_toggle_on }}</button>
+        </form>
+        <form method="post" action="/import/reset" class="demo-form import-reset-form" data-confirm="{{ t.imp_reset_confirm }}" onsubmit="return window.confirm(this.getAttribute('data-confirm'));">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="btn-reject" data-import-reset>{{ t.imp_reset_button }}</button>
+          <span class="composer-help import-hint">{{ t.imp_reset_help }}</span>
+        </form>
+      </div>
+    {% else %}
+      <p data-import-status="none">{{ t.imp_status_none }}</p>
+    {% endif %}
+  </div>
+
+  <div class="section">
+    <h3>{{ t.imp_heading }}</h3>
+    <p class="composer-help">{{ t.imp_intro }}</p>
+    <h4>{{ t.imp_schema_title }}</h4>
+    <div class="table-wrap"><table>
+      {% for kind, cols in schemas %}
+        <tr><td>{{ t['imp_file_' ~ kind] }}</td><td><code>{{ cols|join(',') }}</code></td></tr>
+      {% endfor %}
+    </table></div>
+    <ul class="composer-help import-rules" data-import-rules>
+      <li data-rule-merge>{{ t.imp_rule_merge }}</li>
+      <li data-rule-encoding>{{ t.imp_rule_encoding }}</li>
+      <li data-rule-products-only>{{ t.imp_rule_products_only }}</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h3>{{ t.imp_upload_title }}</h3>
+    <form method="post" action="/import" enctype="multipart/form-data" class="demo-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {% for kind, cols in schemas %}
+        <label class="demo-field"><span>{{ t['imp_file_' ~ kind] }}</span>
+          <input type="file" name="{{ kind }}" accept=".csv,text/csv"></label>
+      {% endfor %}
+      <button type="submit">{{ t.imp_upload_button }}</button>
+      <p class="composer-help">{{ t.imp_upload_help.format(max_mb=max_mb) }}</p>
+    </form>
+  </div>
+
+  <div class="section">
+    <h3>{{ t.imp_folder_title }}</h3>
+    <form method="post" action="/import/folder" class="demo-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit">{{ t.imp_folder_button }}</button>
+      <span class="composer-help import-hint">{{ t.imp_folder_help }} · <code>{{ import_dir }}</code></span>
+    </form>
+  </div>
+
+  <div class="section" data-import-report>
+    <h3>{{ t.imp_report_title }}</h3>
+    {% if report %}
+      <p class="composer-help">{{ t.imp_report_meta.format(time=report.imported_at_utc|local_time, source=t.get('imp_source_' ~ report.source, report.source)) }}</p>
+      <div class="table-wrap"><table>
+        <tr><th>{{ t.imp_th_file }}</th><th>{{ t.imp_th_total }}</th><th>{{ t.imp_th_valid }}</th><th>{{ t.imp_th_rejected }}</th><th>{{ t.imp_th_merged }}</th><th>{{ t.imp_th_encoding }}</th><th>{{ t.imp_th_result }}</th></tr>
+        {% for kind, cols in schemas %}
+          {% set f = report.files.get(kind) %}
+          <tr data-import-file="{{ kind }}">
+            <td>{{ t['imp_file_' ~ kind] }}</td>
+            {% if f %}
+              <td>{{ f.rows_total }}</td><td>{{ f.rows_valid }}</td><td data-rows-rejected>{{ f.rows_rejected }}</td>
+              <td data-rows-merged>{{ f.rows_merged or 0 }}</td>
+              <td data-encoding="{{ f.encoding or '' }}">{{ t.get('imp_enc_' ~ f.encoding, f.encoding|upper) if f.encoding else '—' }}</td>
+              <td><span class="badge {{ 'done' if f.accepted else 'failed' }}">{{ t.imp_file_accepted if f.accepted else t.imp_file_skipped }}</span></td>
+            {% else %}
+              <td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="muted">{{ t.imp_file_missing }}</td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+      </table></div>
+      {% if notices %}
+        <ul class="import-notices" data-import-notices>
+          {% for n in notices %}<li class="sample-note import-warning" data-notice-code="{{ n.code }}">{{ t['imp_file_' ~ n.file] }}: {{ n.message }}</li>{% endfor %}
+        </ul>
+      {% endif %}
+      {% if errors %}
+        <div class="table-wrap"><table data-import-errors>
+          <tr><th>{{ t.imp_th_file }}</th><th>{{ t.imp_th_row }}</th><th>{{ t.imp_th_field }}</th><th>{{ t.imp_th_value }}</th><th>{{ t.imp_th_problem }}</th></tr>
+          {% for e in errors %}
+            <tr class="import-error-row" data-error-code="{{ e.code }}">
+              <td>{{ t['imp_file_' ~ e.file] }}</td><td>{{ e.row or '—' }}</td>
+              <td>{{ t.get('imp_field_' ~ e.field, e.field) if e.field else '—' }}</td>
+              <td><code>{{ e.value }}</code></td><td>{{ e.message }}</td>
+            </tr>
+          {% endfor %}
+        </table></div>
+        {% if hidden_errors > 0 %}<p class="composer-help">{{ t.imp_errors_more.format(n=hidden_errors) }}</p>{% endif %}
+      {% else %}
+        <div class="empty">{{ t.imp_no_errors }}</div>
+      {% endif %}
+    {% else %}
+      <div class="empty">{{ t.imp_report_none }}</div>
+    {% endif %}
+  </div>
+"""
+
+
+@bp.get("/import")
+def import_page():
+    t = _t()
+    state = commerce_import.load_state()
+    report = (state or {}).get("last_report")
+    errors = []
+    notices = []
+    if report:
+        errors = [
+            {**item, "message": commerce_import.error_message(item, t)}
+            for item in report.get("errors") or []
+        ]
+        notices = [
+            {**item, "message": commerce_import.notice_message(item, t)}
+            for item in report.get("notices") or []
+        ]
+        notices = [item for item in notices if item["message"]]
+    unmatched = 0
+    if state and state.get("data"):
+        unmatched = commerce_import.count_unmatched_orders(
+            state["data"].get("products"), state["data"].get("orders"))
+    return _page(
+        "mod_data_import_title", "import", MODULE_HEAD + IMPORT_BODY,
+        state=state, report=report, errors=errors, notices=notices,
+        unmatched_orders=unmatched,
+        hidden_errors=(report or {}).get("error_count", 0) - len(errors),
+        schemas=[(kind, commerce_import.SCHEMAS[kind]) for kind in commerce_import.FILE_ORDER],
+        max_mb=commerce_import.MAX_FILE_BYTES // (1024 * 1024),
+        import_dir="data/import/",
+        **_module_context("data_import"),
+    )
+
+
+def _after_import(report):
+    if report is None:
+        return
+    _flash("ok" if report["accepted"] else "error",
+           "import_done" if report["accepted"] else "import_nothing_valid")
+
+
+@bp.post("/import")
+def import_upload():
+    require_csrf()
+    files = {}
+    for kind in commerce_import.FILE_ORDER:
+        storage = request.files.get(kind)
+        if storage is None or not (storage.filename or "").strip():
+            continue
+        if not storage.filename.lower().endswith(".csv"):
+            _flash("error", "import_bad_type")
+            return redirect("/import")
+        data = storage.stream.read(commerce_import.MAX_FILE_BYTES + 1)
+        files[kind] = (storage.filename[:120], data)
+    if not files:
+        _flash("error", "import_no_files")
+        return redirect("/import")
+    _after_import(commerce_import.import_files(files, source="upload"))
+    return redirect("/import")
+
+
+@bp.post("/import/folder")
+def import_folder():
+    require_csrf()
+    report = commerce_import.import_from_folder(source="folder")
+    if report is None:
+        _flash("error", "import_folder_empty")
+    else:
+        _after_import(report)
+    return redirect("/import")
+
+
+@bp.post("/import/toggle")
+def import_toggle():
+    require_csrf()
+    active = request.form.get("active") == "1"
+    if not commerce_import.set_active(active):
+        _flash("error", "no_import_data")
+    else:
+        _flash("ok", "import_on" if active else "import_off")
+    return redirect("/import")
+
+
+@bp.post("/import/reset")
+def import_reset():
+    require_csrf()
+    commerce_import.reset_import()
+    _flash("ok", "import_reset")
+    return redirect("/import")
 
 
 @bp.get("/inbox")
