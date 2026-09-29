@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import commerce_demo
+import orch_db
 
 
 def main():
@@ -20,9 +21,7 @@ def main():
         return 2
 
     task_id = sys.argv[1]
-    statuses = json.loads(
-        Path(commerce_demo.STATUS_FILE).read_text(encoding="utf-8")
-    )
+    statuses = orch_db.load(commerce_demo.STATUS_FILE, {}) or {}   # v0.21.0
     state = statuses.get(task_id) or {}
     decision = (state.get("ecom") or {}).get("decision") or {}
 

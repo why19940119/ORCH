@@ -230,7 +230,14 @@ def _run(path, fn, write=False):
     if write:
         with transaction(path) as conn:
             return fn(conn)
-    conn = _open(db_path_for(path))
+    db_file = db_path_for(path)
+    if not db_file.exists() and not legacy_files(db_file.parent):
+        # Pure read of a store that was never created: answer from an empty
+        # in-memory schema instead of creating state/orch.db as a side effect.
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(SCHEMA)
+    else:
+        conn = _open(db_file)
     try:
         return fn(conn)
     finally:

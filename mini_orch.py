@@ -26,7 +26,9 @@ def state_lock(lock_file=None):
     """v0.21.0: one SQLite write transaction (BEGIN IMMEDIATE) on the state
     DB next to ``lock_file`` (was an flock). Re-entrant per thread; every
     load/save/event inside commits or rolls back together."""
-    lock_path = Path(lock_file) if lock_file is not None else LOCK_FILE
+    # Default: the DB that holds STATUS_FILE (read at call time, so a
+    # patched STATUS_FILE never locks the repository's own state/orch.db).
+    lock_path = Path(lock_file) if lock_file is not None else STATUS_FILE
     with orch_db.transaction(lock_path):
         yield
 
@@ -638,6 +640,11 @@ def decide_approval(
 
     # v0.21.0: the gate check, the conditional status update and the audit
     # event are one SQLite transaction (BEGIN IMMEDIATE).
+    if not orch_db.is_managed(status_path):     # plain JSON file (old callers)
+        return _decide_in_transaction(
+            task_id, decision, decided_by, note, queue_file, queue_path,
+            status_path, events_file, extra_state, strict, os_user,
+        )
     with orch_db.transaction(status_path):
         return _decide_in_transaction(
             task_id, decision, decided_by, note, queue_file, queue_path,
@@ -706,7 +713,10 @@ def _decide_in_transaction(task_id, decision, decided_by, note, queue_file,
     statuses[task_id] = task_state
     # Conditional update: only succeeds while the stored decision is still
     # the one checked above (so only one approval can ever win).
-    if not orch_db.put_task_state_if(status_path, task_id, task_state, prior):
+    if not orch_db.is_managed(status_path):
+        status_path.parent.mkdir(parents=True, exist_ok=True)
+        save_json(status_path, statuses)
+    elif not orch_db.put_task_state_if(status_path, task_id, task_state, prior):
         return {"ok": False, "reason": "already_decided"}
 
     write_event(

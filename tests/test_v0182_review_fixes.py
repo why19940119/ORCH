@@ -22,6 +22,7 @@ import commerce_demo
 import commerce_import
 import commerce_ui
 import mini_orch
+import orch_db
 import orch_chat
 import orch_ui
 from auth_testing import demo_signed_in, sign_in, signed_in
@@ -375,14 +376,14 @@ class DemoStateSandbox(unittest.TestCase):
             )["task_id"]
 
     def statuses(self):
-        return json.loads(self.status.read_text(encoding="utf-8"))
+        return orch_db.load(self.status, {})
 
 
 class DemoQueueTests(DemoStateSandbox):
     def test_draft_goes_to_demo_queue_not_tracked_queue(self):
         task_id = self.new_draft()
         self.assertEqual(self.main_queue.read_bytes(), self.main_bytes)
-        demo = json.loads(self.demo_queue.read_text(encoding="utf-8"))
+        demo = orch_db.load(self.demo_queue, [])
         self.assertEqual([t["id"] for t in demo], [task_id])
 
     def test_demo_queue_is_gitignored(self):
@@ -403,7 +404,7 @@ class DemoQueueTests(DemoStateSandbox):
 
     def test_mini_orch_merges_queues_and_dedupes(self):
         task_id = self.new_draft()
-        legacy = json.loads(self.demo_queue.read_text(encoding="utf-8"))[0]
+        legacy = orch_db.load(self.demo_queue, [])[0]
         main = json.loads(self.main_queue.read_text(encoding="utf-8")) + [legacy]
         self.main_queue.write_text(json.dumps(main), encoding="utf-8")
         ids = [t["id"] for t in mini_orch.load_all_tasks()]
@@ -437,15 +438,15 @@ class DemoQueueTests(DemoStateSandbox):
 
     def test_import_legacy_copies_without_touching_main_queue(self):
         task_id = self.new_draft()
-        task = json.loads(self.demo_queue.read_text(encoding="utf-8"))[0]
-        self.demo_queue.unlink()
+        task = orch_db.load(self.demo_queue, [])[0]
+        orch_db.delete(self.demo_queue)
         main = json.loads(self.main_queue.read_text(encoding="utf-8")) + [task]
         self.main_queue.write_text(json.dumps(main), encoding="utf-8")
         before = self.main_queue.read_bytes()
         self.assertEqual(commerce_demo.import_legacy_demo_tasks(), [task_id])
         self.assertEqual(commerce_demo.import_legacy_demo_tasks(), [])
         self.assertEqual(self.main_queue.read_bytes(), before)
-        demo = json.loads(self.demo_queue.read_text(encoding="utf-8"))
+        demo = orch_db.load(self.demo_queue, [])
         self.assertEqual([t["id"] for t in demo], [task_id])
 
 
@@ -471,9 +472,8 @@ class RunQueueLockTests(DemoStateSandbox):
     def test_status_save_does_not_clobber_concurrent_ui_writes(self):
         statuses = {"task_main_001": {"id": "task_main_001", "status": "todo"}}
         # Simulate the UI creating a draft after run_queue loaded statuses.
-        self.status.write_text(json.dumps({"task_ecom_content_abcdef0123": {
-            "id": "task_ecom_content_abcdef0123", "status": "waiting_approval"}}),
-            encoding="utf-8")
+        orch_db.save(self.status, {"task_ecom_content_abcdef0123": {
+            "id": "task_ecom_content_abcdef0123", "status": "waiting_approval"}})
         statuses["task_main_001"]["status"] = "blocked"
         mini_orch.save_task_status(statuses, "task_main_001")
         disk = self.statuses()
@@ -568,7 +568,7 @@ class ZhHantNamingTests(DemoStateSandbox):
 
     def test_draft_title_is_zh_hant_by_default_and_per_locale(self):
         task_id = self.new_draft()
-        task = json.loads(self.demo_queue.read_text(encoding="utf-8"))[0]
+        task = orch_db.load(self.demo_queue, [])[0]
         self.assertTrue(task["title"].startswith("[示範] 內容工作室："), task["title"])
         self.assertIn("商品頁", task["title"])
         en_views = commerce_demo.draft_views(locale="en")

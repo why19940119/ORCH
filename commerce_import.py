@@ -491,7 +491,14 @@ def _finish(file_report, valid_rows, file_errors, merged=0):
 
 def load_state():
     # v0.21.0: docs['ecom_import'] in state/orch.db.
-    data = orch_db.load(Path(IMPORT_STATE_FILE), None)
+    path = Path(IMPORT_STATE_FILE)
+    if orch_db.is_managed(path):
+        data = orch_db.load(path, None)
+    else:                     # a plain JSON path (tests / custom location)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = None
     return data if isinstance(data, dict) else None
 
 
@@ -562,7 +569,13 @@ def set_active(active):
 
 def reset_import():
     with mini_orch.state_lock(LOCK_FILE):
-        return orch_db.delete(Path(IMPORT_STATE_FILE))
+        path = Path(IMPORT_STATE_FILE)
+        if orch_db.is_managed(path):
+            return orch_db.delete(path)
+        if path.exists():
+            path.unlink()
+            return True
+        return False
 
 
 def active_import():
