@@ -96,7 +96,8 @@ class ValidationTests(unittest.TestCase):
         )
         self.assertEqual(
             self.codes(report, "orders"),
-            [(7, "duplicate"), (8, "bad_date"), (9, "unknown_sku"),
+            # v0.19.1: row 7 repeats O3 + TEA-02 and is merged, not rejected.
+            [(8, "bad_date"), (9, "unknown_sku"),
              (10, "not_positive"), (11, "negative")],
         )
         self.assertEqual(self.codes(report, "traffic"), [(5, "duplicate"), (6, "bad_date")])
@@ -107,8 +108,9 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(len(dataset["orders"]), 5)
         self.assertEqual(len(dataset["traffic"]), 3)
         files = report["files"]
-        self.assertEqual((files["orders"]["rows_valid"], files["orders"]["rows_rejected"]), (5, 5))
-        self.assertEqual(report["error_count"], 10)
+        self.assertEqual((files["orders"]["rows_valid"], files["orders"]["rows_rejected"]), (6, 4))
+        self.assertEqual(files["orders"]["rows_merged"], 1)
+        self.assertEqual(report["error_count"], 9)
 
     def test_bad_header_skips_file(self):
         dataset, report = self.run_import(products="sku,title,price,stock,category\nA,B,1,1,c\n")
@@ -189,9 +191,9 @@ class MetricsTests(unittest.TestCase):
 
     def test_totals_and_sales_by_sku(self):
         m = self.metrics
-        self.assertEqual(m["totals"]["revenue"], 1444.0)
+        self.assertEqual(m["totals"]["revenue"], 1502.5)   # O3 TEA-02 rows merged
         self.assertEqual(m["totals"]["orders"], 4)
-        self.assertEqual(m["totals"]["units"], 17)
+        self.assertEqual(m["totals"]["units"], 18)
         self.assertEqual(m["sales_by_sku"][0]["sku"], "TEA-01")
         self.assertEqual(m["sales_by_sku"][0]["revenue"], 616.0)
         self.assertEqual(m["order_period"], ["2026-09-01", "2026-09-25"])
@@ -199,7 +201,7 @@ class MetricsTests(unittest.TestCase):
     def test_revenue_by_week(self):
         weeks = {row["week"]: row["revenue"] for row in self.metrics["revenue_by_week"]}
         self.assertEqual(weeks, {"2026-W36": 234.5, "2026-W37": 440.0,
-                                 "2026-W38": 175.5, "2026-W39": 594.0})
+                                 "2026-W38": 234.0, "2026-W39": 594.0})
 
     def test_days_of_cover(self):
         cover = {row["sku"]: row for row in self.metrics["stock_cover"]}
@@ -246,7 +248,7 @@ class ImportPageTests(ImportSandbox):
 
         report = self.client.get("/import").get_data(as_text=True)
         self.assertIn("data-import-errors", report)
-        self.assertEqual(report.count('data-error-code="'), 10)
+        self.assertEqual(report.count('data-error-code="'), 9)
         self.assertIn('data-error-code="unknown_sku"', report)
         self.assertIn("ZZZ-99", report)
         self.assertIn(ui_strings("zh-Hant")["demo_msg_import_done"], report)
@@ -269,7 +271,7 @@ class ImportPageTests(ImportSandbox):
         self.upload()
         html = self.client.get("/market").get_data(as_text=True)
         self.assertIn("data-imp-metrics", html)
-        self.assertIn("HK$1,444", html)
+        self.assertIn("HK$1,502", html)
         self.assertIn("0.3%", html)
         self.assertIn("data-conversion-assumption", html)
         self.assertIn("訂單數 ÷ 瀏覽量", html)
@@ -330,7 +332,7 @@ class ImportDraftTests(ImportSandbox):
         self.assertTrue(view["title"].startswith("[匯入數據]"))
         self.assertFalse(view["source"]["sample_data"])
         self.assertIn("TEA-01", view["body"])
-        self.assertIn("HK$1,444.00", view["body"])
+        self.assertIn("HK$1,502.50", view["body"])
         self.assertIn("LOW-01", view["body"])            # restock suggestion
         inbox = self.client.get("/inbox").get_data(as_text=True)
         self.assertIn(task_id, inbox)
@@ -397,7 +399,8 @@ class ImportDraftTests(ImportSandbox):
         prompt = calls[0]["question"]
         self.assertIn("IMPORTED", prompt)
         self.assertIn("orders / pageviews", prompt)
-        self.assertLessEqual(len(prompt), commerce_demo.MAX_PROMPT_CHARS)
+        self.assertLessEqual(len(prompt), commerce_demo.MAX_IMPORT_PROMPT_CHARS)
+        self.assertEqual(calls[0]["max_question_chars"], commerce_demo.MAX_IMPORT_PROMPT_CHARS)
         view = commerce_demo.draft_views(locale="en")[0]
         self.assertEqual(view["body"], "Restock LOW-01 first.")
         self.assertEqual(view["approval_status"], "waiting_approval")
@@ -452,7 +455,8 @@ class CliTests(unittest.TestCase):
             (folder / name).write_bytes(raw)
         code, out = self.run_cli("--lang", "en")
         self.assertEqual(code, 0)
-        self.assertIn("orders.csv: 5 of 10 rows imported, 5 rejected", out)
+        self.assertIn("orders.csv: 6 of 10 rows imported, 4 rejected", out)
+        self.assertIn("orders.csv note: 1 rows repeated an order_id + sku", out)
         self.assertIn('SKU "ZZZ-99" is not in products.csv.', out)
         state = commerce_import.load_state()
         self.assertEqual(state["last_report"]["source"], "folder")
@@ -486,7 +490,11 @@ class RepoHygieneTests(unittest.TestCase):
         used |= {f"imp_err_{c}" for c in ("bad_header", "missing_value", "not_number", "not_integer",
                                           "negative", "not_positive", "bad_date", "unknown_sku",
                                           "duplicate", "not_utf8", "empty_file", "too_many_rows",
-                                          "too_long", "wrong_columns", "file_too_large")}
+                                          "too_long", "wrong_columns", "file_too_large",
+                                          "order_date_conflict")}
+        used |= {f"imp_notice_{c}" for c in ("encoding_fallback", "rows_skipped",
+                                             "orders_merged", "orders_unmatched")}
+        used |= {f"imp_enc_{e}" for e in commerce_import.FALLBACK_ENCODINGS}
         used |= {f"imp_field_{f}" for cols in commerce_import.SCHEMAS.values() for f in cols}
         used |= {f"imp_cover_{s}" for s in ("out", "low", "ok", "no_sales")}
         used |= {f"imp_file_{k}" for k in commerce_import.FILE_ORDER}
@@ -496,9 +504,9 @@ class RepoHygieneTests(unittest.TestCase):
             self.assertEqual(missing, [], code)
 
     def test_version(self):
-        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.19.0")
-        self.assertEqual(commerce_import.IMPORT_VERSION, "v0.19.0")
-        self.assertIn("v0.19.0", (PROJECT_ROOT / "README.md").read_text(encoding="utf-8"))
+        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.19.1")
+        self.assertEqual(commerce_import.IMPORT_VERSION, "v0.19.1")
+        self.assertIn("v0.19.1", (PROJECT_ROOT / "README.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

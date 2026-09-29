@@ -1614,6 +1614,71 @@ _V0190_STRINGS = {
 for _code, _extra in _V0190_STRINGS.items():
     _STRINGS[_code].update(_extra)
 
+# v0.19.1: CSV import review fixes (encoding fallback, merged order lines,
+# kept-but-unmatched orders, skipped rows, reset confirmation).
+_V0191_STRINGS = {
+    'en': {
+        'imp_reset_confirm': 'Delete all imported store data? Pages will go back to sample data. This cannot be undone.',
+        'imp_warn_unmatched_orders': 'Warning: {n} stored order lines use a SKU that is not in the current products.csv. They are kept but left out of every metric until products.csv includes those SKUs again.',
+        'imp_rule_merge': 'Rows with the same order_id and sku (and the same date) are merged: quantity and amount_hkd are added together, and the report counts the merged rows.',
+        'imp_rule_encoding': 'Files should be UTF-8 (Google Sheets, or Excel “CSV UTF-8”). Big5 files from Traditional Chinese Excel are also read, and the report shows the encoding used.',
+        'imp_rule_products_only': 'Uploading only products.csv keeps the stored orders; orders whose SKU is no longer in products are left out of the metrics and shown as a warning.',
+        'imp_th_merged': 'Merged',
+        'imp_th_encoding': 'Encoding',
+        'imp_enc_cp950': 'Big5 (cp950)',
+        'imp_enc_big5hkscs': 'Big5-HKSCS (Hong Kong)',
+        'imp_notice_encoding_fallback': 'the file was not UTF-8 and was read as {encoding} (Big5). Check that Chinese text looks right; saving as “CSV UTF-8” avoids this.',
+        'imp_notice_rows_skipped': '{n} rows after the first {max} were skipped (row limit) and counted as rejected.',
+        'imp_notice_orders_merged': '{n} rows repeated an order_id + sku and were merged into the first row (quantity and amount added).',
+        'imp_notice_orders_unmatched': '{n} stored order lines use a SKU that is not in products.csv; they are kept but excluded from the metrics.',
+        'imp_cli_notice_line': '{file} note: {message}',
+        'imp_err_order_date_conflict': 'Same order_id and sku as row {first_row} but a different date ({value}; row {first_row} has {first_date}).',
+        'imp_err_not_utf8': 'The file could not be read as UTF-8 or Big5. In Excel choose File → Save As → “CSV UTF-8 (Comma delimited)” and upload it again.',
+        'imp_err_too_many_rows': 'More than {max} rows; the remaining {skipped} rows were skipped.',
+    },
+    'zh-Hant': {
+        'imp_reset_confirm': '確定刪除所有匯入的店舖數據？各頁面會改回示範數據，此操作無法復原。',
+        'imp_warn_unmatched_orders': '注意：已儲存的訂單中有 {n} 行的 SKU 不在目前的 products.csv。這些訂單會保留，但在 products.csv 再次包含這些 SKU 之前，不會計入任何指標。',
+        'imp_rule_merge': '訂單編號（order_id）及 SKU 相同（且日期相同）的資料列會合併：數量及金額相加，報告會列出合併的行數。',
+        'imp_rule_encoding': '檔案應為 UTF-8（Google 試算表，或 Excel 的「CSV UTF-8」）。繁體中文 Excel 儲存的 Big5 檔案亦可讀取，報告會顯示所用編碼。',
+        'imp_rule_products_only': '只上載 products.csv 時，已儲存的訂單會保留；SKU 已不在商品表的訂單不會計入指標，並會顯示警告。',
+        'imp_th_merged': '已合併',
+        'imp_th_encoding': '編碼',
+        'imp_enc_cp950': 'Big5（cp950）',
+        'imp_enc_big5hkscs': 'Big5-HKSCS（香港增補字符集）',
+        'imp_notice_encoding_fallback': '檔案不是 UTF-8，已按 {encoding}（Big5）讀取。請檢查中文是否正確；另存為「CSV UTF-8」可避免此情況。',
+        'imp_notice_rows_skipped': '首 {max} 行以後的 {n} 行已略過（行數上限），並計入被拒絕。',
+        'imp_notice_orders_merged': '有 {n} 行的訂單編號及 SKU 重複，已合併到第一行（數量及金額相加）。',
+        'imp_notice_orders_unmatched': '已儲存的訂單中有 {n} 行的 SKU 不在 products.csv；這些訂單會保留，但不計入指標。',
+        'imp_cli_notice_line': '{file} 提示：{message}',
+        'imp_err_order_date_conflict': '訂單編號及 SKU 與第 {first_row} 行相同，但日期不同（{value}；第 {first_row} 行為 {first_date}）。',
+        'imp_err_not_utf8': '無法以 UTF-8 或 Big5 讀取檔案。請在 Excel 選擇「另存新檔」，存檔類型選「CSV UTF-8（逗號分隔）」，然後再上載。',
+        'imp_err_too_many_rows': '資料列超過 {max} 行；其餘 {skipped} 行已略過。',
+    },
+    'zh-Hans': {
+        'imp_reset_confirm': '确定删除所有导入的店铺数据？各页面会改回示范数据，此操作无法恢复。',
+        'imp_warn_unmatched_orders': '注意：已储存的订单中有 {n} 行的 SKU 不在当前的 products.csv。这些订单会保留，但在 products.csv 再次包含这些 SKU 之前，不会计入任何指标。',
+        'imp_rule_merge': '订单编号（order_id）及 SKU 相同（且日期相同）的数据行会合并：数量及金额相加，报告会列出合并的行数。',
+        'imp_rule_encoding': '文件应为 UTF-8（Google 表格，或 Excel 的「CSV UTF-8」）。繁体中文 Excel 储存的 Big5 文件亦可读取，报告会显示所用编码。',
+        'imp_rule_products_only': '只上传 products.csv 时，已储存的订单会保留；SKU 已不在商品表的订单不会计入指标，并会显示警告。',
+        'imp_th_merged': '已合并',
+        'imp_th_encoding': '编码',
+        'imp_enc_cp950': 'Big5（cp950）',
+        'imp_enc_big5hkscs': 'Big5-HKSCS（香港增补字符集）',
+        'imp_notice_encoding_fallback': '文件不是 UTF-8，已按 {encoding}（Big5）读取。请检查中文是否正确；另存为「CSV UTF-8」可避免此情况。',
+        'imp_notice_rows_skipped': '前 {max} 行以后的 {n} 行已跳过（行数上限），并计入被拒绝。',
+        'imp_notice_orders_merged': '有 {n} 行的订单编号及 SKU 重复，已合并到第一行（数量及金额相加）。',
+        'imp_notice_orders_unmatched': '已储存的订单中有 {n} 行的 SKU 不在 products.csv；这些订单会保留，但不计入指标。',
+        'imp_cli_notice_line': '{file} 提示：{message}',
+        'imp_err_order_date_conflict': '订单编号及 SKU 与第 {first_row} 行相同，但日期不同（{value}；第 {first_row} 行为 {first_date}）。',
+        'imp_err_not_utf8': '无法以 UTF-8 或 Big5 读取文件。请在 Excel 选择「另存为」，保存类型选「CSV UTF-8（逗号分隔）」，然后再上传。',
+        'imp_err_too_many_rows': '数据行超过 {max} 行；其余 {skipped} 行已跳过。',
+    },
+}
+
+for _code, _extra in _V0191_STRINGS.items():
+    _STRINGS[_code].update(_extra)
+
 
 def normalize_locale(value: str | None) -> str | None:
     if value in SUPPORTED_LOCALES:

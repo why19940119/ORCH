@@ -469,7 +469,11 @@ def lead_desk():
     )
 
 
-IMPORT_METRICS_SALES = """
+IMPORT_UNMATCHED_WARNING = """
+  {% if m.unmatched_order_lines %}<p class="sample-note import-warning" data-unmatched-orders="{{ m.unmatched_order_lines }}">{{ t.imp_warn_unmatched_orders.format(n=m.unmatched_order_lines) }}</p>{% endif %}
+"""
+
+IMPORT_METRICS_SALES = IMPORT_UNMATCHED_WARNING + """
   <div class="section">
     <h3>{{ t.imp_sales_by_sku }}</h3>
     {% if m.sales_by_sku %}
@@ -575,6 +579,7 @@ def market_dashboard():
     body = MODULE_HEAD + """
   {% if m %}
   <h3 data-imp-metrics>{{ t.imp_metrics_title }}</h3>
+  """ + IMPORT_UNMATCHED_WARNING + """
   {% if m.order_period %}<p class="composer-help">{{ t.imp_period.format(start=m.order_period[0], end=m.order_period[1]) }}</p>{% endif %}
   <div class="grid">
     <div class="card"><span class="metric-label">{{ t.imp_kpi_revenue }}</span><span class="metric-value">HK${{ '{:,.0f}'.format(m.totals.revenue) }}</span></div>
@@ -670,16 +675,17 @@ IMPORT_BODY = """
     {% if state and state.data %}
       <p data-import-status="{{ 'active' if state.active else 'inactive' }}"><strong>{{ t.imp_status_active if state.active else t.imp_status_inactive }}</strong></p>
       <p class="composer-help">{{ t.imp_status_detail.format(time=state.imported_at_utc|local_time, products=state.counts.products, orders=state.counts.orders, traffic=state.counts.traffic) }}</p>
+      {% if unmatched_orders %}<p class="sample-note import-warning" data-unmatched-orders="{{ unmatched_orders }}">{{ t.imp_warn_unmatched_orders.format(n=unmatched_orders) }}</p>{% endif %}
       <div class="inbox-actions">
         <form method="post" action="/import/toggle" class="demo-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="active" value="{{ '0' if state.active else '1' }}">
           <button type="submit" data-import-toggle>{{ t.imp_toggle_off if state.active else t.imp_toggle_on }}</button>
         </form>
-        <form method="post" action="/import/reset" class="demo-form">
+        <form method="post" action="/import/reset" class="demo-form import-reset-form" data-confirm="{{ t.imp_reset_confirm }}" onsubmit="return window.confirm(this.getAttribute('data-confirm'));">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <button type="submit" class="btn-reject">{{ t.imp_reset_button }}</button>
-          <span class="composer-help">{{ t.imp_reset_help }}</span>
+          <button type="submit" class="btn-reject" data-import-reset>{{ t.imp_reset_button }}</button>
+          <span class="composer-help import-hint">{{ t.imp_reset_help }}</span>
         </form>
       </div>
     {% else %}
@@ -696,6 +702,11 @@ IMPORT_BODY = """
         <tr><td>{{ t['imp_file_' ~ kind] }}</td><td><code>{{ cols|join(',') }}</code></td></tr>
       {% endfor %}
     </table></div>
+    <ul class="composer-help import-rules" data-import-rules>
+      <li data-rule-merge>{{ t.imp_rule_merge }}</li>
+      <li data-rule-encoding>{{ t.imp_rule_encoding }}</li>
+      <li data-rule-products-only>{{ t.imp_rule_products_only }}</li>
+    </ul>
   </div>
 
   <div class="section">
@@ -716,7 +727,7 @@ IMPORT_BODY = """
     <form method="post" action="/import/folder" class="demo-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button type="submit">{{ t.imp_folder_button }}</button>
-      <span class="composer-help">{{ t.imp_folder_help }} · <code>{{ import_dir }}</code></span>
+      <span class="composer-help import-hint">{{ t.imp_folder_help }} · <code>{{ import_dir }}</code></span>
     </form>
   </div>
 
@@ -725,20 +736,27 @@ IMPORT_BODY = """
     {% if report %}
       <p class="composer-help">{{ t.imp_report_meta.format(time=report.imported_at_utc|local_time, source=t.get('imp_source_' ~ report.source, report.source)) }}</p>
       <div class="table-wrap"><table>
-        <tr><th>{{ t.imp_th_file }}</th><th>{{ t.imp_th_total }}</th><th>{{ t.imp_th_valid }}</th><th>{{ t.imp_th_rejected }}</th><th>{{ t.imp_th_result }}</th></tr>
+        <tr><th>{{ t.imp_th_file }}</th><th>{{ t.imp_th_total }}</th><th>{{ t.imp_th_valid }}</th><th>{{ t.imp_th_rejected }}</th><th>{{ t.imp_th_merged }}</th><th>{{ t.imp_th_encoding }}</th><th>{{ t.imp_th_result }}</th></tr>
         {% for kind, cols in schemas %}
           {% set f = report.files.get(kind) %}
-          <tr>
+          <tr data-import-file="{{ kind }}">
             <td>{{ t['imp_file_' ~ kind] }}</td>
             {% if f %}
-              <td>{{ f.rows_total }}</td><td>{{ f.rows_valid }}</td><td>{{ f.rows_rejected }}</td>
+              <td>{{ f.rows_total }}</td><td>{{ f.rows_valid }}</td><td data-rows-rejected>{{ f.rows_rejected }}</td>
+              <td data-rows-merged>{{ f.rows_merged or 0 }}</td>
+              <td data-encoding="{{ f.encoding or '' }}">{{ t.get('imp_enc_' ~ f.encoding, f.encoding|upper) if f.encoding else '—' }}</td>
               <td><span class="badge {{ 'done' if f.accepted else 'failed' }}">{{ t.imp_file_accepted if f.accepted else t.imp_file_skipped }}</span></td>
             {% else %}
-              <td>—</td><td>—</td><td>—</td><td class="muted">{{ t.imp_file_missing }}</td>
+              <td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="muted">{{ t.imp_file_missing }}</td>
             {% endif %}
           </tr>
         {% endfor %}
       </table></div>
+      {% if notices %}
+        <ul class="import-notices" data-import-notices>
+          {% for n in notices %}<li class="sample-note import-warning" data-notice-code="{{ n.code }}">{{ t['imp_file_' ~ n.file] }}: {{ n.message }}</li>{% endfor %}
+        </ul>
+      {% endif %}
       {% if errors %}
         <div class="table-wrap"><table data-import-errors>
           <tr><th>{{ t.imp_th_file }}</th><th>{{ t.imp_th_row }}</th><th>{{ t.imp_th_field }}</th><th>{{ t.imp_th_value }}</th><th>{{ t.imp_th_problem }}</th></tr>
@@ -767,14 +785,25 @@ def import_page():
     state = commerce_import.load_state()
     report = (state or {}).get("last_report")
     errors = []
+    notices = []
     if report:
         errors = [
             {**item, "message": commerce_import.error_message(item, t)}
             for item in report.get("errors") or []
         ]
+        notices = [
+            {**item, "message": commerce_import.notice_message(item, t)}
+            for item in report.get("notices") or []
+        ]
+        notices = [item for item in notices if item["message"]]
+    unmatched = 0
+    if state and state.get("data"):
+        unmatched = commerce_import.count_unmatched_orders(
+            state["data"].get("products"), state["data"].get("orders"))
     return _page(
         "mod_data_import_title", "import", MODULE_HEAD + IMPORT_BODY,
-        state=state, report=report, errors=errors,
+        state=state, report=report, errors=errors, notices=notices,
+        unmatched_orders=unmatched,
         hidden_errors=(report or {}).get("error_count", 0) - len(errors),
         schemas=[(kind, commerce_import.SCHEMAS[kind]) for kind in commerce_import.FILE_ORDER],
         max_mb=commerce_import.MAX_FILE_BYTES // (1024 * 1024),
