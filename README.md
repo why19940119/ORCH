@@ -36,6 +36,10 @@ v0.13       OpenRouter Mistral advisory adapter and preflight binding
 v0.14       Advisory-gated dispatch and lifecycle-safe snapshots
 v0.14b      --advisory-preflight CLI opt-in
 v0.15       Documentation and consolidation
+v0.16       Local Operator Console (dashboard, tasks, events, artifacts, chat, i18n)
+v0.17       Chat attachments engine (chat_attachments + orch_chat vision)
+v0.18       Cross-border e-commerce demo (7 modules, Approval Inbox + Audit Log),
+            chat upload wiring
 ```
 
 ## Core Architecture
@@ -481,3 +485,118 @@ no API key exposure
 Each click on `Ask ORCH Chat` creates at most one OpenRouter request.
 Chat history exists only in the running local Flask process and is
 cleared when the UI server stops.
+
+Chat attachments (v0.18.0 wiring): the paperclip button attaches up to
+3 files (PDF, TXT, MD, PNG, JPG, WEBP, GIF). Text or a file is enough.
+Files are validated and contained under `uploads/chat/` (gitignored) by
+`chat_attachments.process_uploaded_files`; session history and the chat
+audit artifact keep metadata only (name, kind, mime, size, sha256),
+never bytes or stored paths. A rejected file is shown as a normal user
+error.
+
+## Cross-border e-commerce demo
+
+A demo prototype of the Advolution ORCH AI cross-border e-commerce plan
+(BUD 「申請易」 scheme proposal). It adds seven client-facing modules to
+the Operator Console. **All data is SAMPLE data** (`demo/sample_data.json`:
+a fictional brand, 30 `SAMPLE-xxx` SKUs, 16 inquiries, 10 order leads,
+synthetic round-number KPIs). Every page shows a 示範數據 / SAMPLE banner.
+
+Positioning (enforced in code, not just copy):
+
+```text
+ORCH is not a chatbot or a CRM.
+AI only drafts, classifies, ranks and suggests.
+Every outward item (content, prices, promotions, refunds, product claims,
+customer-service replies) is a pending ORCH task until a NAMED human
+approves the exact version in the Approval Inbox.
+"Publish" is simulated: approval only records the channel in the audit log.
+```
+
+### Setup and start
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+python orch_ui.py            # http://127.0.0.1:5050
+```
+
+Drafts use the existing OpenRouter path (`orch_chat.ask_orch`, one call
+per click) when `OPENROUTER_API_KEY` is set, otherwise a deterministic
+mock. Force the mock for a zero-cost demo:
+
+```bash
+ORCH_DEMO_FORCE_MOCK=1 python orch_ui.py
+```
+
+If the provider fails, the draft falls back to the mock and the
+fallback reason is stored in the draft provenance (no retry).
+
+### Pages to click (nav → "跨境電商示範 / E-commerce demo")
+
+```text
+/sales      ORCH Sales Hub        products, inquiries, order leads → draft next sales step
+/content    ORCH Content Studio   draft product page / FAQ / ad copy for a SKU
+/knowledge  ORCH Knowledge Base   approved specs, logistics, return/exchange, payment;
+                                  propose a KB change (needs approval)
+/leads      ORCH Lead Desk        inquiry classification + lead score → draft reply
+/campaigns  ORCH Campaign Engine  audience / creatives / A/B draft
+/market     ORCH Market Dashboard traffic / inquiry / lead / order KPIs → draft insight
+/inbox      Approval Inbox        pending drafts, risk tags, edit → new version,
+                                  approve (channel) / reject (reason)
+/audit      Audit Log             decision records + demo events
+```
+
+### Approve flow
+
+1. On any module page enter your name as operator and click
+   **產生 AI 草稿 / Generate AI draft**.
+2. The draft becomes an ORCH task `task_ecom_<kind>_<id>` in
+   `task_queue.json` with `requires_approval: true` and an
+   `artifact-exists` policy, and `waiting_approval` in
+   `state/task_status.json`. Its text is an immutable artifact
+   `ecom_draft_<id>` (edits publish a new version whose
+   `parent_artifact_id` is the previous one).
+3. In **Approval Inbox**, review the text and risk tags (price / refund /
+   product claim / outward message, from `approval_inbox.py`), optionally
+   edit and save a new version, then approve with a named operator and a
+   publish channel, or reject with a reason. Approval is locked to the
+   version shown: approving a stale version is refused.
+4. The decision goes through `mini_orch.decide_approval` (the same gate
+   `mini_orch.py approve` uses), so the Tasks page and dashboard show it.
+   Running `python3 mini_orch.py` afterwards dispatches the approved task
+   to `worker_ecom_publish_record.py`, which only verifies the audit
+   record (no external call). Rejected tasks are never dispatched.
+
+### Where the audit lands
+
+```text
+artifacts/manifests/artifact_ecom_audit_*.json   immutable decision record
+artifacts/latest/ecom_audit.json                 latest pointer
+state/events.jsonl                               ecom_draft_created, task_waiting_approval,
+                                                 ecom_draft_revised, task_approved /
+                                                 task_rejected, ecom_publish_recorded
+state/task_status.json                           approved_by / rejected_by, version, channel
+```
+
+Each audit record stores source (sample refs, dataset, generator
+provider/model, human-edited flag), version + content sha256, operator,
+approver, UTC time, publish channel, `publish_mode:
+simulated_record_only` and `external_call: false`.
+
+Remove demo tasks from the queue/status (artifacts and events are kept
+as the append-only trail):
+
+```bash
+python3 commerce_demo.py --reset
+```
+
+### Limits (demo only)
+
+```text
+sample data only; no real SKUs, customers or metrics
+no external publishing, ads, email, WhatsApp or marketplace calls
+lead scoring / classification is rule-based (stand-in for AI assist)
+operator names are typed, not authenticated (local single-user console)
+```
+
