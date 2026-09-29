@@ -18,6 +18,7 @@ import artifact_store
 import commerce_demo
 import commerce_ui
 import mini_orch
+import orch_ui
 from orch_ui import PROJECT_ROOT, app
 from ui_i18n import SUPPORTED_LOCALES, ui_strings
 
@@ -38,16 +39,27 @@ class DemoSandbox(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="orch_ecom_test_"))
         (self.tmp / "state").mkdir()
-        shutil.copy(PROJECT_ROOT / "task_queue.json", self.tmp / "task_queue.json")
-        self.original_task_ids = [
-            task["id"]
-            for task in json.loads(
-                (self.tmp / "task_queue.json").read_text(encoding="utf-8")
+        # v0.18.2: copy the tracked queue without any local demo drafts
+        # (a working tree may still hold v0.18.1-era task_ecom_* entries).
+        main_tasks = [
+            task for task in json.loads(
+                (PROJECT_ROOT / "task_queue.json").read_text(encoding="utf-8")
             )
+            if not str(task.get("id", "")).startswith("task_ecom_")
         ]
+        (self.tmp / "task_queue.json").write_text(
+            json.dumps(main_tasks, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        self.main_queue_bytes = (self.tmp / "task_queue.json").read_bytes()
+        self.original_task_ids = [task["id"] for task in main_tasks]
+        self.demo_queue_file = self.tmp / "state" / "ecom_demo_queue.json"
         art = self.tmp / "artifacts"
         self.patches = [
-            patch.object(commerce_demo, "QUEUE_FILE", self.tmp / "task_queue.json"),
+            patch.object(commerce_demo, "QUEUE_FILE", self.demo_queue_file),
+            patch.object(commerce_demo, "MAIN_QUEUE_FILE", self.tmp / "task_queue.json"),
+            patch.object(orch_ui, "QUEUE_FILE", self.tmp / "task_queue.json"),
+            patch.object(orch_ui, "STATUS_FILE", self.tmp / "state" / "task_status.json"),
+            patch.object(orch_ui, "EVENTS_FILE", self.tmp / "state" / "events.jsonl"),
             patch.object(commerce_demo, "STATUS_FILE", self.tmp / "state" / "task_status.json"),
             patch.object(commerce_demo, "EVENTS_FILE", self.tmp / "state" / "events.jsonl"),
             patch.object(commerce_demo, "LOCK_FILE", self.tmp / "state" / ".lock"),
@@ -74,6 +86,12 @@ class DemoSandbox(unittest.TestCase):
 
     # helpers ---------------------------------------------------------
     def queue(self):
+        """The demo queue (state/ecom_demo_queue.json in the sandbox)."""
+        if not self.demo_queue_file.exists():
+            return []
+        return json.loads(self.demo_queue_file.read_text(encoding="utf-8"))
+
+    def main_queue(self):
         return json.loads((self.tmp / "task_queue.json").read_text(encoding="utf-8"))
 
     def statuses(self):
@@ -204,11 +222,9 @@ class DemoApprovalFlowTests(DemoSandbox):
         self.assertEqual(payload["provenance"]["provider"], "mock")
         self.assertEqual(commerce_demo.audit_records(), [])
 
-        # Existing ORCH tasks are untouched.
-        self.assertEqual(
-            [t["id"] for t in self.queue() if not t["id"].startswith("task_ecom_")],
-            self.original_task_ids,
-        )
+        # Existing ORCH tasks are untouched: the tracked queue is not written.
+        self.assertEqual((self.tmp / "task_queue.json").read_bytes(), self.main_queue_bytes)
+        self.assertEqual([t["id"] for t in self.queue()], [task_id])
 
         # The draft is visible in the inbox as pending (no auto-approve).
         html = self.client.get("/inbox").get_data(as_text=True)
@@ -391,7 +407,8 @@ class DemoApprovalFlowTests(DemoSandbox):
         self.create_one()
         removed = commerce_demo.reset_demo_tasks()
         self.assertEqual(removed, 1)
-        self.assertEqual([t["id"] for t in self.queue()], self.original_task_ids)
+        self.assertEqual(self.queue(), [])
+        self.assertEqual([t["id"] for t in self.main_queue()], self.original_task_ids)
 
 
 class DemoProviderTests(DemoSandbox):
@@ -482,8 +499,8 @@ EXPECTED_ZH_HANT_NAV = {
     "nav_sales": "銷售中心",
     "nav_content": "內容工作室",
     "nav_knowledge": "知識庫",
-    "nav_leads": "線索處理",
-    "nav_campaigns": "推廣活動",
+    "nav_leads": "查詢／線索台",
+    "nav_campaigns": "推廣活動引擎",
     "nav_market": "市場儀表板",
     "nav_inbox": "審批收件箱",
     "nav_audit": "審計紀錄",

@@ -17,6 +17,7 @@ from flask import (
     request,
     session,
 )
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from ui_i18n import (
     DEFAULT_LOCALE,
@@ -123,6 +124,10 @@ else:
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = False
+
+# v0.18.2: cap request bodies (3 attachments of at most 5MB + form fields).
+MAX_UPLOAD_REQUEST_MB = 16
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_REQUEST_MB * 1024 * 1024
 
 app.config["TRUSTED_HOSTS"] = [
     "127.0.0.1",
@@ -2302,12 +2307,93 @@ def load_json(path, default_value):
         return default_value
 
 
+def _current_locale():
+    try:
+        return get_locale()
+    except RuntimeError:  # outside a request context
+        return DEFAULT_LOCALE
+
+
 def load_tasks():
-    tasks = load_json(QUEUE_FILE, [])
+    """task_queue.json + the gitignored demo queue (v0.18.2), de-duplicated
+    by id; demo task titles are shown in the UI locale."""
+    main_tasks = load_json(QUEUE_FILE, [])
+    demo_tasks = load_json(Path(commerce_demo.QUEUE_FILE), [])
+    locale = _current_locale()
+    statuses = None
+    seen = set()
+    tasks = []
+    for task in list(demo_tasks) + list(main_tasks):
+        task_id = task.get("id")
+        if task_id in seen:
+            continue
+        seen.add(task_id)
+        if isinstance(task.get("ecom_draft"), dict):
+            if statuses is None:
+                statuses = load_statuses()
+            task = {
+                **task,
+                "title": commerce_demo.localized_task_title(
+                    task, locale, statuses.get(task_id)
+                ),
+            }
+        tasks.append(task)
     return sorted(
         tasks,
         key=lambda task: task.get("priority", 999),
     )
+
+
+def localized_attachment_error(error, t):
+    """AttachmentError -> 'Attachment rejected: <localised reason>'."""
+    template = t.get(
+        f"err_att_{getattr(error, 'code', 'generic')}",
+        t["err_att_generic"],
+    )
+    try:
+        reason = template.format(**getattr(error, "params", {}))
+    except (KeyError, IndexError, ValueError):
+        reason = t["err_att_generic"]
+    return f"{t['err_chat_attachment']} {reason}"
+
+
+def localized_chat_error(error, t):
+    """ChatProviderError -> localised message (no raw English)."""
+    template = t.get(
+        f"err_chatcode_{getattr(error, 'code', 'failed')}",
+        t["err_chatcode_failed"],
+    )
+    try:
+        return template.format(**getattr(error, "params", {}))
+    except (KeyError, IndexError, ValueError):
+        return t["err_chatcode_failed"]
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def request_too_large(_error):
+    t = ui_strings(_current_locale())
+    message = t["err_upload_too_large"].format(
+        limit_mb=MAX_UPLOAD_REQUEST_MB
+    )
+    wants_json = (
+        request.args.get("format") == "json"
+        or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        or "application/json" in (request.headers.get("Accept") or "").lower()
+    )
+    if wants_json:
+        return jsonify(
+            {
+                "ok": False,
+                "error": message,
+                "mode": session.get("last_chat_mode", "orch_context"),
+            }
+        ), 413
+    body = (
+        '<div class="section"><div class="warning" role="alert">'
+        "{{ message }}</div>"
+        '<p><a href="/chat">{{ t.nav_chat }}</a></p></div>'
+    )
+    return render_page(t["nav_chat"], "chat", body, message=message), 413
 
 
 def load_statuses():
@@ -3389,10 +3475,10 @@ def chat_page():
                     session_key=session.get("chat_id"),
                 )
             except AttachmentError as attachment_error:
-                error = (
-                    t["err_chat_attachment"]
-                    + " "
-                    + str(attachment_error)
+                error = localized_attachment_error(attachment_error, t)
+            except Exception:
+                error = localized_attachment_error(
+                    AttachmentError("attachment failed"), t
                 )
             else:
                 if not question and not attachments:
@@ -3420,7 +3506,7 @@ def chat_page():
                 )
 
             except ChatProviderError as error_value:
-                error = str(error_value)
+                error = localized_chat_error(error_value, t)
 
             except Exception:
                 error = t["err_chat_failed"]

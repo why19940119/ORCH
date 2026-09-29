@@ -1,4 +1,4 @@
-"""ORCH cross-border e-commerce demo pages (v0.18.0, i18n v0.18.1).
+"""ORCH cross-border e-commerce demo pages (v0.18.0, i18n v0.18.1/v0.18.2).
 
 Registers the seven client-facing modules on the existing Operator
 Console app. All data is SAMPLE data; every AI draft is a pending ORCH
@@ -187,7 +187,7 @@ DRAFT_LIST = """
 
 
 def _drafts_for(kind):
-    return [d for d in commerce_demo.draft_views() if d["kind"] == kind][:10]
+    return [d for d in commerce_demo.draft_views(locale=_HOOKS["get_locale"]()) if d["kind"] == kind][:10]
 
 
 def _module_context(key):
@@ -505,7 +505,7 @@ def market_dashboard():
 
 @bp.get("/inbox")
 def approval_inbox():
-    drafts = commerce_demo.draft_views()
+    drafts = commerce_demo.draft_views(locale=_HOOKS["get_locale"]())
     pending = [d for d in drafts if d["approval_status"] == "waiting_approval"]
     decided = [d for d in drafts if d["approval_status"] in {"approved", "rejected"}]
     body = MODULE_HEAD + """

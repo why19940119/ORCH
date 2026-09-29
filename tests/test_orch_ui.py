@@ -252,10 +252,70 @@ class TaskStatusAndComposerUiTests(unittest.TestCase):
 
 
 
+FIXTURE_TASK_ID = "task_fixture_done_001"
+
+
+def seed_console_fixtures(test_case):
+    """v0.18.2: seed queue/status/events in a temp dir so console tests
+    do not depend on local gitignored state (fresh-clone safe)."""
+    import commerce_demo
+    import orch_ui
+
+    tmp = Path(tempfile.mkdtemp(prefix="orch_ui_fixture_"))
+    (tmp / "state").mkdir()
+    (tmp / "task_queue.json").write_text(json.dumps([
+        {
+            "id": FIXTURE_TASK_ID,
+            "title": "Fixture task (done)",
+            "command": ["python3", "worker_report.py"],
+            "priority": 1,
+            "depends_on": [],
+            "max_retries": 1,
+            "requires_approval": False,
+            "requires_policies": [],
+        }
+    ]), encoding="utf-8")
+    (tmp / "state" / "task_status.json").write_text(json.dumps({
+        FIXTURE_TASK_ID: {
+            "id": FIXTURE_TASK_ID,
+            "title": "Fixture task (done)",
+            "status": "done",
+            "attempt": 1,
+            "updated_at": "2026-08-16T20:34:15",
+        }
+    }), encoding="utf-8")
+    (tmp / "state" / "events.jsonl").write_text(json.dumps({
+        "timestamp": "2026-08-16T20:34:15",
+        "event": "task_completed",
+        "task_id": FIXTURE_TASK_ID,
+        "task_title": "Fixture task (done)",
+        "message": "Fixture task completed.",
+    }) + "\n", encoding="utf-8")
+    patches = [
+        patch.object(orch_ui, "QUEUE_FILE", tmp / "task_queue.json"),
+        patch.object(orch_ui, "STATUS_FILE", tmp / "state" / "task_status.json"),
+        patch.object(orch_ui, "EVENTS_FILE", tmp / "state" / "events.jsonl"),
+        patch.object(commerce_demo, "QUEUE_FILE", tmp / "state" / "ecom_demo_queue.json"),
+        patch.object(commerce_demo, "STATUS_FILE", tmp / "state" / "task_status.json"),
+    ]
+    for item in patches:
+        item.start()
+
+    def cleanup():
+        for item in reversed(patches):
+            item.stop()
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    test_case.addCleanup(cleanup)
+    return tmp
+
+
 class ConsoleDensityUiTests(unittest.TestCase):
     def setUp(self):
         app.config["TESTING"] = True
         self.client = app.test_client()
+        seed_console_fixtures(self)
 
     def test_shell_density_contracts(self):
         source = Path("orch_ui.py").read_text(encoding="utf-8")
@@ -306,13 +366,7 @@ class ConsoleDensityUiTests(unittest.TestCase):
         self.assertIn("badge done", html)
 
     def test_task_detail_has_three_sections(self):
-        # pick a real task id from queue
-        import json
-        from pathlib import Path as P
-        tasks = json.loads(
-            (P("task_queue.json")).read_text(encoding="utf-8")
-        )
-        task_id = tasks[0]["id"]
+        task_id = FIXTURE_TASK_ID
         html = self.client.get(f"/tasks/{task_id}").get_data(as_text=True)
         t = ui_strings("zh-Hant")
         self.assertIn(t["task_state"], html)

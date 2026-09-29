@@ -42,6 +42,11 @@ v0.18       Cross-border e-commerce demo (7 modules, Approval Inbox + Audit Log)
             chat upload wiring
 v0.18.1     zh-Hant/zh-Hans module names (銷售中心 … 審計紀錄), demo sample
             data in ORCH Context chat, chat replies follow the UI locale
+v0.18.2     Review fixes: safe PDF/magic-byte upload validation, 16MB request
+            cap (413), batch-then-write uploads + retention sweep, demo queue
+            in gitignored state/ecom_demo_queue.json, locked run_queue status
+            writes, CLI refuses demo approvals, audit after the gate,
+            localised upload/chat errors and draft titles, pytest config
 ```
 
 ## Core Architecture
@@ -496,6 +501,15 @@ audit artifact keep metadata only (name, kind, mime, size, sha256),
 never bytes or stored paths. A rejected file is shown as a normal user
 error.
 
+Upload hardening (v0.18.2): request bodies are capped at 16MB
+(`MAX_CONTENT_LENGTH`; larger requests get a localised 413). Each file's
+magic bytes must match its extension (PDF, PNG, JPG, WEBP, GIF; TXT/MD
+must be UTF-8 text). The whole batch is validated and PDFs are parsed
+(first 50 pages) in memory before anything is written; any failure
+removes the batch directory. Upload batches older than 24h are swept on
+the next upload. Upload, attachment and chat errors are shown through
+`ui_i18n` in the UI language (`err_att_*`, `err_chatcode_*`).
+
 ORCH Context chat and the e-commerce demo (v0.18.1): `build_chat_context`
 adds an `ecommerce_demo` block from `commerce_demo.chat_context`. It is a
 compact, read-only slice of `demo/sample_data.json`: SKUs, inquiries,
@@ -551,8 +565,8 @@ fallback reason is stored in the draft provenance (no retry).
 /content    ORCH Content Studio   draft product page / FAQ / ad copy for a SKU
 /knowledge  ORCH Knowledge Base   approved specs, logistics, return/exchange, payment;
                                   propose a KB change (needs approval)
-/leads      ORCH Lead Desk        inquiry classification + lead score → draft reply
-/campaigns  ORCH Campaign Engine  audience / creatives / A/B draft
+/leads      ORCH Lead Desk (查詢／線索台) inquiry classification + lead score → draft reply
+/campaigns  ORCH Campaign Engine (推廣活動引擎) audience / creatives / A/B draft
 /market     ORCH Market Dashboard traffic / inquiry / lead / order KPIs → draft insight
 /inbox      Approval Inbox        pending drafts, risk tags, edit → new version,
                                   approve (channel) / reject (reason)
@@ -563,8 +577,11 @@ fallback reason is stored in the draft provenance (no retry).
 
 1. On any module page enter your name as operator and click
    **產生 AI 草稿 / Generate AI draft**.
-2. The draft becomes an ORCH task `task_ecom_<kind>_<id>` in
-   `task_queue.json` with `requires_approval: true` and an
+2. The draft becomes an ORCH task `task_ecom_<kind>_<id>` in the
+   gitignored demo queue `state/ecom_demo_queue.json` (v0.18.2; the
+   tracked `task_queue.json` is never written — `mini_orch`, the Tasks
+   page and the dashboard merge both queues) with
+   `requires_approval: true` and an
    `artifact-exists` policy, and `waiting_approval` in
    `state/task_status.json`. Its text is an immutable artifact
    `ecom_draft_<id>` (edits publish a new version whose
@@ -576,6 +593,11 @@ fallback reason is stored in the draft provenance (no retry).
    version shown: approving a stale version is refused.
 4. The decision goes through `mini_orch.decide_approval` (the same gate
    `mini_orch.py approve` uses), so the Tasks page and dashboard show it.
+   The `ecom_audit` record is published only after that gate succeeds.
+   `python3 mini_orch.py approve task_ecom_…` is refused with a pointer
+   to `/inbox`, because only the inbox writes the audit record.
+   `mini_orch.py` status writes use the same file lock as the UI
+   (`state/.ecom_demo.lock`).
    Running `python3 mini_orch.py` afterwards dispatches the approved task
    to `worker_ecom_publish_record.py`, which only verifies the audit
    record (no external call). Rejected tasks are never dispatched.
@@ -601,6 +623,21 @@ as the append-only trail):
 
 ```bash
 python3 commerce_demo.py --reset
+```
+
+Drafts created by v0.18.0/v0.18.1 were written into `task_queue.json`.
+Copy them into the demo queue (task_queue.json is left unchanged; tasks
+are de-duplicated by id):
+
+```bash
+python3 commerce_demo.py --import-legacy
+```
+
+### Tests
+
+```bash
+python -m unittest discover -s tests
+pytest            # conftest.py + pytest.ini make this work from a fresh clone
 ```
 
 ### Limits (demo only)

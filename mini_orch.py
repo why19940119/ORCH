@@ -1,10 +1,16 @@
 import sys
 import shlex
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 import json
 import subprocess
 import time
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX
+    fcntl = None
 
 from advisory_dispatch import run_advisory_preflight
 
@@ -12,6 +18,63 @@ STATE_DIR = Path("state")
 QUEUE_FILE = Path("task_queue.json")
 STATUS_FILE = STATE_DIR / "task_status.json"
 EVENTS_FILE = STATE_DIR / "events.jsonl"
+# v0.18.2: e-commerce demo drafts live in a separate gitignored queue.
+DEMO_QUEUE_FILE = STATE_DIR / "ecom_demo_queue.json"
+# Shared with commerce_demo.demo_lock (UI) so status writes never race.
+LOCK_FILE = STATE_DIR / ".ecom_demo.lock"
+DEMO_TASK_PREFIX = "task_ecom_"
+
+
+@contextmanager
+def state_lock(lock_file=None):
+    """Exclusive flock on the shared state lock file.
+
+    Not re-entrant: never nest two state_lock() blocks in one process.
+    """
+    lock_path = Path(lock_file) if lock_file is not None else LOCK_FILE
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as handle:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def load_all_tasks(queue_file=None, demo_queue_file=None):
+    """task_queue.json plus the demo queue, de-duplicated by task id
+    (a demo task copied from a legacy task_queue.json appears once)."""
+    main_tasks = load_json(Path(queue_file or QUEUE_FILE), [])
+    demo_path = Path(demo_queue_file or DEMO_QUEUE_FILE)
+    demo_tasks = load_json(demo_path, []) if demo_path.exists() else []
+    seen = set()
+    merged = []
+    for task in list(demo_tasks) + list(main_tasks):
+        task_id = task.get("id")
+        if task_id in seen:
+            continue
+        seen.add(task_id)
+        merged.append(task)
+    return merged
+
+
+def save_task_status(statuses, task_id):
+    """Locked read-merge-write of one task's state (v0.18.2).
+
+    Only ``task_id`` is written, so concurrent UI changes to other tasks
+    (new demo drafts, approvals) are never clobbered by a queue run.
+    """
+    with state_lock():
+        disk = load_json(STATUS_FILE, {})
+        if task_id in statuses:
+            disk[task_id] = statuses[task_id]
+        STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        save_json(STATUS_FILE, disk)
+    for key, value in disk.items():
+        if key != task_id:
+            statuses[key] = value
 
 
 def now():
@@ -321,7 +384,7 @@ def evaluate_advisory_preflight(
     task_state["advisory_preflight"] = result
     task_state["updated_at"] = now()
     statuses[task["id"]] = task_state
-    save_json(STATUS_FILE, statuses)
+    save_task_status(statuses, task["id"])
 
     if result.get("status") == "allowed":
         return True, result
@@ -341,7 +404,7 @@ def run_task(task, statuses):
         task_state["status"] = "blocked"
         task_state["updated_at"] = now()
         statuses[task_id] = task_state
-        save_json(STATUS_FILE, statuses)
+        save_task_status(statuses, task["id"])
 
         write_event("task_blocked", task, "A dependency has not completed.")
         return
@@ -357,7 +420,7 @@ def run_task(task, statuses):
 
         task_state["updated_at"] = now()
         statuses[task_id] = task_state
-        save_json(STATUS_FILE, statuses)
+        save_task_status(statuses, task["id"])
 
     if not policies_allowed:
         blocking_result = next(
@@ -382,7 +445,7 @@ def run_task(task, statuses):
         task_state["blocked_at"] = now()
         task_state["updated_at"] = now()
         statuses[task_id] = task_state
-        save_json(STATUS_FILE, statuses)
+        save_task_status(statuses, task["id"])
 
         if (
             previous_status != "blocked"
@@ -423,7 +486,7 @@ def run_task(task, statuses):
         task_state["blocked_at"] = now()
         task_state["updated_at"] = now()
         statuses[task_id] = task_state
-        save_json(STATUS_FILE, statuses)
+        save_task_status(statuses, task["id"])
 
         write_event(
             "task_blocked",
@@ -443,7 +506,7 @@ def run_task(task, statuses):
                 task_state["status"] = "rejected"
                 task_state["updated_at"] = now()
                 statuses[task_id] = task_state
-                save_json(STATUS_FILE, statuses)
+                save_task_status(statuses, task["id"])
             print(f"Task {task_id} was rejected by a human; not dispatched.")
             return
 
@@ -454,7 +517,7 @@ def run_task(task, statuses):
             task_state["approval_status"] = "waiting_approval"
             task_state["updated_at"] = now()
             statuses[task_id] = task_state
-            save_json(STATUS_FILE, statuses)
+            save_task_status(statuses, task["id"])
 
             if previous_status != "waiting_approval":
                 write_event(
@@ -476,7 +539,7 @@ def run_task(task, statuses):
         task_state["status"] = "running"
         task_state["started_at"] = now()
         statuses[task_id] = task_state
-        save_json(STATUS_FILE, statuses)
+        save_task_status(statuses, task["id"])
 
         write_event(
             "task_started",
@@ -508,7 +571,7 @@ def run_task(task, statuses):
             task_state["finished_at"] = now()
             task_state["output"] = result.stdout.strip()
             statuses[task_id] = task_state
-            save_json(STATUS_FILE, statuses)
+            save_task_status(statuses, task["id"])
 
             write_event("task_completed", task, task_state["output"])
             return
@@ -516,7 +579,7 @@ def run_task(task, statuses):
         task_state["status"] = "retrying"
         task_state["error"] = error_message
         statuses[task_id] = task_state
-        save_json(STATUS_FILE, statuses)
+        save_task_status(statuses, task["id"])
 
         write_event("task_failed", task, error_message)
 
@@ -527,7 +590,7 @@ def run_task(task, statuses):
     task_state["status"] = "failed"
     task_state["finished_at"] = now()
     statuses[task_id] = task_state
-    save_json(STATUS_FILE, statuses)
+    save_task_status(statuses, task["id"])
 
     write_event("task_abandoned", task, "No retries remain.")
 
@@ -562,7 +625,10 @@ def decide_approval(
         Path(status_file) if status_file is not None else STATUS_FILE
     )
 
-    tasks = load_json(queue_path, [])
+    if queue_file is not None:
+        tasks = load_json(queue_path, [])
+    else:
+        tasks = load_all_tasks()
     statuses = load_json(status_path, {})
 
     task = next((item for item in tasks if item["id"] == task_id), None)
@@ -634,12 +700,23 @@ def decide_approval(
 
 
 def approve_task(task_id):
-    result = decide_approval(
-        task_id,
-        "approved",
-        "local_terminal_user",
-        strict=False,
-    )
+    if str(task_id).startswith(DEMO_TASK_PREFIX):
+        # v0.18.2: demo drafts need a named approver, a channel and an
+        # ecom_audit record, which only the Approval Inbox writes.
+        print(
+            f"Refused: {task_id} is an e-commerce demo draft. Approve or "
+            "reject it in the Approval Inbox (http://127.0.0.1:5050/inbox) "
+            "so the audit record is written."
+        )
+        return False
+
+    with state_lock():
+        result = decide_approval(
+            task_id,
+            "approved",
+            "local_terminal_user",
+            strict=False,
+        )
 
     if result["ok"]:
         print(f"Approved: {task_id}")
@@ -663,8 +740,9 @@ def approve_task(task_id):
 def run_queue():
     STATE_DIR.mkdir(exist_ok=True)
 
-    tasks = load_json(QUEUE_FILE, [])
-    statuses = load_json(STATUS_FILE, {})
+    with state_lock():
+        tasks = load_all_tasks()
+        statuses = load_json(STATUS_FILE, {})
 
     tasks.sort(key=lambda task: task.get("priority", 999))
 
@@ -677,6 +755,12 @@ def run_queue():
     )
 
     for task in tasks:
+        # Pick up UI changes (approvals, new drafts) made since the last
+        # task; the lock is not held while the task's command runs.
+        with state_lock():
+            fresh = load_json(STATUS_FILE, {})
+        statuses.clear()
+        statuses.update(fresh)
         run_task(task, statuses)
 
     completed_count = sum(
@@ -694,7 +778,7 @@ def run_queue():
 
 
 def show_status():
-    tasks = load_json(QUEUE_FILE, [])
+    tasks = load_all_tasks()
     statuses = load_json(STATUS_FILE, {})
 
     tasks.sort(key=lambda task: task.get("priority", 999))
@@ -723,10 +807,13 @@ def show_status():
             print(f"  Approval: {approval_status}")
 
             if approval_status == "waiting_approval":
-                print(
-                    f"  Approve with: "
-                    f"python3 mini_orch.py approve {task_id}"
-                )
+                if task_id.startswith(DEMO_TASK_PREFIX):
+                    print("  Approve in the Approval Inbox: /inbox")
+                else:
+                    print(
+                        f"  Approve with: "
+                        f"python3 mini_orch.py approve {task_id}"
+                    )
 
         if task_state.get("attempt") is not None:
             print(f"  Attempts: {task_state.get('attempt', 0)}")
@@ -774,6 +861,7 @@ def add_task(
     advisory_preflight=False,
 ):
     tasks = load_json(QUEUE_FILE, [])
+    all_ids = {task.get("id") for task in load_all_tasks()}
     dependencies = dependencies or []
     required_policies = required_policies or []
 
@@ -781,7 +869,7 @@ def add_task(
         print("Add task failed: a task cannot depend on itself.")
         return
 
-    existing_ids = {task["id"] for task in tasks}
+    existing_ids = {task["id"] for task in tasks} | all_ids
 
     missing_dependencies = [
         dependency

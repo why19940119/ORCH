@@ -6,8 +6,10 @@ external system.
 Positioning (must hold):
 - AI only drafts, classifies, ranks and suggests.
 - Every draft becomes a normal ORCH task with ``requires_approval``
-  in task_queue.json and ``waiting_approval`` in state/task_status.json,
-  so it goes through the existing mini_orch approval gate.
+  in the gitignored demo queue state/ecom_demo_queue.json (v0.18.2; the
+  tracked task_queue.json is never written) and ``waiting_approval`` in
+  state/task_status.json, so it goes through the existing mini_orch
+  approval gate. mini_orch and the console merge both queues.
 - Draft bodies are immutable artifacts (artifact_store
   stage_json + publish_staged_artifact); edits create a new version
   with ``parent_artifact_id`` pointing at the previous one.
@@ -23,7 +25,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-import fcntl
 import json
 import os
 import re
@@ -32,6 +33,7 @@ import uuid
 
 import artifact_store
 import mini_orch
+from ui_i18n import DEFAULT_LOCALE, ui_strings
 from approval_inbox import inbox_item
 from chat_security import record_chat_usage, sha256_value
 from orch_chat import ChatProviderError, ask_orch
@@ -40,7 +42,9 @@ from orch_chat import ChatProviderError, ask_orch
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 SAMPLE_DATA_FILE = PROJECT_ROOT / "demo" / "sample_data.json"
-QUEUE_FILE = PROJECT_ROOT / "task_queue.json"
+# v0.18.2: demo drafts live in their own gitignored queue file.
+MAIN_QUEUE_FILE = PROJECT_ROOT / "task_queue.json"
+QUEUE_FILE = PROJECT_ROOT / "state" / "ecom_demo_queue.json"
 STATUS_FILE = PROJECT_ROOT / "state" / "task_status.json"
 EVENTS_FILE = PROJECT_ROOT / "state" / "events.jsonl"
 LOCK_FILE = PROJECT_ROOT / "state" / ".ecom_demo.lock"
@@ -49,7 +53,7 @@ TASK_PREFIX = "task_ecom_"
 DRAFT_LOGICAL_PREFIX = "ecom_draft_"
 AUDIT_LOGICAL_NAME = "ecom_audit"
 AUDIT_SCHEMA_VERSION = "1.0"
-DEMO_VERSION = "v0.18.1"
+DEMO_VERSION = "v0.18.2"
 
 MAX_DRAFT_CHARS = 4000
 MAX_NOTE_CHARS = 300
@@ -652,24 +656,68 @@ def build_source(kind, params, data=None):
 # Draft text: OpenRouter (orch_chat.ask_orch) or deterministic mock
 # ---------------------------------------------------------------------------
 
-def draft_title(kind, source, locale="en"):
+def draft_title(kind, source, locale=DEFAULT_LOCALE):
+    """Short, localised draft title (v0.18.2: zh-Hant by default)."""
+    t = ui_strings(locale)
     zh = str(locale).startswith("zh")
     if kind == "content":
         sku = source["sku"]
         name = sku["name_zh"] if zh else sku["name_en"]
-        return f"{source['content_type']} · {sku['sku']} {name}"
+        ctype = t.get(f"ctype_{source['content_type']}", source["content_type"])
+        return f"{ctype} · {sku['sku']} {name}"
     if kind == "sales_next_step":
         return f"{source['lead']['id']} · {source['sku']['sku']}"
     if kind == "lead_reply":
         inquiry = source["inquiry"]
-        return f"{inquiry['id']} · {source['triage']['category']}"
+        category = source["triage"]["category"]
+        return f"{inquiry['id']} · {t.get('icat_' + category, category)}"
     if kind == "campaign":
-        return f"{source['sku']['sku']} · {source['audience']['id']} · {source['objective']}"
+        audience = source["audience"]
+        audience_name = (
+            audience.get("name_zh") if zh else audience.get("name_en")
+        ) or audience["id"]
+        objective = t.get(f"obj_{source['objective']}", source["objective"])
+        return f"{source['sku']['sku']} · {audience_name} · {objective}"
     if kind == "market_insight":
-        return "W1–W8 insight"
+        return t["demo_title_insight"]
     if kind == "kb_update":
         return f"{source['kb_entry']['id']} v{source['kb_entry']['version']}→?"
     return kind
+
+
+def task_title(kind, module, source, locale=DEFAULT_LOCALE):
+    """``[示範] 內容工作室：商品頁 · SAMPLE-001 …`` in the given locale."""
+    t = ui_strings(locale)
+    module_name = t.get(f"mod_{module}_title", module)
+    if module_name.startswith("ORCH "):
+        module_name = module_name[len("ORCH "):]
+    separator = "：" if str(locale).startswith("zh") else ": "
+    title = (
+        f"{t['demo_title_prefix']} {module_name}{separator}"
+        f"{draft_title(kind, source, locale)}"
+    )
+    return title[:160]
+
+
+def localized_task_title(task, locale=DEFAULT_LOCALE, state=None):
+    """Localise a demo task title from its current draft artifact.
+
+    Falls back to the stored title when the artifact is unavailable.
+    """
+    meta = task.get("ecom_draft") if isinstance(task, dict) else None
+    if not isinstance(meta, dict):
+        return (task or {}).get("title", "")
+    try:
+        if state is None:
+            state = _load(STATUS_FILE, {}).get(task["id"], {})
+        versions = ((state or {}).get("ecom") or {}).get("versions") or []
+        payload = read_artifact(versions[-1]["artifact_id"]) if versions else None
+        source = (payload or {}).get("source")
+        if not source:
+            return task.get("title", "")
+        return task_title(meta["kind"], meta["module"], source, locale)
+    except Exception:
+        return task.get("title", "")
 
 
 def build_prompt(kind, source, language):
@@ -954,14 +1002,9 @@ def generate_draft_text(kind, source, language, session_id_sha256=None):
 
 @contextmanager
 def demo_lock():
-    lock_path = Path(LOCK_FILE)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    """Same flock as mini_orch.run_queue / CLI approve (v0.18.2)."""
+    with mini_orch.state_lock(LOCK_FILE):
+        yield
 
 
 def _load(path, default):
@@ -1039,7 +1082,7 @@ def create_draft(kind, params, operator, language="en", session_id_sha256=None):
     }
     publication = _publish_json(logical_name, payload, task_id)
 
-    title = f"[Demo] {module}: {draft_title(kind, source, 'en')}"
+    title = task_title(kind, module, source, DEFAULT_LOCALE)
     task = {
         "id": task_id,
         "title": title[:160],
@@ -1245,17 +1288,15 @@ def decide(task_id, decision, operator, expected_version, channel=None, note="")
             "note": note,
             "sample_data": True,
         }
-        audit_publication = _publish_json(
-            AUDIT_LOGICAL_NAME, audit, task_id, parent=version["artifact_id"]
-        )
-
+        # v0.18.2: the gate decides first; the immutable audit record is
+        # published only after decide_approval succeeded.
         ecom["decision"] = {
             "decision": decision,
             "version": version["version"],
             "approver": operator,
             "decided_at_utc": decided_at,
             "publish_channel": channel,
-            "audit_artifact_id": audit_publication["artifact_id"],
+            "audit_artifact_id": None,
         }
 
         result = mini_orch.decide_approval(
@@ -1273,6 +1314,20 @@ def decide(task_id, decision, operator, expected_version, channel=None, note="")
             } if decision == "approved" else {"ecom": ecom},
         )
         _require(result.get("ok"), result.get("reason", "decision_failed"))
+
+        audit_publication = _publish_json(
+            AUDIT_LOGICAL_NAME, audit, task_id, parent=version["artifact_id"]
+        )
+        statuses = _load(STATUS_FILE, {})
+        recorded = statuses.get(task_id) or {}
+        recorded_ecom = recorded.get("ecom") or ecom
+        recorded_ecom.setdefault("decision", dict(ecom["decision"]))
+        recorded_ecom["decision"]["audit_artifact_id"] = (
+            audit_publication["artifact_id"]
+        )
+        recorded["ecom"] = recorded_ecom
+        statuses[task_id] = recorded
+        _save(STATUS_FILE, statuses)
 
         if decision == "approved":
             mini_orch.write_event(
@@ -1298,7 +1353,7 @@ def decide(task_id, decision, operator, expected_version, channel=None, note="")
 # Views for the UI
 # ---------------------------------------------------------------------------
 
-def draft_views(data=None):
+def draft_views(data=None, locale=DEFAULT_LOCALE):
     tasks = _load(QUEUE_FILE, [])
     statuses = _load(STATUS_FILE, {})
     views = []
@@ -1311,9 +1366,17 @@ def draft_views(data=None):
         current = versions[-1] if versions else {}
         payload = read_artifact(current.get("artifact_id")) or {}
         body = payload.get("body", "")
+        source = payload.get("source") or {}
+        meta = task["ecom_draft"]
+        title = task.get("title", "")
+        if source and meta.get("kind") and meta.get("module"):
+            try:
+                title = task_title(meta["kind"], meta["module"], source, locale)
+            except Exception:
+                pass
         base = {
             "id": task["id"],
-            "title": task.get("title", ""),
+            "title": title,
             "command": task.get("command", []),
             "requires_approval": True,
             "state": state,
@@ -1322,7 +1385,6 @@ def draft_views(data=None):
             base,
             advisory={"summary": body, "risks": [], "recommended_action": ""},
         )
-        meta = task["ecom_draft"]
         views.append(
             {
                 **item,
@@ -1397,6 +1459,32 @@ def approved_kb_updates():
     ]
 
 
+def import_legacy_demo_tasks(main_queue_file=None):
+    """Copy ``task_ecom_*`` tasks from the tracked task_queue.json (written
+    by v0.18.0/v0.18.1) into the demo queue. Nothing is removed from
+    task_queue.json; mini_orch / the console de-duplicate by task id."""
+    source_path = Path(main_queue_file or MAIN_QUEUE_FILE)
+    legacy = [
+        task for task in _load(source_path, [])
+        if is_demo_task_id(task.get("id"))
+        and isinstance(task.get("ecom_draft"), dict)
+        and isinstance(task.get("command"), list)
+        and task.get("requires_approval") is True
+    ]
+    copied = []
+    with demo_lock():
+        tasks = _load(QUEUE_FILE, [])
+        existing = {task.get("id") for task in tasks}
+        for task in legacy:
+            if task["id"] not in existing:
+                tasks.append(task)
+                copied.append(task["id"])
+        if copied:
+            tasks.sort(key=lambda item: item.get("priority", 999))
+            _save(QUEUE_FILE, tasks)
+    return copied
+
+
 def reset_demo_tasks():
     """Remove demo tasks from the queue/status (artifacts + events stay:
     they are the append-only audit trail)."""
@@ -1413,9 +1501,15 @@ def reset_demo_tasks():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 2 and sys.argv[1] == "--import-legacy":
+        ids = import_legacy_demo_tasks()
+        print(f"Copied {len(ids)} legacy demo task(s) into state/ecom_demo_queue.json: "
+              + (", ".join(ids) or "none"))
+        print("task_queue.json was not modified.")
+        sys.exit(0)
     if len(sys.argv) == 2 and sys.argv[1] == "--reset":
         count = reset_demo_tasks()
-        print(f"Removed {count} demo task(s) from task_queue.json / task_status.json.")
+        print(f"Removed {count} demo task(s) from state/ecom_demo_queue.json / task_status.json.")
         print("Artifacts and events.jsonl entries are kept as the audit trail.")
     else:
-        print("Usage: python3 commerce_demo.py --reset")
+        print("Usage: python3 commerce_demo.py --reset | --import-legacy")
