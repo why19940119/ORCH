@@ -49,7 +49,7 @@ import mini_orch
 PROJECT_ROOT = Path(__file__).resolve().parent
 AUTH_DIR = Path(os.getenv("ORCH_AUTH_DIR") or (PROJECT_ROOT / "state"))
 
-AUTH_VERSION = "v0.20.0"
+AUTH_VERSION = "v0.20.1"
 ROLES = ("admin", "editor", "approver")
 USERNAME_PATTERN = re.compile(r"^[\w .@'\-]{2,40}$", re.UNICODE)
 MIN_PASSWORD_CHARS = 10
@@ -555,6 +555,10 @@ def _validate_change(store, actor_user, kind, target, params):
     target = user["username"]
     if kind in {"change_role", "disable"} and _key(target) == _key(actor_user["username"]):
         raise AuthError("not_on_self")
+    # v0.20.1: a disabled account takes "enable" (and a password reset to
+    # prepare re-enabling); a second disable or a role change no longer applies.
+    if kind in {"disable", "change_role"} and user.get("disabled"):
+        raise AuthError("target_disabled")
     if kind == "change_role":
         if params.get("role") not in ROLES or params["role"] == user["role"]:
             raise AuthError("invalid_role")
@@ -570,6 +574,69 @@ def _validate_change(store, actor_user, kind, target, params):
     if kind == "reset_password" and not params.get("password_hash"):
         raise AuthError("weak_password")
     return target
+
+
+# v0.20.1: codes meaning a pending request no longer applies to the current
+# accounts; such requests are auto-closed (audited) rather than left open.
+NO_LONGER_APPLIES = frozenset(
+    {"unknown_user", "user_exists", "invalid_role", "invalid_change", "target_disabled",
+     "requester_not_admin"}
+)
+
+
+def _requester_is_admin(store, item):
+    requester = store["users"].get(_key(item.get("requested_by", "")))
+    return bool(requester and not requester.get("disabled") and requester["role"] == "admin")
+
+
+def _same_request(item, kind, target, params, store=None):
+    # Review fix: a request whose requester is no longer an active admin
+    # can never be approved, so it does not block a new one.
+    if store is not None and not _requester_is_admin(store, item):
+        return False
+    return (
+        item.get("status") == "pending"
+        and item.get("kind") == kind
+        and _key(item.get("target", "")) == _key(target)
+        and (kind != "change_role"
+             or (item.get("params") or {}).get("role") == params.get("role"))
+    )
+
+
+def _auto_close(change, reason, closed_by):
+    change.update(status="auto_closed", auto_close_reason=reason,
+                  decided_by=closed_by, decided_at_utc=_iso(_now()))
+    change.pop("params", None) if change.get("kind") in {"create_user", "reset_password"} else None
+    if "params" in change:
+        change["params"] = _audit_params(change["params"])
+    return {"change_id": change["id"], "kind": change["kind"], "target": change["target"],
+            "requested_by": change["requested_by"], "reason": reason}
+
+
+def _sweep_pending(store, closed_by, skip_id=None):
+    """Re-validate every other pending request after a change was applied
+    and auto-close the ones that no longer apply. Returns audit rows."""
+    closed = []
+    for item in store["pending_changes"]:
+        if item.get("status") != "pending" or item.get("id") == skip_id:
+            continue
+        if not _requester_is_admin(store, item):
+            # Review fix: the requester was disabled / demoted since.
+            closed.append(_auto_close(item, "requester_not_admin", closed_by))
+            continue
+        requester = store["users"][_key(item["requested_by"])]
+        try:
+            _validate_change(store, requester, item["kind"], item["target"],
+                             item.get("params") or {})
+        except AuthError as error:
+            if error.code in NO_LONGER_APPLIES:
+                closed.append(_auto_close(item, error.code, closed_by))
+    return closed
+
+
+def _audit_auto_closed(actor, rows):
+    for row in rows:
+        audit("account_change_auto_closed", actor, **row)
 
 
 def _apply_change(store, change, approved_by):
@@ -667,12 +734,21 @@ def request_change(actor, kind, target, role=None, password=None):
         }
         lone_admin = len(active_admins(store)) == 1
         single_admin = lone_admin and bootstrap_open(store)
+        # v0.20.1: refuse a second identical pending request (under the
+        # single-admin exception the change applies now and the older
+        # pending copy is auto-closed by the sweep instead).
+        if not single_admin and any(
+            _same_request(item, kind, target, params, store) for item in store["pending_changes"]
+        ):
+            raise AuthError("duplicate_request")
         closed = False
+        auto_closed = []
         if single_admin:
             _apply_change(store, change, actor_user["username"])
             change.update(status="applied", decided_by=actor_user["username"],
                           decided_at_utc=_iso(_now()), bootstrap_exception=True)
             closed = _maybe_complete_bootstrap(store)
+            auto_closed = _sweep_pending(store, "system")
         store["pending_changes"].append(change)
         store["pending_changes"] = store["pending_changes"][-500:]
         _save_store(store)
@@ -682,6 +758,7 @@ def request_change(actor, kind, target, role=None, password=None):
         audit("account_change_applied", actor_user["username"], change_id=change["id"],
               kind=kind, target=target, params=_audit_params(params),
               bootstrap_exception=True)
+    _audit_auto_closed("system", auto_closed)
     if closed:
         audit("bootstrap_complete", actor_user["username"], reason="second_admin")
     result = {k: v for k, v in change.items() if k != "params"} | {
@@ -711,12 +788,23 @@ def decide_change(actor, change_id, decision):
             raise AuthError("not_on_self")
         if decision == "approved":
             requester = store["users"].get(_key(change["requested_by"]))
-            if not requester or requester.get("disabled") or requester["role"] != "admin":
-                raise AuthError("requester_not_admin")
-            _validate_change(store, requester, change["kind"], change["target"],
-                             change.get("params") or {})
+            try:
+                if not requester or requester.get("disabled") or requester["role"] != "admin":
+                    raise AuthError("requester_not_admin")
+                _validate_change(store, requester, change["kind"], change["target"],
+                                 change.get("params") or {})
+            except AuthError as error:
+                if error.code not in NO_LONGER_APPLIES:
+                    raise
+                # v0.20.1: re-validated on approval; it no longer applies.
+                row = _auto_close(change, error.code, actor_user["username"])
+                _save_store(store)
+                _audit_auto_closed(actor_user["username"], [row])
+                return change
             _apply_change(store, change, actor_user["username"])
         closed = decision == "approved" and _maybe_complete_bootstrap(store)
+        auto_closed = (_sweep_pending(store, "system", skip_id=change_id)
+                       if decision == "approved" else [])
         change.update(
             status="applied" if decision == "approved" else "rejected",
             decided_by=actor_user["username"],
@@ -729,6 +817,7 @@ def decide_change(actor, change_id, decision):
     audit("account_change_" + ("applied" if decision == "approved" else "rejected"),
           actor_user["username"], change_id=change_id, kind=change["kind"],
           target=change["target"], requested_by=change["requested_by"])
+    _audit_auto_closed("system", auto_closed)
     if closed:
         audit("bootstrap_complete", actor_user["username"], reason="second_admin")
     return change
