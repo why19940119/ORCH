@@ -1,0 +1,969 @@
+{
+  "_meta": {
+    "label": "SAMPLE / 示範數據",
+    "description": "Fictional demo data for the ORCH cross-border e-commerce prototype (BUD 申請易 scheme demo). Brand, SKUs, customers, prices and KPIs are invented. Not real metrics.",
+    "brand": "Harbour Sample Co.（示範品牌）",
+    "target_market": "Malaysia (sample target market)",
+    "currency": "HKD",
+    "version": "sample-2026.1"
+  },
+  "skus": [
+    {
+      "sku": "SAMPLE-001",
+      "category": "home",
+      "name_en": "Bamboo-fibre towel set (2 pcs)",
+      "name_zh": "竹纖維毛巾套裝（2 條）",
+      "material": "bamboo fibre / cotton",
+      "size": "70 x 140 cm",
+      "weight_g": 480,
+      "list_price_hkd": 199,
+      "stock_units": 150,
+      "approved_facts": [
+        "Material: bamboo fibre / cotton",
+        "Size: 70 x 140 cm",
+        "Weight: 480 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-002",
+      "category": "home",
+      "name_en": "Linen cushion cover",
+      "name_zh": "亞麻抱枕套",
+      "material": "linen",
+      "size": "45 x 45 cm",
+      "weight_g": 220,
+      "list_price_hkd": 149,
+      "stock_units": 200,
+      "approved_facts": [
+        "Material: linen",
+        "Size: 45 x 45 cm",
+        "Weight: 220 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-003",
+      "category": "home",
+      "name_en": "Ceramic diffuser vase",
+      "name_zh": "陶瓷香薰瓶",
+      "material": "stoneware",
+      "size": "H 15 cm",
+      "weight_g": 260,
+      "list_price_hkd": 229,
+      "stock_units": 250,
+      "approved_facts": [
+        "Material: stoneware",
+        "Size: H 15 cm",
+        "Weight: 260 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-004",
+      "category": "home",
+      "name_en": "Foldable storage box (L)",
+      "name_zh": "摺疊收納箱（大）",
+      "material": "PP + fabric",
+      "size": "40 x 30 x 25 cm",
+      "weight_g": 900,
+      "list_price_hkd": 189,
+      "stock_units": 300,
+      "approved_facts": [
+        "Material: PP + fabric",
+        "Size: 40 x 30 x 25 cm",
+        "Weight: 900 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-005",
+      "category": "home",
+      "name_en": "Blackout curtain panel",
+      "name_zh": "遮光窗簾（單幅）",
+      "material": "polyester",
+      "size": "140 x 230 cm",
+      "weight_g": 1600,
+      "list_price_hkd": 299,
+      "stock_units": 100,
+      "approved_facts": [
+        "Material: polyester",
+        "Size: 140 x 230 cm",
+        "Weight: 1600 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-006",
+      "category": "home",
+      "name_en": "Cotton waffle bathrobe",
+      "name_zh": "棉質格紋浴袍",
+      "material": "cotton",
+      "size": "One size",
+      "weight_g": 1100,
+      "list_price_hkd": 399,
+      "stock_units": 150,
+      "approved_facts": [
+        "Material: cotton",
+        "Size: One size",
+        "Weight: 1100 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-007",
+      "category": "kitchen",
+      "name_en": "Stainless lunch box (3-tier)",
+      "name_zh": "不鏽鋼三層飯盒",
+      "material": "304 stainless steel",
+      "size": "1.6 L",
+      "weight_g": 750,
+      "list_price_hkd": 259,
+      "stock_units": 200,
+      "approved_facts": [
+        "Material: 304 stainless steel",
+        "Size: 1.6 L",
+        "Weight: 750 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-008",
+      "category": "kitchen",
+      "name_en": "Silicone food cover set",
+      "name_zh": "矽膠保鮮蓋套裝",
+      "material": "food-grade silicone",
+      "size": "6 sizes",
+      "weight_g": 310,
+      "list_price_hkd": 129,
+      "stock_units": 250,
+      "approved_facts": [
+        "Material: food-grade silicone",
+        "Size: 6 sizes",
+        "Weight: 310 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-009",
+      "category": "kitchen",
+      "name_en": "Cast-iron mini skillet",
+      "name_zh": "鑄鐵迷你煎鍋",
+      "material": "cast iron",
+      "size": "16 cm",
+      "weight_g": 1300,
+      "list_price_hkd": 349,
+      "stock_units": 300,
+      "approved_facts": [
+        "Material: cast iron",
+        "Size: 16 cm",
+        "Weight: 1300 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-010",
+      "category": "kitchen",
+      "name_en": "Glass pour-over coffee set",
+      "name_zh": "玻璃手沖咖啡套裝",
+      "material": "borosilicate glass",
+      "size": "600 ml",
+      "weight_g": 680,
+      "list_price_hkd": 289,
+      "stock_units": 100,
+      "approved_facts": [
+        "Material: borosilicate glass",
+        "Size: 600 ml",
+        "Weight: 680 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-011",
+      "category": "kitchen",
+      "name_en": "Wooden chopping board",
+      "name_zh": "木製砧板",
+      "material": "acacia wood",
+      "size": "35 x 25 cm",
+      "weight_g": 1000,
+      "list_price_hkd": 219,
+      "stock_units": 150,
+      "approved_facts": [
+        "Material: acacia wood",
+        "Size: 35 x 25 cm",
+        "Weight: 1000 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-012",
+      "category": "kitchen",
+      "name_en": "Insulated tumbler 500 ml",
+      "name_zh": "保溫杯 500 ml",
+      "material": "stainless steel",
+      "size": "500 ml",
+      "weight_g": 380,
+      "list_price_hkd": 169,
+      "stock_units": 200,
+      "approved_facts": [
+        "Material: stainless steel",
+        "Size: 500 ml",
+        "Weight: 380 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-013",
+      "category": "travel",
+      "name_en": "Packing cube set (4 pcs)",
+      "name_zh": "行李收納袋（4 件）",
+      "material": "nylon",
+      "size": "S/M/L/XL",
+      "weight_g": 1500,
+      "list_price_hkd": 239,
+      "stock_units": 250,
+      "approved_facts": [
+        "Material: nylon",
+        "Size: S/M/L/XL",
+        "Weight: 1500 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-014",
+      "category": "travel",
+      "name_en": "Neck pillow (memory foam)",
+      "name_zh": "記憶棉頸枕",
+      "material": "memory foam",
+      "size": "One size",
+      "weight_g": 290,
+      "list_price_hkd": 159,
+      "stock_units": 300,
+      "approved_facts": [
+        "Material: memory foam",
+        "Size: One size",
+        "Weight: 290 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-015",
+      "category": "travel",
+      "name_en": "Hard-shell carry-on 20\"",
+      "name_zh": "20 吋硬殼登機箱",
+      "material": "polycarbonate",
+      "size": "20 inch",
+      "weight_g": 3300,
+      "list_price_hkd": 899,
+      "stock_units": 100,
+      "approved_facts": [
+        "Material: polycarbonate",
+        "Size: 20 inch",
+        "Weight: 3300 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-016",
+      "category": "travel",
+      "name_en": "Universal travel adapter",
+      "name_zh": "萬用旅行轉插",
+      "material": "ABS",
+      "size": "4 plug types",
+      "weight_g": 210,
+      "list_price_hkd": 119,
+      "stock_units": 150,
+      "approved_facts": [
+        "Material: ABS",
+        "Size: 4 plug types",
+        "Weight: 210 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-017",
+      "category": "travel",
+      "name_en": "Foldable duffel bag",
+      "name_zh": "摺疊旅行袋",
+      "material": "nylon",
+      "size": "35 L",
+      "weight_g": 340,
+      "list_price_hkd": 179,
+      "stock_units": 200,
+      "approved_facts": [
+        "Material: nylon",
+        "Size: 35 L",
+        "Weight: 340 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-018",
+      "category": "travel",
+      "name_en": "RFID passport wallet",
+      "name_zh": "RFID 護照銀包",
+      "material": "PU leather",
+      "size": "14 x 10 cm",
+      "weight_g": 120,
+      "list_price_hkd": 139,
+      "stock_units": 250,
+      "approved_facts": [
+        "Material: PU leather",
+        "Size: 14 x 10 cm",
+        "Weight: 120 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-019",
+      "category": "stationery",
+      "name_en": "A5 dot-grid notebook",
+      "name_zh": "A5 點陣筆記簿",
+      "material": "paper",
+      "size": "A5, 160 pages",
+      "weight_g": 330,
+      "list_price_hkd": 99,
+      "stock_units": 300,
+      "approved_facts": [
+        "Material: paper",
+        "Size: A5, 160 pages",
+        "Weight: 330 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-020",
+      "category": "stationery",
+      "name_en": "Gel pen set (10 colours)",
+      "name_zh": "啫喱筆套裝（10 色）",
+      "material": "plastic",
+      "size": "0.5 mm",
+      "weight_g": 140,
+      "list_price_hkd": 79,
+      "stock_units": 100,
+      "approved_facts": [
+        "Material: plastic",
+        "Size: 0.5 mm",
+        "Weight: 140 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-021",
+      "category": "stationery",
+      "name_en": "Desk organiser (bamboo)",
+      "name_zh": "竹製桌面收納架",
+      "material": "bamboo",
+      "size": "30 x 12 cm",
+      "weight_g": 520,
+      "list_price_hkd": 209,
+      "stock_units": 150,
+      "approved_facts": [
+        "Material: bamboo",
+        "Size: 30 x 12 cm",
+        "Weight: 520 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-022",
+      "category": "stationery",
+      "name_en": "Washi tape set (8 rolls)",
+      "name_zh": "和紙膠帶套裝（8 卷）",
+      "material": "washi paper",
+      "size": "15 mm",
+      "weight_g": 90,
+      "list_price_hkd": 59,
+      "stock_units": 200,
+      "approved_facts": [
+        "Material: washi paper",
+        "Size: 15 mm",
+        "Weight: 90 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-023",
+      "category": "stationery",
+      "name_en": "Leather pencil case",
+      "name_zh": "皮革筆袋",
+      "material": "PU leather",
+      "size": "20 x 7 cm",
+      "weight_g": 110,
+      "list_price_hkd": 109,
+      "stock_units": 250,
+      "approved_facts": [
+        "Material: PU leather",
+        "Size: 20 x 7 cm",
+        "Weight: 110 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-024",
+      "category": "stationery",
+      "name_en": "Weekly desk planner",
+      "name_zh": "每週桌面計劃簿",
+      "material": "paper",
+      "size": "A4, 52 weeks",
+      "weight_g": 400,
+      "list_price_hkd": 189,
+      "stock_units": 300,
+      "approved_facts": [
+        "Material: paper",
+        "Size: A4, 52 weeks",
+        "Weight: 400 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-025",
+      "category": "pet",
+      "name_en": "Pet grooming glove",
+      "name_zh": "寵物梳毛手套",
+      "material": "silicone",
+      "size": "One size",
+      "weight_g": 70,
+      "list_price_hkd": 69,
+      "stock_units": 100,
+      "approved_facts": [
+        "Material: silicone",
+        "Size: One size",
+        "Weight: 70 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-026",
+      "category": "pet",
+      "name_en": "Ceramic pet bowl",
+      "name_zh": "陶瓷寵物碗",
+      "material": "ceramic",
+      "size": "15 cm",
+      "weight_g": 430,
+      "list_price_hkd": 149,
+      "stock_units": 150,
+      "approved_facts": [
+        "Material: ceramic",
+        "Size: 15 cm",
+        "Weight: 430 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-027",
+      "category": "pet",
+      "name_en": "Foldable pet carrier",
+      "name_zh": "摺疊寵物外出袋",
+      "material": "oxford fabric",
+      "size": "45 x 30 x 30 cm",
+      "weight_g": 1200,
+      "list_price_hkd": 329,
+      "stock_units": 200,
+      "approved_facts": [
+        "Material: oxford fabric",
+        "Size: 45 x 30 x 30 cm",
+        "Weight: 1200 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-028",
+      "category": "pet",
+      "name_en": "Cat scratching board",
+      "name_zh": "貓抓板",
+      "material": "corrugated cardboard",
+      "size": "45 x 25 cm",
+      "weight_g": 600,
+      "list_price_hkd": 129,
+      "stock_units": 250,
+      "approved_facts": [
+        "Material: corrugated cardboard",
+        "Size: 45 x 25 cm",
+        "Weight: 600 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-029",
+      "category": "pet",
+      "name_en": "Reflective dog leash",
+      "name_zh": "反光狗帶",
+      "material": "nylon",
+      "size": "1.5 m",
+      "weight_g": 160,
+      "list_price_hkd": 109,
+      "stock_units": 300,
+      "approved_facts": [
+        "Material: nylon",
+        "Size: 1.5 m",
+        "Weight: 160 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    },
+    {
+      "sku": "SAMPLE-030",
+      "category": "pet",
+      "name_en": "Pet travel water bottle",
+      "name_zh": "寵物外出水樽",
+      "material": "food-grade PP",
+      "size": "350 ml",
+      "weight_g": 200,
+      "list_price_hkd": 99,
+      "stock_units": 100,
+      "approved_facts": [
+        "Material: food-grade PP",
+        "Size: 350 ml",
+        "Weight: 200 g"
+      ],
+      "claims_policy": "No efficacy, health or 'best/No.1' claims without approved evidence.",
+      "sample": true
+    }
+  ],
+  "inquiries": [
+    {
+      "id": "INQ-S-001",
+      "channel": "website_form",
+      "lang": "en",
+      "customer": "Sample Customer A",
+      "received_at": "2026-01-05T10:00:00",
+      "sku": "SAMPLE-007",
+      "text": "Do you ship SAMPLE-007 to Kuala Lumpur? How many days?",
+      "sample": true
+    },
+    {
+      "id": "INQ-S-002",
+      "channel": "email",
+      "lang": "en",
+      "customer": "Sample Customer B",
+      "received_at": "2026-01-06T10:00:00",
+      "sku": "SAMPLE-001",
+      "text": "We run a gift shop and want 200 units of SAMPLE-001. Can you quote a wholesale price?",
+      "sample": true
+    },
+    {
+      "id": "INQ-S-003",
+      "channel": "whatsapp",
+      "lang": "zh-Hant",
+      "customer": "Sample Customer C",
+      "received_at": "2026-01-07T10:00:00",
+      "sku": "SAMPLE-015",
+      "text": "SAMPLE-015 有冇其他顏色？幾時有貨？",
+      "sample": true
+    },
+    {
+      "id": "INQ-S-004",
+      "channel": "marketplace",
+      "lang": "en",
+      "customer": "Sample Customer D",
+      "received_at": "2026-01-08T10:00:00",
+      "sku": "SAMPLE-013",
+      "text": "My order of SAMPLE-013 arrived with one cube torn. I want a refund.",
+      "sample": true
+    },
+    {
+      "id": "INQ-S-005",
+      "channel": "website_form",
+      "lang": "en",
+      "customer": "Sample Customer E",
+      "received_at": "2026-01-09T10:00:00",
+      "sku": "SAMPLE-012",
+      "text": "Is SAMPLE-012 dishwasher safe?",
+      "sample": true
+    },
+    {
+      "id": "INQ-S-006",
+      "channel": "email",
+      "lang": "en",
+      "customer": "Sample Customer F",
+      "received_at": "2026-01-10T10:00:00",
+      "sku": "SAMPLE-009",
+      "text": "Can you do a 20% discount if I buy SAMPLE-009 and SAMPLE-011 together?",
+      "sample": true
+    },
+    {
+      "id": "INQ-S-007",
+      "channel": "whatsapp",
+      "lang": "zh-Hant",
+      "customer": "Sample Customer G",
+      "received_at": "2026-01-11T10:00:00",
+      "sku": "SAMPLE-027",
+      "text": "SAMPLE-027 可唔可以攞上飛機？尺寸啱唔啱？",
+      "sample": true
+    },
+    {
+      "id": "INQ-S-008",
+      "channel": "website_form",
+      "lang": "en",
+      "customer": "Sample Customer H",
+      "received_at": "2026-01-12T10:00:00",
+      "sku": "SAMPLE-014",
+      "text": "Does SAMPLE-014 help with neck pain? Is it medically proven?",
+      "sample": true
+    },
+    {
+      "id": "INQ-S-009",
+      "channel": "marketplace",
+      "lang": "en",
+      "customer": "Sample Customer I",
+      "received_at": "2026-01-13T10:00:00",
+      "sku": "SAMPLE-004",
+      "text": "What is the return policy if SAMPLE-004 is the wrong size?",
+      "sample": true
+    },
+    {
+      "id": "INQ-S-010",
+      "channel": "email",
+      "lang": "en",
+      "customer": "Sample Customer J",
+      "received_at": "2026-01-14T10:00:00",
+      "sku": "SAMPLE-019",
+      "text": "Corporate order: 500 x SAMPLE-019 notebooks with our logo. Lead time?",
+      "sample": true
+    },
+    {
+      "id": "INQ-S-011",
+      "channel": "website_form",
+      "lang": "zh-Hant",
+      "customer": "Sample Customer K",
+      "received_at": "2026-01-15T10:00:00",
+      "sku": "SAMPLE-026",
+      "text": "SAMPLE-026 陶瓷碗可以用微波爐嗎？",
+      "sample": true
+    },
+    {
+      "id": "INQ-S-012",
+      "channel": "whatsapp",
+      "lang": "en",
+      "customer": "Sample Customer L",
+      "received_at": "2026-01-16T10:00:00",
+      "sku": "SAMPLE-013",
+      "text": "Hi, just browsing. Any bundles for travel items?",
+      "sample": true
+    },
+    {
+      "id": "INQ-S-013",
+      "channel": "email",
+      "lang": "en",
+      "customer": "Sample Customer M",
+      "received_at": "2026-01-17T10:00:00",
+      "sku": "SAMPLE-017",
+      "text": "Your delivery to Penang was late by a week. Very disappointed.",
+      "sample": true
+    },
+    {
+      "id": "INQ-S-014",
+      "channel": "website_form",
+      "lang": "en",
+      "customer": "Sample Customer N",
+      "received_at": "2026-01-18T10:00:00",
+      "sku": "SAMPLE-021",
+      "text": "Can I pay by bank transfer for SAMPLE-021?",
+      "sample": true
+    },
+    {
+      "id": "INQ-S-015",
+      "channel": "marketplace",
+      "lang": "en",
+      "customer": "Sample Customer O",
+      "received_at": "2026-01-19T10:00:00",
+      "sku": "SAMPLE-029",
+      "text": "Is SAMPLE-029 suitable for large dogs (30 kg)?",
+      "sample": true
+    },
+    {
+      "id": "INQ-S-016",
+      "channel": "email",
+      "lang": "en",
+      "customer": "Sample Customer P",
+      "received_at": "2026-01-20T10:00:00",
+      "sku": "SAMPLE-024",
+      "text": "We are a distributor in Malaysia. Interested in the whole stationery range.",
+      "sample": true
+    }
+  ],
+  "order_leads": [
+    {
+      "id": "LEAD-S-001",
+      "inquiry_id": "INQ-S-002",
+      "sku": "SAMPLE-001",
+      "qty": 200,
+      "stage": "quoted",
+      "est_value_hkd": 39800,
+      "owner": "Sample Sales Rep",
+      "sample": true
+    },
+    {
+      "id": "LEAD-S-002",
+      "inquiry_id": "INQ-S-010",
+      "sku": "SAMPLE-019",
+      "qty": 500,
+      "stage": "qualified",
+      "est_value_hkd": 49500,
+      "owner": "Sample Sales Rep",
+      "sample": true
+    },
+    {
+      "id": "LEAD-S-003",
+      "inquiry_id": "INQ-S-016",
+      "sku": "SAMPLE-024",
+      "qty": 300,
+      "stage": "new",
+      "est_value_hkd": 56700,
+      "owner": "Sample Sales Rep",
+      "sample": true
+    },
+    {
+      "id": "LEAD-S-004",
+      "inquiry_id": "INQ-S-006",
+      "sku": "SAMPLE-009",
+      "qty": 2,
+      "stage": "negotiating",
+      "est_value_hkd": 698,
+      "owner": "Sample Sales Rep",
+      "sample": true
+    },
+    {
+      "id": "LEAD-S-005",
+      "inquiry_id": "INQ-S-001",
+      "sku": "SAMPLE-007",
+      "qty": 1,
+      "stage": "new",
+      "est_value_hkd": 259,
+      "owner": "Sample Sales Rep",
+      "sample": true
+    },
+    {
+      "id": "LEAD-S-006",
+      "inquiry_id": "INQ-S-003",
+      "sku": "SAMPLE-015",
+      "qty": 1,
+      "stage": "qualified",
+      "est_value_hkd": 899,
+      "owner": "Sample Sales Rep",
+      "sample": true
+    },
+    {
+      "id": "LEAD-S-007",
+      "inquiry_id": "INQ-S-012",
+      "sku": "SAMPLE-013",
+      "qty": 3,
+      "stage": "new",
+      "est_value_hkd": 717,
+      "owner": "Sample Sales Rep",
+      "sample": true
+    },
+    {
+      "id": "LEAD-S-008",
+      "inquiry_id": "INQ-S-015",
+      "sku": "SAMPLE-029",
+      "qty": 1,
+      "stage": "won",
+      "est_value_hkd": 109,
+      "owner": "Sample Sales Rep",
+      "sample": true
+    },
+    {
+      "id": "LEAD-S-009",
+      "inquiry_id": "INQ-S-014",
+      "sku": "SAMPLE-021",
+      "qty": 1,
+      "stage": "quoted",
+      "est_value_hkd": 209,
+      "owner": "Sample Sales Rep",
+      "sample": true
+    },
+    {
+      "id": "LEAD-S-010",
+      "inquiry_id": "INQ-S-007",
+      "sku": "SAMPLE-027",
+      "qty": 1,
+      "stage": "lost",
+      "est_value_hkd": 329,
+      "owner": "Sample Sales Rep",
+      "sample": true
+    }
+  ],
+  "kpi": {
+    "weeks": [
+      "W1",
+      "W2",
+      "W3",
+      "W4",
+      "W5",
+      "W6",
+      "W7",
+      "W8"
+    ],
+    "sessions": [
+      1000,
+      1100,
+      1200,
+      1300,
+      1400,
+      1500,
+      1600,
+      1700
+    ],
+    "inquiries": [
+      20,
+      22,
+      24,
+      26,
+      28,
+      30,
+      32,
+      34
+    ],
+    "leads": [
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17
+    ],
+    "orders": [
+      5,
+      5,
+      6,
+      6,
+      7,
+      7,
+      8,
+      8
+    ],
+    "by_channel": [
+      {
+        "channel": "website_form",
+        "inquiries": 80
+      },
+      {
+        "channel": "email",
+        "inquiries": 60
+      },
+      {
+        "channel": "whatsapp",
+        "inquiries": 50
+      },
+      {
+        "channel": "marketplace",
+        "inquiries": 46
+      }
+    ],
+    "note": "Synthetic round-number values generated for the demo. Not real traffic or sales."
+  },
+  "knowledge_base": {
+    "logistics": [
+      {
+        "id": "KB-LOG-01",
+        "title_en": "Shipping to the target market",
+        "title_zh": "寄往目標市場",
+        "body_en": "SAMPLE policy: standard air parcel, 5-8 working days after dispatch. Tracking number provided.",
+        "body_zh": "示範政策：標準空郵包裹，出貨後 5–8 個工作天送達，提供追蹤編號。",
+        "version": 1,
+        "approved_by": "Sample Approver"
+      },
+      {
+        "id": "KB-LOG-02",
+        "title_en": "Dispatch cut-off",
+        "title_zh": "出貨截單時間",
+        "body_en": "SAMPLE policy: orders paid before 14:00 HKT on working days are dispatched the same day.",
+        "body_zh": "示範政策：工作天下午 2 時（香港時間）前付款的訂單即日出貨。",
+        "version": 1,
+        "approved_by": "Sample Approver"
+      }
+    ],
+    "returns": [
+      {
+        "id": "KB-RET-01",
+        "title_en": "Return window",
+        "title_zh": "退貨期限",
+        "body_en": "SAMPLE policy: unused items may be returned within 14 days of delivery. Customer pays return shipping unless the item is defective.",
+        "body_zh": "示範政策：未使用貨品可於送達後 14 日內退貨；除貨品有瑕疵外，退貨運費由客戶負擔。",
+        "version": 1,
+        "approved_by": "Sample Approver"
+      },
+      {
+        "id": "KB-RET-02",
+        "title_en": "Defective items",
+        "title_zh": "瑕疵貨品",
+        "body_en": "SAMPLE policy: defective items are replaced or refunded after photo review. Refunds always require human approval.",
+        "body_zh": "示範政策：瑕疵貨品經相片審核後更換或退款；所有退款必須經人手批准。",
+        "version": 1,
+        "approved_by": "Sample Approver"
+      }
+    ],
+    "payment": [
+      {
+        "id": "KB-PAY-01",
+        "title_en": "Accepted payment",
+        "title_zh": "付款方式",
+        "body_en": "SAMPLE policy: card and marketplace checkout. Bank transfer for B2B orders over HK$5,000 only.",
+        "body_zh": "示範政策：信用卡及平台結帳；B2B 訂單滿 HK$5,000 可銀行轉賬。",
+        "version": 1,
+        "approved_by": "Sample Approver"
+      }
+    ]
+  },
+  "campaign": {
+    "audiences": [
+      {
+        "id": "AUD-S-01",
+        "name_en": "Home & kitchen upgraders (25-44)",
+        "name_zh": "家居廚房升級族（25–44 歲）"
+      },
+      {
+        "id": "AUD-S-02",
+        "name_en": "Frequent travellers",
+        "name_zh": "常旅客"
+      },
+      {
+        "id": "AUD-S-03",
+        "name_en": "Pet owners (cats & dogs)",
+        "name_zh": "貓狗主人"
+      },
+      {
+        "id": "AUD-S-04",
+        "name_en": "Students & desk workers",
+        "name_zh": "學生及辦公室人士"
+      }
+    ],
+    "objectives": [
+      "traffic",
+      "inquiries",
+      "sales"
+    ]
+  }
+}

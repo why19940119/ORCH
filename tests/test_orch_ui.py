@@ -55,7 +55,19 @@ class OrchUiTests(unittest.TestCase):
             and not rule.rule.startswith("/static")
         )
 
-        self.assertEqual(post_routes, ["/chat", "/locale"])
+        # v0.18.0: the only additions are the e-commerce demo draft and
+        # Approval Inbox decision routes (CSRF + named operator each).
+        self.assertEqual(
+            post_routes,
+            [
+                "/chat",
+                "/demo/draft",
+                "/inbox/<task_id>/approve",
+                "/inbox/<task_id>/reject",
+                "/inbox/<task_id>/revise",
+                "/locale",
+            ],
+        )
 
 
 class TaskStatusAndComposerUiTests(unittest.TestCase):
@@ -240,10 +252,70 @@ class TaskStatusAndComposerUiTests(unittest.TestCase):
 
 
 
+FIXTURE_TASK_ID = "task_fixture_done_001"
+
+
+def seed_console_fixtures(test_case):
+    """v0.18.2: seed queue/status/events in a temp dir so console tests
+    do not depend on local gitignored state (fresh-clone safe)."""
+    import commerce_demo
+    import orch_ui
+
+    tmp = Path(tempfile.mkdtemp(prefix="orch_ui_fixture_"))
+    (tmp / "state").mkdir()
+    (tmp / "task_queue.json").write_text(json.dumps([
+        {
+            "id": FIXTURE_TASK_ID,
+            "title": "Fixture task (done)",
+            "command": ["python3", "worker_report.py"],
+            "priority": 1,
+            "depends_on": [],
+            "max_retries": 1,
+            "requires_approval": False,
+            "requires_policies": [],
+        }
+    ]), encoding="utf-8")
+    (tmp / "state" / "task_status.json").write_text(json.dumps({
+        FIXTURE_TASK_ID: {
+            "id": FIXTURE_TASK_ID,
+            "title": "Fixture task (done)",
+            "status": "done",
+            "attempt": 1,
+            "updated_at": "2026-08-16T20:34:15",
+        }
+    }), encoding="utf-8")
+    (tmp / "state" / "events.jsonl").write_text(json.dumps({
+        "timestamp": "2026-08-16T20:34:15",
+        "event": "task_completed",
+        "task_id": FIXTURE_TASK_ID,
+        "task_title": "Fixture task (done)",
+        "message": "Fixture task completed.",
+    }) + "\n", encoding="utf-8")
+    patches = [
+        patch.object(orch_ui, "QUEUE_FILE", tmp / "task_queue.json"),
+        patch.object(orch_ui, "STATUS_FILE", tmp / "state" / "task_status.json"),
+        patch.object(orch_ui, "EVENTS_FILE", tmp / "state" / "events.jsonl"),
+        patch.object(commerce_demo, "QUEUE_FILE", tmp / "state" / "ecom_demo_queue.json"),
+        patch.object(commerce_demo, "STATUS_FILE", tmp / "state" / "task_status.json"),
+    ]
+    for item in patches:
+        item.start()
+
+    def cleanup():
+        for item in reversed(patches):
+            item.stop()
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    test_case.addCleanup(cleanup)
+    return tmp
+
+
 class ConsoleDensityUiTests(unittest.TestCase):
     def setUp(self):
         app.config["TESTING"] = True
         self.client = app.test_client()
+        seed_console_fixtures(self)
 
     def test_shell_density_contracts(self):
         source = Path("orch_ui.py").read_text(encoding="utf-8")
@@ -294,13 +366,7 @@ class ConsoleDensityUiTests(unittest.TestCase):
         self.assertIn("badge done", html)
 
     def test_task_detail_has_three_sections(self):
-        # pick a real task id from queue
-        import json
-        from pathlib import Path as P
-        tasks = json.loads(
-            (P("task_queue.json")).read_text(encoding="utf-8")
-        )
-        task_id = tasks[0]["id"]
+        task_id = FIXTURE_TASK_ID
         html = self.client.get(f"/tasks/{task_id}").get_data(as_text=True)
         t = ui_strings("zh-Hant")
         self.assertIn(t["task_state"], html)
@@ -777,6 +843,87 @@ class TaskAwareChatContextTests(unittest.TestCase):
             context["task_lookup"]["resolved_task_ids"],
             [],
         )
+
+
+class OrchChatDemoContextTests(unittest.TestCase):
+    """v0.18.1: orch_context carries read-only e-commerce sample data."""
+
+    QUESTION = "SAMPLE-001・竹纖維毛巾套裝（2 條）係咩？"
+
+    def setUp(self):
+        app.config["TESTING"] = True
+        CHAT_SESSIONS.clear()
+        self.client = app.test_client()
+
+    def test_build_chat_context_includes_sample_001(self):
+        context = build_chat_context(self.QUESTION)
+        demo = context["ecommerce_demo"]
+        self.assertEqual(demo["scope"], "read_only_sample_data")
+        self.assertEqual(demo["matching_skus"][0]["sku"], "SAMPLE-001")
+        self.assertEqual(
+            demo["matching_skus"][0]["name_zh"], "竹纖維毛巾套裝（2 條）"
+        )
+        text = json.dumps(context, ensure_ascii=False)
+        self.assertNotIn("OPENROUTER_API_KEY", text)
+        self.assertNotIn("ORCH_UI_SECRET_KEY", text)
+
+    @patch("orch_ui.publish_chat_audit_artifact")
+    @patch("orch_ui.record_chat_usage")
+    @patch("orch_ui.ask_orch")
+    def test_orch_context_chat_passes_demo_data_and_locale(
+        self, mock_ask_orch, mock_record_usage, mock_publish_audit
+    ):
+        mock_publish_audit.return_value = {"artifact_id": "artifact_chat_demo"}
+        mock_ask_orch.return_value = {
+            "provider": "openrouter",
+            "requested_model": "m",
+            "response_model": "m",
+            "response_id": "chat-demo-001",
+            "usage": {"total_tokens": 0, "cost": 0},
+            "chat": {
+                "answer": "SAMPLE-001 係示範商品：竹纖維毛巾套裝（2 條）。",
+                "referenced_task_ids": [],
+                "referenced_artifact_ids": [],
+                "limitations": ["示範數據"],
+                "execution_authority": "none",
+            },
+        }
+        self.client.get("/chat")
+        with self.client.session_transaction() as stored:
+            csrf_token = stored["csrf_token"]
+        response = self.client.post(
+            "/chat",
+            data={
+                "csrf_token": csrf_token,
+                "mode": "orch_context",
+                "question": self.QUESTION,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        kwargs = mock_ask_orch.call_args.kwargs
+        self.assertEqual(kwargs["mode"], "orch_context")
+        self.assertEqual(kwargs["locale"], "zh-Hant")
+        demo = kwargs["context"]["ecommerce_demo"]
+        self.assertIn("SAMPLE-001", [s["sku"] for s in demo["matching_skus"]])
+        mock_publish_audit.assert_called_once()
+
+    @patch("orch_ui.publish_chat_audit_artifact")
+    @patch("orch_ui.record_chat_usage")
+    @patch("orch_ui.ask_orch")
+    def test_chat_locale_follows_ui_locale(
+        self, mock_ask_orch, mock_record_usage, mock_publish_audit
+    ):
+        mock_publish_audit.return_value = {"artifact_id": "artifact_chat_demo"}
+        mock_ask_orch.side_effect = RuntimeError("stop")
+        self.client.get("/chat")
+        with self.client.session_transaction() as stored:
+            stored["locale"] = "en"
+            csrf_token = stored["csrf_token"]
+        self.client.post(
+            "/chat",
+            data={"csrf_token": csrf_token, "mode": "general", "question": "hi"},
+        )
+        self.assertEqual(mock_ask_orch.call_args.kwargs["locale"], "en")
 
 
 class OrchUiSecretAndCookieTests(unittest.TestCase):

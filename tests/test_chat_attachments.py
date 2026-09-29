@@ -55,18 +55,26 @@ class ChatAttachmentUnitTests(unittest.TestCase):
         self.assertIn("hello orch attachments", text)
 
     def test_process_txt_upload(self):
-        storage = FakeStorage(
-            "hello.txt",
-            b"payload text",
-            "text/plain",
-        )
-        records = process_uploaded_files([storage], session_key="testsess")
-        self.assertEqual(len(records), 1)
-        self.assertEqual(records[0]["kind"], "document")
-        self.assertIn("payload text", records[0]["extracted_text"])
-        stored = Path(records[0]["path"])
-        self.assertTrue(stored.is_file())
-        assert_within_chat_uploads(stored)
+        # v0.18.2: temp uploads root so tests never write/sweep uploads/.
+        import chat_attachments
+        import shutil
+
+        tmp = Path(tempfile.mkdtemp(prefix="orch_att_unit_")).resolve()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        with patch.object(chat_attachments, "UPLOADS_ROOT", tmp), \
+                patch.object(chat_attachments, "CHAT_UPLOADS_ROOT", tmp / "chat"):
+            storage = FakeStorage(
+                "hello.txt",
+                b"payload text",
+                "text/plain",
+            )
+            records = process_uploaded_files([storage], session_key="testsess")
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["kind"], "document")
+            self.assertIn("payload text", records[0]["extracted_text"])
+            stored = Path(records[0]["path"])
+            self.assertTrue(stored.is_file())
+            chat_attachments.assert_within_chat_uploads(stored)
 
     def test_vision_default_model_constant(self):
         self.assertEqual(

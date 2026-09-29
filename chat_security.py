@@ -168,6 +168,7 @@ def publish_chat_audit_artifact(
     answer,
     provider_result,
     context,
+    attachments=None,
 ):
     chat = provider_result["chat"]
 
@@ -197,6 +198,16 @@ def publish_chat_audit_artifact(
         "context_fingerprint": sha256_value(context),
         "execution_authority": "none",
     }
+
+    if attachments:
+        # v0.18.0: metadata only (name/kind/mime/size/sha256), never bytes.
+        payload["attachments"] = [
+            {
+                key: item.get(key)
+                for key in ("name", "kind", "mime", "size", "sha256")
+            }
+            for item in attachments
+        ]
 
     staged_path = stage_json("chat_audit", payload)
 

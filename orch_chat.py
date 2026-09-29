@@ -18,7 +18,13 @@ ALLOWED_MODES = {
 
 
 class ChatProviderError(RuntimeError):
-    pass
+    """Chat failure. ``str()`` stays English; ``code`` (+ ``params``)
+    selects the localised UI message ``err_chatcode_<code>`` (v0.18.2)."""
+
+    def __init__(self, message, code="failed", **params):
+        super().__init__(message)
+        self.code = code
+        self.params = params
 
 
 def get_chat_config(use_vision=False):
@@ -40,12 +46,12 @@ def get_chat_config(use_vision=False):
 
     if not api_key:
         raise ChatProviderError(
-            "OpenRouter API key is not configured."
+            "OpenRouter API key is not configured.", code="no_api_key"
         )
 
     if not model:
         raise ChatProviderError(
-            "OpenRouter chat model is not configured."
+            "OpenRouter chat model is not configured.", code="no_model"
         )
 
     return {
@@ -57,7 +63,7 @@ def get_chat_config(use_vision=False):
 def validate_chat_answer(answer):
     if not isinstance(answer, dict):
         raise ChatProviderError(
-            "Chat response must be a JSON object."
+            "Chat response must be a JSON object.", code="bad_response"
         )
 
     required_fields = {
@@ -73,12 +79,13 @@ def validate_chat_answer(answer):
     if missing_fields:
         raise ChatProviderError(
             "Chat response is missing required fields: "
-            + ", ".join(sorted(missing_fields))
+            + ", ".join(sorted(missing_fields)),
+            code="bad_response",
         )
 
     if not isinstance(answer["answer"], str):
         raise ChatProviderError(
-            "Chat answer must be a string."
+            "Chat answer must be a string.", code="bad_response"
         )
 
     for field in [
@@ -91,12 +98,13 @@ def validate_chat_answer(answer):
             for item in answer[field]
         ):
             raise ChatProviderError(
-                f"Chat field {field} must be a list of strings."
+                f"Chat field {field} must be a list of strings.",
+                code="bad_response",
             )
 
     if answer["execution_authority"] != "none":
         raise ChatProviderError(
-            "Chat response attempted to claim execution authority."
+            "Chat response attempted to claim execution authority.", code="authority"
         )
 
     return {
@@ -165,6 +173,17 @@ context (or purely off-topic questions with no ORCH data), say you
 cannot answer from the provided context and suggest General
 Conversation mode for non-ORCH questions.
 
+ORCH_CONTEXT.ecommerce_demo is allowlisted, read-only SAMPLE data from
+the cross-border e-commerce demo (SKUs/products, customer inquiries,
+order leads, Knowledge Base policies, catalog summary). Questions about
+these SKUs, inquiries, leads or policies ARE in scope: answer them
+directly from matching_skus, matching_inquiries, matching_leads,
+matching_kb_entries and catalog_summary, and say the values are sample
+data. Only cite approved_facts for product claims. If an ID is listed
+in unresolved_ids, say it is not in the sample data. You may suggest
+next steps or draft wording, but pricing, discounts, refunds and any
+outward message still need a named person in the Approval Inbox.
+
 You have no tools and no authority to execute commands, approve
 tasks, modify task state, create tasks, edit policies, access
 environment variables, reveal API keys, call connectors, or write
@@ -203,7 +222,7 @@ def _normalize_attachments(attachments):
         return []
     if not isinstance(attachments, list):
         raise ChatProviderError(
-            "Chat attachments must be a list."
+            "Chat attachments must be a list.", code="invalid_request"
         )
     return attachments
 
@@ -258,7 +277,7 @@ def _build_user_content(question, mode, context, attachments):
 
     if not text_body.strip() and not _has_images(attachments):
         raise ChatProviderError(
-            "Chat question cannot be empty."
+            "Chat question cannot be empty.", code="empty_question"
         )
 
     if not _has_images(attachments):
@@ -302,16 +321,51 @@ def _build_user_content(question, mode, context, attachments):
     return parts
 
 
-def build_messages(question, mode, context, history, attachments=None):
-    if mode not in ALLOWED_MODES:
-        raise ChatProviderError(
-            f"Unsupported chat mode: {mode}"
-        )
+LOCALE_LANGUAGE_NAMES = {
+    "zh-Hant": "Traditional Chinese",
+    "zh-Hans": "Simplified Chinese",
+    "en": "English",
+}
 
+
+def locale_instruction(locale):
+    """v0.18.1: answers, refusals and guidance follow the user / UI locale."""
+    language = LOCALE_LANGUAGE_NAMES.get(locale)
+    if not language:
+        return ""
+    return (
+        f"UI_LOCALE: {locale} ({language}).\n"
+        "Write the answer and every limitations entry in the language of "
+        "the user's message. If that is unclear (for example only IDs or "
+        f"mixed text), use {language}. This also applies to refusals, "
+        "scope notes and guidance such as suggesting General Conversation "
+        "mode or the Approval Inbox. Cantonese questions may be answered "
+        "in Cantonese-style Traditional Chinese. Keep the JSON keys and "
+        "the value "
+        '"none" for execution_authority in English.'
+    )
+
+
+def build_system_prompt(mode, locale=None):
     if mode == "orch_context":
         system_prompt = ORCH_CONTEXT_SYSTEM_PROMPT
     else:
         system_prompt = GENERAL_SYSTEM_PROMPT
+    extra = locale_instruction(locale)
+    if extra:
+        system_prompt = system_prompt + "\n\n" + extra
+    return system_prompt
+
+
+def build_messages(
+    question, mode, context, history, attachments=None, locale=None
+):
+    if mode not in ALLOWED_MODES:
+        raise ChatProviderError(
+            f"Unsupported chat mode: {mode}", code="invalid_request"
+        )
+
+    system_prompt = build_system_prompt(mode, locale)
 
     messages = [
         {
@@ -352,12 +406,14 @@ def build_messages(question, mode, context, history, attachments=None):
     return messages
 
 
-def ask_orch(question, mode, context, history, attachments=None):
+def ask_orch(
+    question, mode, context, history, attachments=None, locale=None
+):
     if question is None:
         question = ""
     if not isinstance(question, str):
         raise ChatProviderError(
-            "Chat question must be text."
+            "Chat question must be text.", code="invalid_request"
         )
 
     question = question.strip()
@@ -365,12 +421,12 @@ def ask_orch(question, mode, context, history, attachments=None):
 
     if not question and not attachments:
         raise ChatProviderError(
-            "Chat question cannot be empty."
+            "Chat question cannot be empty.", code="empty_question"
         )
 
     if len(question) > 800:
         raise ChatProviderError(
-            "Chat question exceeds the 800-character limit."
+            "Chat question exceeds the 800-character limit.", code="too_long", limit=800
         )
 
     use_vision = _has_images(attachments)
@@ -386,6 +442,7 @@ def ask_orch(question, mode, context, history, attachments=None):
             context,
             history,
             attachments=attachments,
+            locale=locale,
         ),
         "temperature": temperature,
         "stream": False,
@@ -415,11 +472,12 @@ def ask_orch(question, mode, context, history, attachments=None):
             response_body = response.read().decode("utf-8")
     except urllib.error.HTTPError as error:
         raise ChatProviderError(
-            f"OpenRouter rejected the chat request: HTTP {error.code}."
+            f"OpenRouter rejected the chat request: HTTP {error.code}.",
+            code="http", status=error.code,
         ) from error
     except urllib.error.URLError as error:
         raise ChatProviderError(
-            "OpenRouter chat connection failed."
+            "OpenRouter chat connection failed.", code="connection"
         ) from error
 
     try:
@@ -434,19 +492,19 @@ def ask_orch(question, mode, context, history, attachments=None):
         TypeError,
     ) as error:
         raise ChatProviderError(
-            "OpenRouter returned an unusable chat response."
+            "OpenRouter returned an unusable chat response.", code="bad_response"
         ) from error
 
     if not isinstance(content, str):
         raise ChatProviderError(
-            "OpenRouter returned non-text chat content."
+            "OpenRouter returned non-text chat content.", code="bad_response"
         )
 
     try:
         parsed_answer = json.loads(content)
     except json.JSONDecodeError as error:
         raise ChatProviderError(
-            "Chat model response was not valid JSON."
+            "Chat model response was not valid JSON.", code="bad_response"
         ) from error
 
     return {

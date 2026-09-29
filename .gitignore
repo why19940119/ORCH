@@ -23,3 +23,10 @@ state/chat_usage.jsonl
 
 # v0.17.0 chat uploads (contained locally)
 uploads/
+
+# v0.18.0 e-commerce demo file lock
+state/.ecom_demo.lock
+
+# v0.18.2 e-commerce demo queue (demo drafts never touch task_queue.json)
+state/ecom_demo_queue.json
+.pytest_cache/
