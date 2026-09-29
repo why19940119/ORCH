@@ -1,0 +1,1212 @@
+"""ORCH cross-border e-commerce demo backend (v0.18.0).
+
+SAMPLE DATA ONLY (demo/sample_data.json). Nothing here publishes to an
+external system.
+
+Positioning (must hold):
+- AI only drafts, classifies, ranks and suggests.
+- Every draft becomes a normal ORCH task with ``requires_approval``
+  in task_queue.json and ``waiting_approval`` in state/task_status.json,
+  so it goes through the existing mini_orch approval gate.
+- Draft bodies are immutable artifacts (artifact_store
+  stage_json + publish_staged_artifact); edits create a new version
+  with ``parent_artifact_id`` pointing at the previous one.
+- Approve / reject goes through ``mini_orch.decide_approval`` and
+  writes a standard event to state/events.jsonl.
+- Each decision publishes an immutable ``ecom_audit`` artifact with
+  source, version, operator, approver, time and publish channel.
+  "Publish" is simulated: the channel is only recorded.
+"""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+import fcntl
+import json
+import os
+import re
+import sys
+import uuid
+
+import artifact_store
+import mini_orch
+from approval_inbox import inbox_item
+from chat_security import record_chat_usage, sha256_value
+from orch_chat import ChatProviderError, ask_orch
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+SAMPLE_DATA_FILE = PROJECT_ROOT / "demo" / "sample_data.json"
+QUEUE_FILE = PROJECT_ROOT / "task_queue.json"
+STATUS_FILE = PROJECT_ROOT / "state" / "task_status.json"
+EVENTS_FILE = PROJECT_ROOT / "state" / "events.jsonl"
+LOCK_FILE = PROJECT_ROOT / "state" / ".ecom_demo.lock"
+
+TASK_PREFIX = "task_ecom_"
+DRAFT_LOGICAL_PREFIX = "ecom_draft_"
+AUDIT_LOGICAL_NAME = "ecom_audit"
+AUDIT_SCHEMA_VERSION = "1.0"
+DEMO_VERSION = "v0.18.0"
+
+MAX_DRAFT_CHARS = 4000
+MAX_NOTE_CHARS = 300
+MAX_PROMPT_CHARS = 800
+
+OPERATOR_PATTERN = re.compile(r"^[\w .@'\-]{2,40}$", re.UNICODE)
+TASK_ID_PATTERN = re.compile(r"^task_ecom_[a-z_]+_[0-9a-f]{10}$")
+
+LANGUAGES = ("en", "zh-Hant")
+
+DRAFT_KINDS = {
+    "content": {
+        "module": "content_studio",
+        "channels": [
+            "online_store_product_page",
+            "marketplace_listing",
+            "brand_site_faq",
+        ],
+    },
+    "sales_next_step": {
+        "module": "sales_hub",
+        "channels": ["email", "whatsapp", "internal_sales_task"],
+    },
+    "lead_reply": {
+        "module": "lead_desk",
+        "channels": [
+            "email",
+            "whatsapp",
+            "website_chat",
+            "marketplace_inbox",
+        ],
+    },
+    "campaign": {
+        "module": "campaign_engine",
+        "channels": ["meta_ads", "google_ads", "tiktok_ads", "edm"],
+    },
+    "market_insight": {
+        "module": "market_dashboard",
+        "channels": ["internal_report"],
+    },
+    "kb_update": {
+        "module": "knowledge_base",
+        "channels": ["knowledge_base"],
+    },
+}
+
+CONTENT_TYPES = ("product_page", "faq", "ad_copy")
+CAMPAIGN_OBJECTIVES = ("traffic", "inquiries", "sales")
+
+
+class DemoError(ValueError):
+    """User-facing validation error (safe to show in the UI)."""
+
+    def __init__(self, code, detail=""):
+        super().__init__(code)
+        self.code = code
+        self.detail = detail
+
+
+def utc_now():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# ---------------------------------------------------------------------------
+# Sample data
+# ---------------------------------------------------------------------------
+
+_SAMPLE_CACHE = {"mtime": None, "data": None}
+
+
+def load_sample_data():
+    path = Path(SAMPLE_DATA_FILE)
+    mtime = path.stat().st_mtime
+    if _SAMPLE_CACHE["mtime"] != mtime or _SAMPLE_CACHE["data"] is None:
+        _SAMPLE_CACHE["data"] = json.loads(path.read_text(encoding="utf-8"))
+        _SAMPLE_CACHE["mtime"] = mtime
+    return _SAMPLE_CACHE["data"]
+
+
+def sku_index(data=None):
+    data = data or load_sample_data()
+    return {item["sku"]: item for item in data["skus"]}
+
+
+def inquiry_index(data=None):
+    data = data or load_sample_data()
+    return {item["id"]: item for item in data["inquiries"]}
+
+
+def lead_index(data=None):
+    data = data or load_sample_data()
+    return {item["id"]: item for item in data["order_leads"]}
+
+
+def kb_entries(data=None):
+    data = data or load_sample_data()
+    entries = []
+    for section, items in data["knowledge_base"].items():
+        for item in items:
+            entries.append({**item, "section": section})
+    return entries
+
+
+def sku_name(sku, locale):
+    if str(locale).startswith("zh"):
+        return sku.get("name_zh") or sku.get("name_en")
+    return sku.get("name_en")
+
+
+# ---------------------------------------------------------------------------
+# Lead Desk: deterministic classification + scoring (AI-assist stand-in)
+# ---------------------------------------------------------------------------
+
+INQUIRY_RULES = (
+    ("refund", ("refund", "return", "torn", "broken", "defect", "退款",
+                "退貨")),
+    ("complaint", ("late", "disappointed", "complain", "投訴")),
+    ("wholesale", ("wholesale", "distributor", "corporate", "units",
+                   "whole", "批發")),
+    ("pricing", ("discount", "price", "quote", "%", "優惠", "價")),
+    ("product_claim", ("medically", "proven", "pain", "cure", "療效")),
+    ("logistics", ("ship", "delivery", "days", "上飛機", "幾時有貨",
+                   "lead time", "cabin")),
+    ("payment", ("pay", "bank transfer", "付款")),
+    ("product_question", ("?", "？")),
+)
+
+CATEGORY_BASE_SCORE = {
+    "wholesale": 80,
+    "pricing": 60,
+    "logistics": 50,
+    "product_question": 45,
+    "payment": 55,
+    "product_claim": 35,
+    "refund": 30,
+    "complaint": 25,
+    "general": 20,
+}
+
+HIGH_RISK_CATEGORIES = {"refund", "complaint", "pricing", "product_claim"}
+
+
+def classify_inquiry(inquiry):
+    text = (inquiry.get("text") or "").lower()
+    category = "general"
+    for name, keywords in INQUIRY_RULES:
+        if any(keyword.lower() in text for keyword in keywords):
+            category = name
+            break
+
+    score = CATEGORY_BASE_SCORE[category]
+    reasons = [f"category:{category}"]
+
+    quantity = re.search(r"\b(\d{2,5})\s*(x|units|pcs)?\b", text)
+    if quantity and int(quantity.group(1)) >= 50:
+        score += 10
+        reasons.append("bulk_quantity")
+
+    if inquiry.get("channel") in {"email", "website_form"}:
+        score += 5
+        reasons.append("owned_channel")
+
+    score = max(0, min(100, score))
+    priority = "high" if score >= 70 else "medium" if score >= 45 else "low"
+
+    return {
+        "category": category,
+        "score": score,
+        "priority": priority,
+        "reasons": reasons,
+        "high_risk": category in HIGH_RISK_CATEGORIES,
+        "method": "rule_based_demo",
+    }
+
+
+def ranked_inquiries(data=None):
+    data = data or load_sample_data()
+    rows = []
+    for inquiry in data["inquiries"]:
+        rows.append({**inquiry, "triage": classify_inquiry(inquiry)})
+    rows.sort(key=lambda row: (-row["triage"]["score"], row["id"]))
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Market Dashboard KPIs (sample)
+# ---------------------------------------------------------------------------
+
+def _rate(numerator, denominator):
+    if not denominator:
+        return 0.0
+    return round(100.0 * numerator / denominator, 1)
+
+
+def kpi_summary(data=None):
+    data = data or load_sample_data()
+    kpi = data["kpi"]
+    weeks = kpi["weeks"]
+    rows = []
+    for index, week in enumerate(weeks):
+        sessions = kpi["sessions"][index]
+        inquiries = kpi["inquiries"][index]
+        leads = kpi["leads"][index]
+        orders = kpi["orders"][index]
+        rows.append(
+            {
+                "week": week,
+                "sessions": sessions,
+                "inquiries": inquiries,
+                "leads": leads,
+                "orders": orders,
+                "inquiry_rate": _rate(inquiries, sessions),
+                "lead_rate": _rate(leads, inquiries),
+                "order_rate": _rate(orders, leads),
+            }
+        )
+
+    totals = {
+        key: sum(kpi[key])
+        for key in ("sessions", "inquiries", "leads", "orders")
+    }
+    last, prev = rows[-1], rows[-2]
+    peak = max(row["sessions"] for row in rows) or 1
+    for row in rows:
+        row["bar_pct"] = int(100 * row["sessions"] / peak)
+
+    lead_values = sum(
+        lead["est_value_hkd"]
+        for lead in data["order_leads"]
+        if lead["stage"] not in {"lost"}
+    )
+
+    return {
+        "rows": rows,
+        "totals": totals,
+        "wow_sessions": _rate(last["sessions"] - prev["sessions"],
+                              prev["sessions"]),
+        "wow_orders": _rate(last["orders"] - prev["orders"], prev["orders"]),
+        "overall_order_rate": _rate(totals["orders"], totals["sessions"]),
+        "by_channel": kpi["by_channel"],
+        "pipeline_value_hkd": lead_values,
+        "note": kpi.get("note", ""),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Draft source building (validated inputs -> approved facts only)
+# ---------------------------------------------------------------------------
+
+def _require(condition, code, detail=""):
+    if not condition:
+        raise DemoError(code, detail)
+
+
+def validate_operator(operator):
+    operator = (operator or "").strip()
+    _require(OPERATOR_PATTERN.fullmatch(operator), "operator_required")
+    return operator
+
+
+def _sku_facts(sku):
+    return {
+        "sku": sku["sku"],
+        "name_en": sku["name_en"],
+        "name_zh": sku["name_zh"],
+        "category": sku["category"],
+        "facts": sku["approved_facts"],
+        "list_price_hkd": sku["list_price_hkd"],
+        "claims_policy": sku["claims_policy"],
+    }
+
+
+def build_source(kind, params, data=None):
+    data = data or load_sample_data()
+    _require(kind in DRAFT_KINDS, "invalid_kind")
+    params = params or {}
+    skus = sku_index(data)
+    kb = {entry["id"]: entry for entry in kb_entries(data)}
+
+    source = {
+        "dataset": "demo/sample_data.json",
+        "dataset_version": data["_meta"].get("version"),
+        "sample_data": True,
+        "kind": kind,
+    }
+
+    if kind == "content":
+        sku = skus.get(params.get("sku"))
+        _require(sku, "invalid_sku")
+        content_type = params.get("content_type", "product_page")
+        _require(content_type in CONTENT_TYPES, "invalid_content_type")
+        source.update(
+            {
+                "refs": [sku["sku"], "KB-LOG-01", "KB-RET-01"],
+                "content_type": content_type,
+                "sku": _sku_facts(sku),
+                "kb": [kb["KB-LOG-01"]["body_en"], kb["KB-RET-01"]["body_en"]],
+            }
+        )
+    elif kind == "sales_next_step":
+        lead = lead_index(data).get(params.get("lead_id"))
+        _require(lead, "invalid_lead")
+        sku = skus[lead["sku"]]
+        upsell = [
+            other
+            for other in data["skus"]
+            if other["category"] == sku["category"]
+            and other["sku"] != sku["sku"]
+        ][:2]
+        source.update(
+            {
+                "refs": [lead["id"], lead["inquiry_id"], sku["sku"]]
+                + [item["sku"] for item in upsell],
+                "lead": lead,
+                "sku": _sku_facts(sku),
+                "upsell": [_sku_facts(item) for item in upsell],
+            }
+        )
+    elif kind == "lead_reply":
+        inquiry = inquiry_index(data).get(params.get("inquiry_id"))
+        _require(inquiry, "invalid_inquiry")
+        sku = skus.get(inquiry.get("sku"))
+        triage = classify_inquiry(inquiry)
+        kb_ids = ["KB-LOG-01"]
+        if triage["category"] in {"refund", "complaint"}:
+            kb_ids = ["KB-RET-01", "KB-RET-02"]
+        elif triage["category"] == "payment":
+            kb_ids = ["KB-PAY-01"]
+        source.update(
+            {
+                "refs": [inquiry["id"]] + ([sku["sku"]] if sku else [])
+                + kb_ids,
+                "inquiry": inquiry,
+                "triage": triage,
+                "sku": _sku_facts(sku) if sku else None,
+                "kb": [kb[item]["body_en"] for item in kb_ids],
+            }
+        )
+    elif kind == "campaign":
+        sku = skus.get(params.get("sku"))
+        _require(sku, "invalid_sku")
+        audiences = {
+            item["id"]: item for item in data["campaign"]["audiences"]
+        }
+        audience = audiences.get(params.get("audience_id"))
+        _require(audience, "invalid_audience")
+        objective = params.get("objective", "traffic")
+        _require(objective in CAMPAIGN_OBJECTIVES, "invalid_objective")
+        source.update(
+            {
+                "refs": [sku["sku"], audience["id"]],
+                "sku": _sku_facts(sku),
+                "audience": audience,
+                "objective": objective,
+            }
+        )
+    elif kind == "market_insight":
+        summary = kpi_summary(data)
+        source.update(
+            {
+                "refs": ["kpi.weeks.W1-W8", "kpi.by_channel"],
+                "kpi": {
+                    "totals": summary["totals"],
+                    "wow_sessions_pct": summary["wow_sessions"],
+                    "wow_orders_pct": summary["wow_orders"],
+                    "overall_order_rate_pct": summary["overall_order_rate"],
+                    "by_channel": summary["by_channel"],
+                },
+            }
+        )
+    elif kind == "kb_update":
+        entry = kb.get(params.get("kb_id"))
+        _require(entry, "invalid_kb_entry")
+        proposal = (params.get("proposal") or "").strip()
+        _require(3 <= len(proposal) <= 400, "invalid_proposal")
+        source.update(
+            {
+                "refs": [entry["id"]],
+                "kb_entry": {
+                    key: entry[key]
+                    for key in ("id", "title_en", "body_en", "version")
+                },
+                "proposal": proposal,
+            }
+        )
+
+    return source
+
+
+# ---------------------------------------------------------------------------
+# Draft text: OpenRouter (orch_chat.ask_orch) or deterministic mock
+# ---------------------------------------------------------------------------
+
+def draft_title(kind, source, locale="en"):
+    zh = str(locale).startswith("zh")
+    if kind == "content":
+        sku = source["sku"]
+        name = sku["name_zh"] if zh else sku["name_en"]
+        return f"{source['content_type']} · {sku['sku']} {name}"
+    if kind == "sales_next_step":
+        return f"{source['lead']['id']} · {source['sku']['sku']}"
+    if kind == "lead_reply":
+        inquiry = source["inquiry"]
+        return f"{inquiry['id']} · {source['triage']['category']}"
+    if kind == "campaign":
+        return f"{source['sku']['sku']} · {source['audience']['id']} · {source['objective']}"
+    if kind == "market_insight":
+        return "W1–W8 insight"
+    if kind == "kb_update":
+        return f"{source['kb_entry']['id']} v{source['kb_entry']['version']}→?"
+    return kind
+
+
+def build_prompt(kind, source, language):
+    lang_name = "Traditional Chinese (Hong Kong)" if language == "zh-Hant" else "English"
+    head = (
+        f"Draft for HUMAN REVIEW ONLY, in {lang_name}. "
+        "Use ONLY the facts given; never invent prices, discounts, "
+        "stock, delivery promises, refunds or health/efficacy claims. "
+        "Mark anything needing a human decision as [HUMAN TO CONFIRM]. "
+        "Put only the draft text in answer. "
+    )
+    if kind == "content":
+        sku = source["sku"]
+        body = (
+            f"Task: {source['content_type']} for SKU {sku['sku']} "
+            f"'{sku['name_en']}'. Facts: {'; '.join(sku['facts'])}. "
+            f"Shipping/returns: {' '.join(source['kb'])}"
+        )
+    elif kind == "sales_next_step":
+        lead = source["lead"]
+        ups = ", ".join(f"{u['sku']} {u['name_en']}" for u in source["upsell"])
+        body = (
+            f"Task: next sales step + short customer follow-up for lead "
+            f"{lead['id']} (stage {lead['stage']}, qty {lead['qty']} x "
+            f"{source['sku']['name_en']}). Possible add-ons: {ups}."
+        )
+    elif kind == "lead_reply":
+        inquiry = source["inquiry"]
+        body = (
+            f"Task: customer-service reply. Category: "
+            f"{source['triage']['category']}. Inquiry: \"{inquiry['text']}\". "
+            f"Facts: {'; '.join(source['sku']['facts']) if source['sku'] else '-'}. "
+            f"Policy: {' '.join(source['kb'])}"
+        )
+    elif kind == "campaign":
+        sku = source["sku"]
+        body = (
+            f"Task: ad campaign draft (audience, 2 creative variants A/B, "
+            f"test plan) for {sku['name_en']}; audience "
+            f"'{source['audience']['name_en']}'; objective "
+            f"{source['objective']}. Facts: {'; '.join(sku['facts'])}. "
+            "Budget: [HUMAN TO CONFIRM]."
+        )
+    elif kind == "market_insight":
+        body = (
+            "Task: 3-bullet weekly insight + 2 next actions from SAMPLE "
+            f"KPIs: {json.dumps(source['kpi'], ensure_ascii=False)}"
+        )
+    else:
+        entry = source["kb_entry"]
+        body = (
+            f"Task: rewrite a proposed Knowledge Base change as a clear "
+            f"entry. Current {entry['id']}: {entry['body_en']} "
+            f"Proposal: {source['proposal']}"
+        )
+    return (head + body)[:MAX_PROMPT_CHARS]
+
+
+CATEGORY_ZH = {
+    "home": "家居",
+    "kitchen": "廚房",
+    "travel": "旅行",
+    "stationery": "文具",
+    "pet": "寵物",
+}
+
+
+def _mock_footer(language):
+    if language == "zh-Hant":
+        return "\n\n[示範草稿 · 模擬生成 · 待人手核准，未發佈]"
+    return "\n\n[MOCK DRAFT · deterministic demo generator · pending human approval, not published]"
+
+
+def mock_draft(kind, source, language="en"):
+    zh = language == "zh-Hant"
+
+    if kind == "content":
+        sku = source["sku"]
+        name = sku["name_zh"] if zh else sku["name_en"]
+        facts = "\n".join(f"- {fact}" for fact in sku["facts"])
+        ctype = source["content_type"]
+        if ctype == "product_page":
+            text = (
+                f"{name}（{sku['sku']}）\n\n核心資料（取自已批准知識庫）：\n{facts}\n\n"
+                f"產品描述：Harbour Sample Co. 的實用{CATEGORY_ZH.get(sku['category'], sku['category'])}系列，規格清晰，適合日常使用。\n"
+                f"價格：[待人手確認 — 示範數據標價 HK${sku['list_price_hkd']}]\n"
+                "運送：標準空郵 5–8 個工作天（示範政策 KB-LOG-01）。"
+                if zh else
+                f"{name} ({sku['sku']})\n\nKey facts (from the approved Knowledge Base):\n{facts}\n\n"
+                f"Description: A practical {sku['category']} essential from Harbour Sample Co., "
+                "with clear specs for everyday use.\n"
+                f"Price: [HUMAN TO CONFIRM — sample list price HK${sku['list_price_hkd']}]\n"
+                "Shipping: standard air parcel, 5–8 working days (sample policy KB-LOG-01)."
+            )
+        elif ctype == "faq":
+            text = (
+                f"{name} 常見問題\n\n問：物料是甚麼？\n答：{sku['facts'][0]}。\n\n"
+                f"問：尺寸？\n答：{sku['facts'][1]}。\n\n問：多久送達？\n答：出貨後 5–8 個工作天（示範政策）。\n\n"
+                "問：可以退貨嗎？\n答：未使用貨品可於送達後 14 日內退貨（示範政策 KB-RET-01）。"
+                if zh else
+                f"{name} — FAQ\n\nQ: What is it made of?\nA: {sku['facts'][0]}.\n\n"
+                f"Q: What size is it?\nA: {sku['facts'][1]}.\n\n"
+                "Q: How long is delivery?\nA: 5–8 working days after dispatch (sample policy).\n\n"
+                "Q: Can I return it?\nA: Unused items within 14 days of delivery (sample policy KB-RET-01)."
+            )
+        else:
+            text = (
+                f"廣告文案草稿 — {name}\n\n標題 A：{name}，日常好幫手\n標題 B：規格清楚，{sku['facts'][1]}\n"
+                "內文：Harbour Sample Co. 精選，立即查詢。\n行動呼籲：了解更多\n"
+                "（不含任何功效或「最佳」聲稱；優惠需人手確認）"
+                if zh else
+                f"Ad copy draft — {name}\n\nHeadline A: {name}, made for every day\n"
+                f"Headline B: Clear specs: {sku['facts'][1]}\n"
+                "Body: Curated by Harbour Sample Co. Ask us today.\nCTA: Learn more\n"
+                "(No efficacy or 'best' claims; any offer is [HUMAN TO CONFIRM])"
+            )
+    elif kind == "sales_next_step":
+        lead = source["lead"]
+        ups = source["upsell"]
+        ups_text = ", ".join(
+            (u["name_zh"] if zh else u["name_en"]) + f" ({u['sku']})" for u in ups
+        ) or "-"
+        next_step = {
+            "new": "qualify need and quantity",
+            "qualified": "send spec sheet and confirm quantity",
+            "quoted": "follow up on the quote within 2 working days",
+            "negotiating": "escalate any price change to a human approver",
+            "won": "confirm dispatch and suggest an add-on",
+            "lost": "log reason; no further outreach without consent",
+        }.get(lead["stage"], "review")
+        text = (
+            f"下一步銷售任務（{lead['id']}，階段：{lead['stage']}）：{next_step}\n\n"
+            f"跟進訊息草稿：\n您好，多謝查詢 {source['sku']['name_zh']}（數量 {lead['qty']}）。"
+            f"我們會盡快確認細節。您亦可能對以下產品有興趣：{ups_text}。\n"
+            "價格／折扣：[待人手確認]"
+            if zh else
+            f"Next sales step ({lead['id']}, stage: {lead['stage']}): {next_step}\n\n"
+            f"Follow-up message draft:\nHi, thanks for your interest in {source['sku']['name_en']} "
+            f"(qty {lead['qty']}). We will confirm the details shortly. You may also like: {ups_text}.\n"
+            "Price / discount: [HUMAN TO CONFIRM]"
+        )
+    elif kind == "lead_reply":
+        inquiry = source["inquiry"]
+        category = source["triage"]["category"]
+        sku = source["sku"]
+        sku_name_text = (sku["name_zh"] if zh else sku["name_en"]) if sku else ""
+        if zh:
+            lines = [f"您好，多謝您查詢{('「' + sku_name_text + '」') if sku_name_text else ''}。"]
+            if category in {"refund", "complaint"}:
+                lines.append("很抱歉帶來不便。我們的同事會審核您的個案；所有退款均須經人手批准，我們會盡快回覆。")
+            elif category in {"pricing", "wholesale"}:
+                lines.append("批發或折扣價格需由同事確認，我們會盡快提供正式報價。[待人手確認]")
+            elif category == "product_claim":
+                lines.append("我們未能就健康或醫療功效作任何聲稱；產品資料如下。")
+            else:
+                lines.append("標準空郵出貨後約 5–8 個工作天送達（示範政策）。")
+            if sku:
+                lines.append("產品資料：" + "；".join(sku["facts"]))
+            lines.append("Harbour Sample Co. 客戶服務（示範）")
+        else:
+            lines = [f"Hi, thank you for your message{(' about ' + sku_name_text) if sku_name_text else ''}."]
+            if category in {"refund", "complaint"}:
+                lines.append("We are sorry for the trouble. A team member will review your case; every refund requires human approval and we will reply shortly.")
+            elif category in {"pricing", "wholesale"}:
+                lines.append("Wholesale or discounted pricing must be confirmed by our team; we will send a formal quote. [HUMAN TO CONFIRM]")
+            elif category == "product_claim":
+                lines.append("We cannot make health or medical claims about this product. Here are its approved specifications.")
+            else:
+                lines.append("Standard air parcel delivery takes about 5–8 working days after dispatch (sample policy).")
+            if sku:
+                lines.append("Product facts: " + "; ".join(sku["facts"]))
+            lines.append("Harbour Sample Co. Customer Care (demo)")
+        text = "\n\n".join(lines)
+    elif kind == "campaign":
+        sku = source["sku"]
+        audience = source["audience"]
+        name = sku["name_zh"] if zh else sku["name_en"]
+        aud = audience["name_zh"] if zh else audience["name_en"]
+        text = (
+            f"推廣活動草稿 — {name}\n受眾：{aud}\n目標：{source['objective']}\n\n"
+            f"素材 A：「{name}」— 日常實用之選\n素材 B：「{sku['facts'][1]}」— 規格一目了然\n\n"
+            "A/B 測試：兩組素材平均分配 7 日，比較點擊率及查詢數。\n預算：[待人手確認]\n落地頁：產品頁（需先核准）"
+            if zh else
+            f"Campaign draft — {name}\nAudience: {aud}\nObjective: {source['objective']}\n\n"
+            f"Creative A: \"{name}\" — the everyday pick\nCreative B: \"{sku['facts'][1]}\" — specs at a glance\n\n"
+            "A/B test: split evenly for 7 days; compare CTR and inquiries.\nBudget: [HUMAN TO CONFIRM]\n"
+            "Landing page: product page (must be approved first)"
+        )
+    elif kind == "market_insight":
+        kpi = source["kpi"]
+        top = max(kpi["by_channel"], key=lambda row: row["inquiries"])
+        text = (
+            "每週洞察（示範數據）\n"
+            f"- 流量按週增長 {kpi['wow_sessions_pct']}%，訂單按週變化 {kpi['wow_orders_pct']}%。\n"
+            f"- 整體流量至訂單轉化率 {kpi['overall_order_rate_pct']}%。\n"
+            f"- 查詢最多的渠道：{top['channel']}。\n\n"
+            "建議下一步：\n1. 為高分查詢（批發）準備報價範本（需人手批准）。\n2. 優先本地化查詢最多的 SKU 內容。"
+            if zh else
+            "Weekly insight (SAMPLE data)\n"
+            f"- Sessions week-on-week: {kpi['wow_sessions_pct']}%; orders week-on-week: {kpi['wow_orders_pct']}%.\n"
+            f"- Overall session-to-order rate: {kpi['overall_order_rate_pct']}%.\n"
+            f"- Top inquiry channel: {top['channel']}.\n\n"
+            "Suggested next actions:\n1. Prepare a wholesale quote template for high-score inquiries (needs human approval).\n"
+            "2. Prioritise localised content for the most-asked SKUs."
+        )
+    else:
+        entry = source["kb_entry"]
+        text = (
+            f"知識庫更新建議 — {entry['id']}（現行 v{entry['version']}）\n\n現行內容：{entry['body_en']}\n\n"
+            f"建議修改：{source['proposal']}\n\n生效條件：必須經人手批准後方可更新知識庫。"
+            if zh else
+            f"Knowledge Base change proposal — {entry['id']} (current v{entry['version']})\n\n"
+            f"Current: {entry['body_en']}\n\nProposed: {source['proposal']}\n\n"
+            "Takes effect only after human approval."
+        )
+
+    return text + _mock_footer(language)
+
+
+def ai_mode():
+    if os.getenv("ORCH_DEMO_FORCE_MOCK", "").strip() == "1":
+        return "mock"
+    if os.getenv("OPENROUTER_API_KEY", "").strip():
+        return "openrouter"
+    return "mock"
+
+
+def generate_draft_text(kind, source, language, session_id_sha256=None):
+    """Exactly one model call (or zero, in mock mode) per user action."""
+    prompt = build_prompt(kind, source, language)
+    provenance = {
+        "prompt_sha256": sha256_value(prompt),
+        "execution_authority": "none",
+    }
+
+    if ai_mode() == "openrouter":
+        try:
+            result = ask_orch(
+                question=prompt,
+                mode="general",
+                context={},
+                history=[],
+            )
+            text = (result["chat"]["answer"] or "").strip()
+            if not text:
+                raise ChatProviderError("Empty draft from provider.")
+        except ChatProviderError as error:
+            provenance.update(
+                {
+                    "provider": "mock",
+                    "model": "deterministic-template",
+                    "fallback_reason": str(error)[:200],
+                }
+            )
+            return mock_draft(kind, source, language), provenance
+
+        provenance.update(
+            {
+                "provider": result.get("provider", "openrouter"),
+                "model": result.get("response_model"),
+                "response_id": result.get("response_id"),
+            }
+        )
+        try:
+            record_chat_usage(
+                provider_result=result,
+                session_id_sha256=session_id_sha256 or "ecom_demo",
+            )
+        except Exception:
+            pass
+        return text[:MAX_DRAFT_CHARS], provenance
+
+    provenance.update(
+        {"provider": "mock", "model": "deterministic-template"}
+    )
+    return mock_draft(kind, source, language), provenance
+
+
+# ---------------------------------------------------------------------------
+# ORCH machinery glue
+# ---------------------------------------------------------------------------
+
+@contextmanager
+def demo_lock():
+    lock_path = Path(LOCK_FILE)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _load(path, default):
+    return mini_orch.load_json(Path(path), default)
+
+
+def _save(path, data):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    mini_orch.save_json(Path(path), data)
+
+
+def _publish_json(logical_name, payload, producer_task_id, parent=None):
+    staged = artifact_store.stage_json(logical_name, payload)
+    return artifact_store.publish_staged_artifact(
+        staging_path=staged,
+        logical_name=logical_name,
+        producer_task_id=producer_task_id,
+        schema_version=AUDIT_SCHEMA_VERSION,
+        parent_artifact_id=parent,
+    )
+
+
+def read_artifact(artifact_id):
+    if not isinstance(artifact_id, str) or not re.fullmatch(
+        r"[A-Za-z0-9_-]+", artifact_id
+    ):
+        return None
+    manifest_path = Path(artifact_store.MANIFESTS_DIR) / f"{artifact_id}.json"
+    if not manifest_path.is_file():
+        return None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    object_path = Path(manifest["object_path"])
+    if not object_path.is_file():
+        return None
+    return json.loads(object_path.read_text(encoding="utf-8"))
+
+
+def is_demo_task_id(task_id):
+    return isinstance(task_id, str) and bool(TASK_ID_PATTERN.fullmatch(task_id))
+
+
+def create_draft(kind, params, operator, language="en", session_id_sha256=None):
+    operator = validate_operator(operator)
+    _require(language in LANGUAGES, "invalid_language")
+    data = load_sample_data()
+    source = build_source(kind, params, data)
+    text, provenance = generate_draft_text(
+        kind, source, language, session_id_sha256
+    )
+
+    draft_id = uuid.uuid4().hex[:10]
+    task_id = f"{TASK_PREFIX}{kind}_{draft_id}"
+    logical_name = f"{DRAFT_LOGICAL_PREFIX}{draft_id}"
+    module = DRAFT_KINDS[kind]["module"]
+    created_at = utc_now()
+
+    payload = {
+        "artifact_type": "ecom_draft",
+        "demo_version": DEMO_VERSION,
+        "draft_id": draft_id,
+        "task_id": task_id,
+        "kind": kind,
+        "module": module,
+        "version": 1,
+        "language": language,
+        "body": text,
+        "source": source,
+        "provenance": provenance,
+        "created_by": operator,
+        "created_at_utc": created_at,
+        "approval_required": True,
+        "published": False,
+        "sample_data": True,
+        "execution_authority": "none",
+    }
+    publication = _publish_json(logical_name, payload, task_id)
+
+    title = f"[Demo] {module}: {draft_title(kind, source, 'en')}"
+    task = {
+        "id": task_id,
+        "title": title[:160],
+        "command": ["python3", "worker_ecom_publish_record.py", task_id],
+        "priority": 900,
+        "depends_on": [],
+        "max_retries": 0,
+        "requires_approval": True,
+        "requires_policies": [
+            {
+                "id": "artifact-exists",
+                "artifact": f"artifacts/latest/{logical_name}.json",
+            }
+        ],
+        "ecom_draft": {
+            "draft_id": draft_id,
+            "kind": kind,
+            "module": module,
+            "language": language,
+            "created_by": operator,
+            "created_at_utc": created_at,
+            "sample_data": True,
+        },
+    }
+    version_entry = {
+        "version": 1,
+        "artifact_id": publication["artifact_id"],
+        "content_sha256": publication["content_sha256"],
+        "created_at_utc": created_at,
+        "created_by": operator,
+        "provider": provenance.get("provider"),
+    }
+
+    with demo_lock():
+        tasks = _load(QUEUE_FILE, [])
+        tasks.append(task)
+        tasks.sort(key=lambda item: item.get("priority", 999))
+        _save(QUEUE_FILE, tasks)
+
+        statuses = _load(STATUS_FILE, {})
+        statuses[task_id] = {
+            "id": task_id,
+            "title": task["title"],
+            "status": "waiting_approval",
+            "approval_status": "waiting_approval",
+            "attempt": 0,
+            "updated_at": mini_orch.now(),
+            "ecom": {"current_version": 1, "versions": [version_entry]},
+        }
+        _save(STATUS_FILE, statuses)
+
+        mini_orch.write_event(
+            "ecom_draft_created",
+            task,
+            f"AI draft v1 created ({provenance.get('provider')}) by "
+            f"{operator}; artifact {publication['artifact_id']}.",
+            events_file=EVENTS_FILE,
+            extra={"operator": operator},
+        )
+        mini_orch.write_event(
+            "task_waiting_approval",
+            task,
+            "Human approval is required before dispatch.",
+            events_file=EVENTS_FILE,
+        )
+
+    return {"task_id": task_id, "draft_id": draft_id,
+            "artifact": publication, "provenance": provenance}
+
+
+def _get_task_and_state(task_id):
+    _require(is_demo_task_id(task_id), "not_found")
+    tasks = _load(QUEUE_FILE, [])
+    task = next((item for item in tasks if item.get("id") == task_id), None)
+    _require(task is not None, "not_found")
+    statuses = _load(STATUS_FILE, {})
+    state = statuses.get(task_id)
+    _require(isinstance(state, dict) and isinstance(state.get("ecom"), dict),
+             "not_found")
+    return task, state, statuses
+
+
+def revise_draft(task_id, body, operator, expected_version):
+    operator = validate_operator(operator)
+    body = (body or "").strip()
+    _require(0 < len(body) <= MAX_DRAFT_CHARS, "invalid_body")
+
+    with demo_lock():
+        task, state, statuses = _get_task_and_state(task_id)
+        _require(state.get("approval_status") == "waiting_approval",
+                 "not_pending")
+        ecom = state["ecom"]
+        current = ecom["current_version"]
+        _require(str(expected_version) == str(current), "stale_version")
+        previous = ecom["versions"][-1]
+        previous_payload = read_artifact(previous["artifact_id"]) or {}
+        draft_id = task["ecom_draft"]["draft_id"]
+        new_version = current + 1
+        created_at = utc_now()
+        payload = {
+            **previous_payload,
+            "version": new_version,
+            "body": body,
+            "created_by": operator,
+            "created_at_utc": created_at,
+            "revision_of": previous["artifact_id"],
+            "provenance": {
+                **(previous_payload.get("provenance") or {}),
+                "edited_by_human": True,
+            },
+        }
+        publication = _publish_json(
+            f"{DRAFT_LOGICAL_PREFIX}{draft_id}",
+            payload,
+            task_id,
+            parent=previous["artifact_id"],
+        )
+        ecom["versions"].append(
+            {
+                "version": new_version,
+                "artifact_id": publication["artifact_id"],
+                "content_sha256": publication["content_sha256"],
+                "created_at_utc": created_at,
+                "created_by": operator,
+                "provider": "human_edit",
+            }
+        )
+        ecom["current_version"] = new_version
+        state["updated_at"] = mini_orch.now()
+        statuses[task_id] = state
+        _save(STATUS_FILE, statuses)
+        mini_orch.write_event(
+            "ecom_draft_revised",
+            task,
+            f"Draft v{new_version} saved by {operator}; still pending "
+            "approval.",
+            events_file=EVENTS_FILE,
+            extra={"operator": operator},
+        )
+    return {"task_id": task_id, "version": new_version}
+
+
+def decide(task_id, decision, operator, expected_version, channel=None, note=""):
+    """Approve or reject a pending draft through mini_orch's gate."""
+    operator = validate_operator(operator)
+    _require(decision in {"approved", "rejected"}, "invalid_decision")
+    note = (note or "").strip()[:MAX_NOTE_CHARS]
+
+    with demo_lock():
+        task, state, _statuses = _get_task_and_state(task_id)
+        _require(state.get("approval_status") == "waiting_approval",
+                 "not_pending")
+        ecom = dict(state["ecom"])
+        _require(str(expected_version) == str(ecom["current_version"]),
+                 "stale_version")
+        kind = task["ecom_draft"]["kind"]
+
+        if decision == "approved":
+            _require(channel in DRAFT_KINDS[kind]["channels"],
+                     "invalid_channel")
+        else:
+            _require(bool(note), "reason_required")
+            channel = None
+
+        version = ecom["versions"][-1]
+        draft_payload = read_artifact(version["artifact_id"]) or {}
+        decided_at = utc_now()
+
+        audit = {
+            "artifact_type": "ecom_audit",
+            "audit_schema_version": AUDIT_SCHEMA_VERSION,
+            "demo_version": DEMO_VERSION,
+            "task_id": task_id,
+            "draft_id": task["ecom_draft"]["draft_id"],
+            "kind": kind,
+            "module": task["ecom_draft"]["module"],
+            "decision": decision,
+            "version": version["version"],
+            "draft_artifact_id": version["artifact_id"],
+            "content_sha256": version["content_sha256"],
+            "source": {
+                "refs": (draft_payload.get("source") or {}).get("refs", []),
+                "dataset": "demo/sample_data.json",
+                "provider": (draft_payload.get("provenance") or {}).get(
+                    "provider"
+                ),
+                "model": (draft_payload.get("provenance") or {}).get("model"),
+                "edited_by_human": bool(
+                    (draft_payload.get("provenance") or {}).get(
+                        "edited_by_human"
+                    )
+                ),
+            },
+            "operator": version.get("created_by"),
+            "requested_by": task["ecom_draft"].get("created_by"),
+            "approver": operator,
+            "decided_at_utc": decided_at,
+            "publish_channel": channel,
+            "publish_mode": (
+                "simulated_record_only" if decision == "approved" else "none"
+            ),
+            "external_call": False,
+            "note": note,
+            "sample_data": True,
+        }
+        audit_publication = _publish_json(
+            AUDIT_LOGICAL_NAME, audit, task_id, parent=version["artifact_id"]
+        )
+
+        ecom["decision"] = {
+            "decision": decision,
+            "version": version["version"],
+            "approver": operator,
+            "decided_at_utc": decided_at,
+            "publish_channel": channel,
+            "audit_artifact_id": audit_publication["artifact_id"],
+        }
+
+        result = mini_orch.decide_approval(
+            task_id,
+            decision,
+            operator,
+            note=note or None,
+            queue_file=QUEUE_FILE,
+            status_file=STATUS_FILE,
+            events_file=EVENTS_FILE,
+            extra_state={
+                "ecom": ecom,
+                "approved_version": version["version"],
+                "approved_artifact_id": version["artifact_id"],
+            } if decision == "approved" else {"ecom": ecom},
+        )
+        _require(result.get("ok"), result.get("reason", "decision_failed"))
+
+        if decision == "approved":
+            mini_orch.write_event(
+                "ecom_publish_recorded",
+                task,
+                f"Simulated publish recorded: channel={channel}, "
+                f"version=v{version['version']}, approver={operator}, "
+                f"audit={audit_publication['artifact_id']}. "
+                "No external call was made.",
+                events_file=EVENTS_FILE,
+                extra={"operator": operator, "channel": channel},
+            )
+
+    return {
+        "task_id": task_id,
+        "decision": decision,
+        "audit_artifact_id": audit_publication["artifact_id"],
+        "version": version["version"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Views for the UI
+# ---------------------------------------------------------------------------
+
+def draft_views(data=None):
+    tasks = _load(QUEUE_FILE, [])
+    statuses = _load(STATUS_FILE, {})
+    views = []
+    for task in tasks:
+        if not is_demo_task_id(task.get("id")) or "ecom_draft" not in task:
+            continue
+        state = statuses.get(task["id"], {})
+        ecom = state.get("ecom") or {}
+        versions = ecom.get("versions") or []
+        current = versions[-1] if versions else {}
+        payload = read_artifact(current.get("artifact_id")) or {}
+        body = payload.get("body", "")
+        base = {
+            "id": task["id"],
+            "title": task.get("title", ""),
+            "command": task.get("command", []),
+            "requires_approval": True,
+            "state": state,
+        }
+        item = inbox_item(
+            base,
+            advisory={"summary": body, "risks": [], "recommended_action": ""},
+        )
+        meta = task["ecom_draft"]
+        views.append(
+            {
+                **item,
+                "kind": meta.get("kind"),
+                "module": meta.get("module"),
+                "language": meta.get("language"),
+                "created_by": meta.get("created_by"),
+                "created_at_utc": meta.get("created_at_utc"),
+                "status": state.get("status", "todo"),
+                "approval_status": state.get("approval_status"),
+                "version": ecom.get("current_version", 0),
+                "versions": versions,
+                "body": body,
+                "source": payload.get("source") or {},
+                "provenance": payload.get("provenance") or {},
+                "decision": ecom.get("decision"),
+                "channels": DRAFT_KINDS.get(meta.get("kind"), {}).get(
+                    "channels", []
+                ),
+            }
+        )
+    views.sort(key=lambda view: view.get("created_at_utc") or "", reverse=True)
+    return views
+
+
+def audit_records(limit=200):
+    manifests_dir = Path(artifact_store.MANIFESTS_DIR)
+    if not manifests_dir.is_dir():
+        return []
+    records = []
+    for manifest_path in manifests_dir.glob(f"artifact_{AUDIT_LOGICAL_NAME}_*.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if manifest.get("logical_name") != AUDIT_LOGICAL_NAME:
+                continue
+            payload = json.loads(
+                Path(manifest["object_path"]).read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError, KeyError):
+            continue
+        records.append(
+            {
+                **payload,
+                "audit_artifact_id": manifest.get("artifact_id"),
+                "audit_content_sha256": manifest.get("content_sha256"),
+                "recorded_at_utc": manifest.get("created_at_utc"),
+            }
+        )
+    records.sort(key=lambda row: row.get("decided_at_utc") or "", reverse=True)
+    return records[:limit]
+
+
+def demo_events(limit=100):
+    path = Path(EVENTS_FILE)
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if str(record.get("task_id", "")).startswith(TASK_PREFIX):
+            rows.append(record)
+    return list(reversed(rows[-limit:]))
+
+
+def approved_kb_updates():
+    return [
+        row for row in audit_records()
+        if row.get("kind") == "kb_update" and row.get("decision") == "approved"
+    ]
+
+
+def reset_demo_tasks():
+    """Remove demo tasks from the queue/status (artifacts + events stay:
+    they are the append-only audit trail)."""
+    with demo_lock():
+        tasks = _load(QUEUE_FILE, [])
+        kept = [task for task in tasks if not str(task.get("id", "")).startswith(TASK_PREFIX)]
+        removed = len(tasks) - len(kept)
+        _save(QUEUE_FILE, kept)
+        statuses = _load(STATUS_FILE, {})
+        for key in [key for key in statuses if key.startswith(TASK_PREFIX)]:
+            statuses.pop(key)
+        _save(STATUS_FILE, statuses)
+    return removed
+
+
+if __name__ == "__main__":
+    if len(sys.argv) == 2 and sys.argv[1] == "--reset":
+        count = reset_demo_tasks()
+        print(f"Removed {count} demo task(s) from task_queue.json / task_status.json.")
+        print("Artifacts and events.jsonl entries are kept as the audit trail.")
+    else:
+        print("Usage: python3 commerce_demo.py --reset")
