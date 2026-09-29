@@ -1686,6 +1686,8 @@ for _code, _extra in _V0191_STRINGS.items():
 
 _V0200_STRINGS = {
     'en': {
+        'chat_data_imported': 'ORCH Context answers store questions from your imported store data (as of {date}, the latest order date; not real-time).',
+        'chat_data_sample': 'ORCH Context answers store questions from the fictional sample data (no import active).',
         'nav_admin_group': 'Admin',
         'nav_admin_users': 'Users',
         'nav_admin_approvers': 'Module approvers',
@@ -1847,6 +1849,8 @@ _V0200_STRINGS = {
         'perm_any_approver': 'any approver',
     },
     'zh-Hant': {
+        'chat_data_imported': 'ORCH 情境會以已匯入的店舖數據回答（數據截至 {date}，即最近訂單日期；並非即時數據）。',
+        'chat_data_sample': 'ORCH 情境會以虛構的示範數據回答（未啟用匯入數據）。',
         'nav_admin_group': '管理',
         'nav_admin_users': '用戶管理',
         'nav_admin_approvers': '模組審批人',
@@ -2008,6 +2012,8 @@ _V0200_STRINGS = {
         'perm_any_approver': '任何審批人',
     },
     'zh-Hans': {
+        'chat_data_imported': 'ORCH 情境会以已导入的店铺数据回答（数据截至 {date}，即最近订单日期；并非实时数据）。',
+        'chat_data_sample': 'ORCH 情境会以虚构的示范数据回答（未启用导入数据）。',
         'nav_admin_group': '管理',
         'nav_admin_users': '用户管理',
         'nav_admin_approvers': '模块审批人',

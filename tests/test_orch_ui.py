@@ -878,10 +878,16 @@ class OrchChatDemoContextTests(unittest.TestCase):
         CHAT_SESSIONS.clear()
         self.client = app.test_client()
         signed_in(self, self.client)  # v0.20.0: login required
+        # v0.20.0: chat uses imported data when active; pin sample mode here.
+        import commerce_import
+        no_import = patch.object(commerce_import, "IMPORT_STATE_FILE",
+                                 Path(tempfile.mkdtemp()) / "none.json")
+        no_import.start()
+        self.addCleanup(no_import.stop)
 
     def test_build_chat_context_includes_sample_001(self):
         context = build_chat_context(self.QUESTION)
-        demo = context["ecommerce_demo"]
+        demo = context["store_data"]
         self.assertEqual(demo["scope"], "read_only_sample_data")
         self.assertEqual(demo["matching_skus"][0]["sku"], "SAMPLE-001")
         self.assertEqual(
@@ -927,7 +933,7 @@ class OrchChatDemoContextTests(unittest.TestCase):
         kwargs = mock_ask_orch.call_args.kwargs
         self.assertEqual(kwargs["mode"], "orch_context")
         self.assertEqual(kwargs["locale"], "zh-Hant")
-        demo = kwargs["context"]["ecommerce_demo"]
+        demo = kwargs["context"]["store_data"]
         self.assertIn("SAMPLE-001", [s["sku"] for s in demo["matching_skus"]])
         mock_publish_audit.assert_called_once()
 

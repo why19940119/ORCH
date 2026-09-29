@@ -702,6 +702,31 @@ def compute_metrics(state=None, today=None):
         for label in sorted(weeks)
     ]
 
+    # v0.20.0: per-day totals and the latest order day's SKU ranking (Chat
+    # answers "today" questions from the latest date in the data).
+    days = defaultdict(lambda: {"revenue": 0.0, "orders": set(), "units": 0})
+    for row in orders:
+        days[row["date"]]["revenue"] += row["amount_hkd"]
+        days[row["date"]]["orders"].add(row["order_id"])
+        days[row["date"]]["units"] += row["quantity"]
+    revenue_by_day = [
+        {"date": day, "revenue": round(days[day]["revenue"], 2),
+         "orders": len(days[day]["orders"]), "units": days[day]["units"]}
+        for day in sorted(days)
+    ]
+    latest_day_skus = []
+    if order_dates:
+        latest = defaultdict(lambda: {"units": 0, "revenue": 0.0})
+        for row in orders:
+            if row["date"] == order_dates[-1]:
+                latest[row["sku"]]["units"] += row["quantity"]
+                latest[row["sku"]]["revenue"] += row["amount_hkd"]
+        latest_day_skus = sorted(
+            ({"sku": sku, "name": names.get(sku, sku), "units": item["units"],
+              "revenue": round(item["revenue"], 2)} for sku, item in latest.items()),
+            key=lambda row: (-row["revenue"], -row["units"], row["sku"]),
+        )
+
     # Days of cover: stock / average daily units over the last N days
     # (window ends on the latest order date, not "today").
     window_end = date.fromisoformat(order_dates[-1]) if order_dates else None
@@ -790,6 +815,8 @@ def compute_metrics(state=None, today=None):
         "traffic_period": [traffic_dates[0], traffic_dates[-1]] if traffic_dates else None,
         "sales_by_sku": sales_by_sku,
         "revenue_by_week": revenue_by_week,
+        "revenue_by_day": revenue_by_day,
+        "latest_day_skus": latest_day_skus,
         "stock_cover": stock_cover,
         "velocity_window_days": VELOCITY_WINDOW_DAYS,
         "low_cover_days": LOW_COVER_DAYS,

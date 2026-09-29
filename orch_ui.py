@@ -48,6 +48,7 @@ from chat_attachments import (
 )
 import admin_ui
 import commerce_demo
+import commerce_import
 import commerce_ui
 import orch_auth
 
@@ -2681,13 +2682,26 @@ def chat_task_summary(task, statuses):
     }
 
 
-def build_demo_chat_context(question=""):
-    """v0.18.1: allowlisted, read-only e-commerce SAMPLE data for Chat."""
+def chat_data_source():
+    """v0.20.0: which e-commerce data ORCH Context chat answers from."""
     try:
-        return commerce_demo.chat_context(question)
+        state = commerce_import.active_import()
+        metrics = commerce_import.compute_metrics(state) if state else None
+    except Exception:
+        metrics = None
+    if metrics:
+        return {"kind": "imported", "as_of": (metrics.get("order_period") or [None, None])[1]}
+    return {"kind": "sample", "as_of": None}
+
+
+def build_demo_chat_context(question=""):
+    """Read-only e-commerce data for Chat: the imported store data when the
+    import is switched on (v0.20.0), otherwise the SAMPLE data."""
+    try:
+        return commerce_demo.store_chat_context(question)
     except Exception:
         return {
-            "scope": "read_only_sample_data",
+            "scope": "read_only_store_data",
             "available": False,
         }
 
@@ -2771,10 +2785,11 @@ def build_chat_context(question=""):
         },
         "tasks": tasks,
         "latest_events": latest_events,
-        "ecommerce_demo": build_demo_chat_context(question),
+        "store_data": build_demo_chat_context(question),
         "limitations": [
             "Task lookup uses exact task_id matches only.",
-            "ecommerce_demo is read-only SAMPLE data from demo/sample_data.json.",
+            "store_data is read-only: the store's imported data when the import is switched on, otherwise fictional sample data.",
+            "There is no real-time data; figures run to the latest date in the data.",
             "No raw artifact payloads are included.",
             "No environment variables are included.",
             "No API keys are included.",
@@ -4068,6 +4083,9 @@ def chat_page():
             </div>
             </div>
 
+            <p class="composer-help" data-chat-data-source="{{ chat_data_source.kind }}">
+              {% if chat_data_source.kind == 'imported' %}{{ t.chat_data_imported.format(date=chat_data_source.as_of or '—') }}{% else %}{{ t.chat_data_sample }}{% endif %}
+            </p>
             <textarea
               id="question"
               name="question"
@@ -4120,6 +4138,7 @@ def chat_page():
         csrf_token=csrf_token,
         error=error,
         chat_mode=chat_mode,
+        chat_data_source=chat_data_source(),
         attachment_accept=attachment_accept_attribute(),
         max_attachments=CHAT_MAX_ATTACHMENTS,
     )

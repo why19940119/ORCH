@@ -61,7 +61,8 @@ v0.19.1     CSV import review fixes: compact sized metrics block for real-AI
 v0.20.0     Accounts and governance: login (local accounts, admin / editor /
             approver roles), no self-approval, per-module approvers, approval
             deadlines + overdue escalation, second-admin approval of account
-            changes, retention / purge, 權限清單 (permissions list) + CSV export
+            changes, retention / purge, 權限清單 (permissions list) + CSV export;
+            ORCH Context chat answers from imported store data (as-of date)
 ```
 
 ## Core Architecture
@@ -534,6 +535,29 @@ plus a one-line-per-SKU catalog summary. No secrets, no state writes,
 no execution authority. The UI locale is passed to `ask_orch(locale=...)`
 so answers, refusals and guidance come back in the user's language
 (zh-Hant by default).
+
+### Chat uses imported data (v0.20.0)
+
+The block is now `store_data` from `commerce_demo.store_chat_context`:
+
+```text
+import active   the store's imported products / orders / traffic: the same
+                compact summary as the AI insight drafts (top SKUs by revenue
+                and by units, latest-day ranking, last 7 order dates, recent
+                weeks, low stock / days of cover, traffic by source,
+                conversion, excluded order lines) + matching products by SKU
+                or name; labelled as imported data with as_of_date = latest
+                order date. KB / inquiries / leads stay sample (labelled).
+import off      the sample data, labelled SAMPLE, with a sales ranking note:
+                the sample has no per-product sales, so only won order leads
+                and weekly order counts are listed (no invented numbers).
+```
+
+For "today / this week / this month" questions the model is told to answer
+from the latest date in the data and say so (「數據截至 2026-09-25」), and
+never to claim real-time data. The context label is neutral
+(`REFERENCE_DATA`) and the model is told not to mention internal labels,
+keys or file names. The Chat page shows which data ORCH Context uses.
 
 ## Cross-border e-commerce demo
 

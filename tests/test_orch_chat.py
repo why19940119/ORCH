@@ -48,14 +48,14 @@ class OrchChatModePromptTests(unittest.TestCase):
 
         system = messages[0]["content"]
         self.assertEqual(system, ORCH_CONTEXT_SYSTEM_PROMPT)
-        self.assertIn("ORCH_CONTEXT", messages[-1]["content"])
+        self.assertIn("REFERENCE_DATA", messages[-1]["content"])
         self.assertIn("task_lookup", system)
         self.assertIn("no execution authority", system.lower())
         self.assertIn('execution_authority": "none"', system)
         self.assertIn("General\nConversation mode", system)
 
     def test_orch_context_prompt_covers_ecommerce_sample_data(self):
-        self.assertIn("ecommerce_demo", ORCH_CONTEXT_SYSTEM_PROMPT)
+        self.assertIn("store_data", ORCH_CONTEXT_SYSTEM_PROMPT)
         self.assertIn("ARE in scope", ORCH_CONTEXT_SYSTEM_PROMPT)
         self.assertIn("Approval Inbox", ORCH_CONTEXT_SYSTEM_PROMPT)
 
@@ -64,7 +64,7 @@ class OrchChatModePromptTests(unittest.TestCase):
             messages = build_messages(
                 question="SAMPLE-001係咩？",
                 mode=mode,
-                context={"ecommerce_demo": {}},
+                context={"store_data": {}},
                 history=[],
                 locale="zh-Hant",
             )
@@ -100,7 +100,7 @@ class OrchChatModePromptTests(unittest.TestCase):
         with patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}), \
              patch.object(orch_chat.urllib.request, "urlopen", return_value=response) as urlopen:
             result = orch_chat.ask_orch(
-                "SAMPLE-001係咩？", "orch_context", {"ecommerce_demo": {}}, [],
+                "SAMPLE-001係咩？", "orch_context", {"store_data": {}}, [],
                 locale="zh-Hant",
             )
         payload = _json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
