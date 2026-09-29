@@ -51,22 +51,43 @@ class ApprovalInboxRouteTests(unittest.TestCase):
         response = self.client.post("/inbox/task_demo/approve")
         self.assertEqual(response.status_code, 400)
 
-    def test_approve_uses_mini_orch_and_does_not_run_queue(self):
+    def test_approve_routes_through_gate_with_named_operator(self):
         self.client.get("/inbox")
         with self.client.session_transaction() as stored:
             token = stored["csrf_token"]
 
+        task_id = "task_ecom_content_0123456789"
         with patch(
-            "orch_ui.approve_task",
-            return_value={"ok": True, "task_id": "task_demo"},
+            "commerce_ui.commerce_demo.decide",
+            return_value={"task_id": task_id, "decision": "approved"},
         ) as mocked:
             response = self.client.post(
-                "/inbox/task_demo/approve",
-                data={"csrf_token": token, "note": "ok", "next": "/inbox"},
+                f"/inbox/{task_id}/approve",
+                data={
+                    "csrf_token": token,
+                    "operator": "Amy Chan",
+                    "version": "1",
+                    "channel": "email",
+                    "note": "ok",
+                },
             )
 
         self.assertEqual(response.status_code, 302)
         mocked.assert_called_once()
+        args = mocked.call_args.args
         kwargs = mocked.call_args.kwargs
-        self.assertEqual(kwargs.get("approved_by"), "orch_ui_operator")
+        self.assertEqual(args[0], task_id)
+        self.assertEqual(args[1], "approved")
+        self.assertEqual(args[2], "Amy Chan")
         self.assertEqual(kwargs.get("note"), "ok")
+        self.assertEqual(kwargs.get("channel"), "email")
+
+    def test_non_demo_task_cannot_be_approved_from_ui(self):
+        self.client.get("/inbox")
+        with self.client.session_transaction() as stored:
+            token = stored["csrf_token"]
+        response = self.client.post(
+            "/inbox/task_approval_demo_006/approve",
+            data={"csrf_token": token, "operator": "Amy Chan"},
+        )
+        self.assertEqual(response.status_code, 404)

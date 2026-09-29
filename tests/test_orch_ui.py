@@ -55,7 +55,19 @@ class OrchUiTests(unittest.TestCase):
             and not rule.rule.startswith("/static")
         )
 
-        self.assertEqual(post_routes, ["/chat", "/locale"])
+        # v0.18.0: the only additions are the e-commerce demo draft and
+        # Approval Inbox decision routes (CSRF + named operator each).
+        self.assertEqual(
+            post_routes,
+            [
+                "/chat",
+                "/demo/draft",
+                "/inbox/<task_id>/approve",
+                "/inbox/<task_id>/reject",
+                "/inbox/<task_id>/revise",
+                "/locale",
+            ],
+        )
 
 
 class TaskStatusAndComposerUiTests(unittest.TestCase):
