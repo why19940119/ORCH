@@ -594,7 +594,7 @@ def market_dashboard():
     body = MODULE_HEAD + """
   {% if m %}
   <h3 data-imp-metrics>{{ t.imp_metrics_title }}</h3>
-  """ + IMPORT_UNMATCHED_WARNING + """
+  {# v0.20.0: the unmatched-orders warning comes once, via IMPORT_METRICS_SALES. #}
   {% if m.order_period %}<p class="composer-help">{{ t.imp_period.format(start=m.order_period[0], end=m.order_period[1]) }}</p>{% endif %}
   <div class="grid">
     <div class="card"><span class="metric-label">{{ t.imp_kpi_revenue }}</span><span class="metric-value">HK${{ '{:,.0f}'.format(m.totals.revenue) }}</span></div>

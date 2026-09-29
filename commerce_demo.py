@@ -595,7 +595,7 @@ def is_overdue(task, state, now=None):
 
 
 def _sku_facts(sku):
-    return {
+    facts = {
         "sku": sku["sku"],
         "name_en": sku["name_en"],
         "name_zh": sku["name_zh"],
@@ -604,6 +604,11 @@ def _sku_facts(sku):
         "list_price_hkd": sku["list_price_hkd"],
         "claims_policy": sku["claims_policy"],
     }
+    # v0.20.0 (PR #4 re-review): imported products carry stock; keep it so
+    # the product line in import prompts is not always "stock=-".
+    if sku.get("stock_units") is not None:
+        facts["stock_units"] = sku["stock_units"]
+    return facts
 
 
 def build_source(kind, params, data=None):
@@ -1052,7 +1057,8 @@ def _product_lines(sku):
     return [
         "product: sku={} name={} price_hkd={} stock={} category={}".format(
             q(sku["sku"]), q(sku["name_en"], PROMPT_NAME_CHARS * 2),
-            _money(sku.get("list_price_hkd")), sku.get("stock_units", "-"),
+            _money(sku.get("list_price_hkd")),
+            "-" if sku.get("stock_units") is None else sku["stock_units"],
             q(sku.get("category", "")),
         )
     ]
