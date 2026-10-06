@@ -16,9 +16,17 @@ import artifact_store
 import commerce_demo
 import deploy_config
 import mini_orch
+import io
+import re
+from contextlib import redirect_stderr
+
+import orch_auth
 import orch_db
 import orch_ui
+from auth_testing import use_temp_auth
 from test_commerce_demo import DemoSandbox
+
+PASSWORD = "Setup-Wizard-Pass-1"
 
 
 class AuditCommitTests(DemoSandbox):
@@ -99,6 +107,72 @@ class AuditCommitTests(DemoSandbox):
         # still listed after retention purged the decided drafts' status
         orch_db.save(commerce_demo.STATUS_FILE, {})
         self.assertEqual(len(commerce_demo.audit_records()), 2)
+
+
+class SetupTokenTests(unittest.TestCase):
+    """Review fix 5: /setup needs a token on exposed installs."""
+
+    def setUp(self):
+        orch_ui.app.config["TESTING"] = True
+        self.client = orch_ui.app.test_client()
+        use_temp_auth(self, users=())
+        p = patch.object(deploy_config, "_generated_setup_token", None)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def post(self, **fields):
+        html = self.client.get("/setup").get_data(as_text=True)
+        csrf = re.search(r'name="csrf_token" value="([^"]+)"', html).group(1)
+        data = {"csrf_token": csrf, "username": "First Admin", "password": PASSWORD,
+                "password_confirm": PASSWORD}
+        data.update(fields)
+        return self.client.post("/setup", data=data)
+
+    def env(self, **values):
+        base = {"ORCH_SETUP_TOKEN": "", "ORCH_TRUSTED_HOSTS": "", "ORCH_PROXY_FIX": ""}
+        base.update(values)
+        return patch.dict(os.environ, base)
+
+    def test_exposed_without_token_requires_generated_one(self):
+        for exposed in ({"ORCH_TRUSTED_HOSTS": "orch.example.com"}, {"ORCH_PROXY_FIX": "1"}):
+            with self.subTest(exposed), self.env(**exposed):
+                deploy_config._generated_setup_token = None
+                err = io.StringIO()
+                with redirect_stderr(err):
+                    orch_ui.setup_warnings()                 # startup prints the token
+                token = re.search(r"one-time token: (\S+)", err.getvalue()).group(1)
+                self.assertIn('name="setup_token"', self.client.get("/setup").get_data(as_text=True))
+                self.assertEqual(self.post().status_code, 403)                 # no token
+                self.assertEqual(self.post(setup_token="guess").status_code, 403)
+                self.assertFalse(orch_auth.has_users())
+                self.assertEqual(deploy_config.effective_setup_token(), (token, "generated"))
+        with self.env(ORCH_TRUSTED_HOSTS="orch.example.com"):
+            self.assertEqual(self.post(setup_token=deploy_config._generated_setup_token)
+                             .status_code, 302)
+        self.assertTrue(orch_auth.has_users())
+
+    def test_exposed_with_configured_token(self):
+        with self.env(ORCH_TRUSTED_HOSTS="orch.example.com", ORCH_SETUP_TOKEN="tok-abcdef-123"):
+            self.assertEqual(self.post().status_code, 403)
+            self.assertEqual(self.post(setup_token="wrong").status_code, 403)
+            self.assertEqual(self.post(setup_token="tok-abcdef-123").status_code, 302)
+        self.assertIsNone(deploy_config._generated_setup_token)   # nothing generated
+
+    def test_localhost_only_keeps_open_wizard_with_warning(self):
+        with self.env():
+            err = io.StringIO()
+            with redirect_stderr(err):
+                orch_ui.setup_warnings()
+            self.assertIn("localhost-only", err.getvalue())
+            self.assertNotIn('name="setup_token"', self.client.get("/setup").get_data(as_text=True))
+            self.assertEqual(self.post().status_code, 302)
+        self.assertTrue(orch_auth.has_users())
+
+    def test_docs_mark_token_required(self):
+        guide = (orch_ui.PROJECT_ROOT / "docs" / "安裝指南.md").read_text(encoding="utf-8")
+        line = next(l for l in guide.splitlines() if l.startswith("| `ORCH_SETUP_TOKEN`"))
+        self.assertIn("必填", line)
+        self.assertNotIn("選填", line)
 
 
 class ProxyHeaderTests(unittest.TestCase):

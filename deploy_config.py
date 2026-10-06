@@ -25,7 +25,11 @@ Environment (all optional):
                               127.0.0.1,::1; "*" trusts every peer (only if
                               nothing but the proxy can reach the port)
     ORCH_TRUSTED_HOSTS        extra host names, comma separated
-    ORCH_SETUP_TOKEN          if set, the /setup wizard asks for it
+    ORCH_SETUP_TOKEN          the /setup wizard asks for it. REQUIRED for an
+                              exposed install (ORCH_TRUSTED_HOSTS or
+                              ORCH_PROXY_FIX set): if missing there, a
+                              one-time token is generated and printed to the
+                              log; localhost-only installs need none
     ORCH_HOST / ORCH_PORT     bind address for serve.py (default 127.0.0.1:5050)
 """
 
@@ -35,6 +39,7 @@ import logging
 import os
 import re
 import secrets
+import sys
 from pathlib import Path
 
 LOG = logging.getLogger("orch.deploy")
@@ -213,3 +218,32 @@ def extra_trusted_hosts():
 
 def setup_token():
     return (os.getenv("ORCH_SETUP_TOKEN") or "").strip()
+
+
+def exposed_install():
+    """Configured to be reached from other machines (a public host name or a
+    reverse proxy in front)."""
+    return bool(extra_trusted_hosts()) or proxy_hops() > 0
+
+
+_generated_setup_token = None
+
+
+def effective_setup_token():
+    """(token, source) for the /setup wizard: ORCH_SETUP_TOKEN ('env'); for
+    an exposed install without one, a one-time token generated per process
+    and printed to the log ('generated'); else ('', 'none') - localhost-only
+    installs keep the open wizard."""
+    global _generated_setup_token
+    token = setup_token()
+    if token:
+        return token, "env"
+    if not exposed_install():
+        return "", "none"
+    if _generated_setup_token is None:
+        _generated_setup_token = secrets.token_urlsafe(18)
+        print("ORCH WARNING: exposed install (ORCH_TRUSTED_HOSTS / ORCH_PROXY_FIX) without "
+              "ORCH_SETUP_TOKEN - the first-admin page /setup requires this one-time token: "
+              f"{_generated_setup_token}  (valid until the first admin exists or a restart; "
+              "set ORCH_SETUP_TOKEN to choose your own)", file=sys.stderr, flush=True)
+    return _generated_setup_token, "generated"

@@ -3413,7 +3413,7 @@ def _render_setup(error=None, username="", status=503):
     t = ui_strings(get_locale())
     return render_page(
         t["auth_setup_title"], "setup", SETUP_TEMPLATE, error=error,
-        username=username, token_required=bool(deploy_config.setup_token()),
+        username=username, token_required=bool(deploy_config.effective_setup_token()[0]),
     ), status
 
 
@@ -3438,7 +3438,8 @@ def setup_post():
         abort(403)
     username = (request.form.get("username") or "").strip()[:40]
     password = request.form.get("password") or ""
-    expected = deploy_config.setup_token()
+    # Review fix: REQUIRED on exposed installs (generated + logged if unset).
+    expected, _source = deploy_config.effective_setup_token()
     if expected:
         given = request.form.get("setup_token") or ""
         if not secrets.compare_digest(expected.encode("utf-8"), given.encode("utf-8")):
@@ -4568,6 +4569,28 @@ def startup():
             print(f"migrated {row['file']}: {row['records']} record(s) "
                   f"-> {orch_db.db_path_for(directory)} (backup {row['backup']})",
                   file=sys.stderr)
+    setup_warnings()
+
+
+def setup_warnings():
+    """Startup warnings about the first-admin wizard (/setup)."""
+    if orch_auth.has_users():
+        return
+    token, source = deploy_config.effective_setup_token()   # prints a generated one
+    if source == "none":
+        print("ORCH WARNING: no admin account yet - /setup lets whoever reaches this port "
+              "first create the admin. This install is localhost-only (no "
+              "ORCH_TRUSTED_HOSTS / ORCH_PROXY_FIX); set ORCH_SETUP_TOKEN before exposing it, "
+              "or run `python orch_auth.py create-admin`.", file=sys.stderr, flush=True)
+    elif source == "env":
+        print("ORCH: no admin account yet - /setup requires ORCH_SETUP_TOKEN.",
+              file=sys.stderr, flush=True)
+    if deploy_config.proxy_hops() and not os.getenv("ORCH_TRUSTED_PROXY") \
+            and Path("/.dockerenv").exists():
+        print("ORCH WARNING: ORCH_PROXY_FIX is set inside Docker but ORCH_TRUSTED_PROXY is "
+              "not: the proxy reaches the container from the Docker bridge, so set e.g. "
+              "ORCH_TRUSTED_PROXY=172.16.0.0/12 (docs/反向代理與HTTPS.md).",
+              file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":

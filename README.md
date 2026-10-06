@@ -1063,8 +1063,11 @@ open http://127.0.0.1:5050/setup    # create the first admin (only while no acco
   `data/`, `artifacts/`.
 - Session key: `ORCH_UI_SECRET_KEY` if set, otherwise generated on first
   start and kept in `state/secret_key` (0600).
-- First admin: `/setup` wizard (CSRF, only while no account exists; optional
-  `ORCH_SETUP_TOKEN`), or `docker compose exec orch python orch_auth.py create-admin`.
+- First admin: `/setup` wizard (CSRF, only while no account exists;
+  `ORCH_SETUP_TOKEN` is REQUIRED for an exposed install - with
+  `ORCH_TRUSTED_HOSTS` or `ORCH_PROXY_FIX` set and no token, a one-time token
+  is generated and printed to the log, and /setup refuses without it), or
+  `docker compose exec orch python orch_auth.py create-admin`.
 - Branding: `ORCH_CLIENT_NAME`, `ORCH_LOGO` (https URL or a path inside
   `state/`, e.g. `branding/logo.png`), `ORCH_TARGET_MARKET`, or the same keys
   (`client_name`, `logo`, `target_market`) in `state/branding.json`. The
