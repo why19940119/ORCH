@@ -21,6 +21,13 @@ LOCALE_LABELS = {
     "en": "English",
 }
 
+# Compact header language button (「繁中 ▾」): the current locale, short.
+LOCALE_SHORT_LABELS = {
+    "zh-Hant": "繁中",
+    "zh-Hans": "簡中",
+    "en": "EN",
+}
+
 _STRINGS = {
     'en': {
         'brand': 'ORCH · Local Operator Console',
@@ -33,6 +40,12 @@ _STRINGS = {
         'menu_label': 'Menu',
         'menu_toggle_aria': 'Show or hide the menu',
         'menu_current_page': 'Current page',
+        'menu_nav_aria': 'Site navigation',
+        'nav_main_group': 'Console',
+        'lang_menu_prefix': 'Language: ',
+        'account_menu_prefix': 'Account: ',
+        'account_signed_in_as': 'Signed in as',
+        'account_role': 'Role',
         'title_dashboard': 'Dashboard',
         'title_tasks': 'Tasks',
         'title_events': 'Events',
@@ -155,6 +168,12 @@ _STRINGS = {
         'menu_label': '選單',
         'menu_toggle_aria': '顯示或隱藏選單',
         'menu_current_page': '目前頁面',
+        'menu_nav_aria': '網站導覽',
+        'nav_main_group': '控制台',
+        'lang_menu_prefix': '語言：',
+        'account_menu_prefix': '帳戶：',
+        'account_signed_in_as': '已登入帳戶',
+        'account_role': '角色',
         'title_dashboard': '總覽',
         'title_tasks': '任務',
         'title_events': '事件',
@@ -277,6 +296,12 @@ _STRINGS = {
         'menu_label': '菜单',
         'menu_toggle_aria': '显示或隐藏菜单',
         'menu_current_page': '当前页面',
+        'menu_nav_aria': '网站导航',
+        'nav_main_group': '控制台',
+        'lang_menu_prefix': '语言：',
+        'account_menu_prefix': '账户：',
+        'account_signed_in_as': '已登录账户',
+        'account_role': '角色',
         'title_dashboard': '总览',
         'title_tasks': '任务',
         'title_events': '事件',

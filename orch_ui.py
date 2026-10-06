@@ -24,6 +24,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from ui_i18n import (
     DEFAULT_LOCALE,
     LOCALE_LABELS,
+    LOCALE_SHORT_LABELS,
     SUPPORTED_LOCALES,
     html_lang_for,
     normalize_locale,
@@ -1121,52 +1122,6 @@ BASE_TEMPLATE = """
       white-space: nowrap;
     }
 
-    header nav {
-      align-items: center;
-      display: flex;
-      flex: 1 1 auto;
-      flex-wrap: wrap;
-      gap: 4px;
-    }
-
-    header nav a {
-      background: transparent;
-      border: 1px solid transparent;
-      border-radius: 999px;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 600;
-      margin: 0;
-      padding: 5px 10px;
-    }
-
-    header nav a:hover {
-      background: rgba(61, 40, 96, .35);
-      color: var(--text);
-      text-decoration: none;
-    }
-
-    header nav a.active {
-      background: #3d2860;
-      border-color: #75539b;
-      color: #e8d4ff;
-    }
-
-    .lang-switch {
-      gap: 4px;
-      margin-left: 8px;
-    }
-
-    .lang-switch-label {
-      display: none;
-    }
-
-    .lang-switch button {
-      border-color: transparent;
-      font-size: 10px;
-      padding: 4px 7px;
-    }
-
     main {
       padding: 18px 20px 28px;
     }
@@ -1455,62 +1410,6 @@ BASE_TEMPLATE = """
       }
     }
 
-    .lang-switch {
-      align-items: center;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-left: auto;
-    }
-
-    .lang-switch-label {
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: .4px;
-      text-transform: uppercase;
-    }
-
-    .lang-switch form {
-      display: inline;
-      margin: 0;
-    }
-
-    .lang-switch button {
-      background: transparent;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      color: var(--muted);
-      cursor: pointer;
-      font-size: 11px;
-      font-weight: 600;
-      margin: 0;
-      padding: 5px 9px;
-    }
-
-    .lang-switch button:hover {
-      background: #213149;
-      color: var(--text);
-    }
-
-    .lang-switch button.active {
-      background: #3d2860;
-      border-color: #75539b;
-      color: #e8d4ff;
-    }
-
-    header {
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 12px;
-    }
-
-    header nav {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 4px 10px;
-    }
-
     @media (max-width: 720px) {
       main { padding: 20px 14px; }
       .kv { grid-template-columns: 1fr; }
@@ -1520,22 +1419,6 @@ BASE_TEMPLATE = """
 
     /* v0.18.0 cross-border e-commerce demo modules + chat attachments */
     .rejected { background: #4c2330; color: #ff9eaa; }
-
-    .nav-sep {
-      background: rgba(117, 83, 155, .55);
-      display: inline-block;
-      height: 16px;
-      margin: 0 4px;
-      width: 1px;
-    }
-
-    .nav-group-label {
-      color: #8a769d;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: .5px;
-      text-transform: uppercase;
-    }
 
     .sample-banner {
       align-items: center;
@@ -1579,17 +1462,6 @@ BASE_TEMPLATE = """
     }
 
     .import-error-row td { vertical-align: top; }
-
-    .user-chip {
-      align-items: center;
-      display: flex;
-      font-size: 12px;
-      gap: 8px;
-      margin-left: 12px;
-    }
-
-    .user-chip form { margin: 0; }
-    .user-chip button { font-size: 12px; padding: 4px 10px; }
 
     .login-card { margin: 40px auto; max-width: 440px; }
     .login-form { display: flex; flex-direction: column; align-items: stretch; gap: 12px; }
@@ -1899,16 +1771,305 @@ BASE_TEMPLATE = """
       margin-top: 6px;
     }
 
-    /* v0.21.0 mobile menu: hidden on desktop; the menu wrapper is
-       transparent to the header's flex layout (display: contents). */
-    .mobile-page-name,
-    .menu-toggle,
+    /* Collapsed header (every width): the top bar holds only the ORCH title
+       (+ branding), the current page name and the Menu button. Nav, the
+       language popup and the account popup live in .site-menu, an opaque
+       panel opened by the visually hidden checkbox through its label; the
+       two popups are <details>. Works without JavaScript - the script only
+       syncs aria-expanded and adds Esc / click-outside closing. */
+    header {
+      align-items: center;
+      flex-direction: row;
+      flex-wrap: nowrap;
+      gap: 10px;
+      z-index: 60;
+    }
+
+    header h1 {
+      flex: 0 1 auto;
+      margin: 0;
+      min-width: 4.5em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .brand-market {
+      flex: 0 1 auto;
+      margin: 0;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .page-name {
+      border-left: 1px solid rgba(117, 83, 155, .55);
+      color: var(--muted);
+      flex: 0 0 auto;
+      font-size: 13px;
+      max-width: 45%;
+      overflow: hidden;
+      padding-left: 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .visually-hidden,
     .menu-toggle-input {
-      display: none;
+      clip-path: inset(50%);
+      height: 1px;
+      margin: 0;
+      overflow: hidden;
+      position: absolute;
+      white-space: nowrap;
+      width: 1px;
+    }
+
+    .menu-toggle-input {
+      opacity: 0;
+    }
+
+    .menu-toggle,
+    .menu-pop > summary {
+      align-items: center;
+      background: #211631;
+      border: 1px solid #59406e;
+      border-radius: 999px;
+      color: #e8d4ff;
+      cursor: pointer;
+      display: inline-flex;
+      font-size: 13px;
+      font-weight: 600;
+      gap: 6px;
+      min-height: 36px;
+      padding: 6px 14px;
+      user-select: none;
+      white-space: nowrap;
+    }
+
+    .menu-toggle {
+      flex: 0 0 auto;
+      margin-left: auto;
+    }
+
+    .menu-toggle:hover,
+    .menu-pop > summary:hover {
+      background: #2d1f42;
+    }
+
+    .menu-toggle-input:checked + .menu-toggle,
+    .menu-pop[open] > summary {
+      background: #3d2860;
+      border-color: #75539b;
+    }
+
+    .menu-toggle:focus-visible,
+    .menu-toggle-input:focus-visible + .menu-toggle,
+    .menu-pop > summary:focus-visible,
+    .site-menu a:focus-visible,
+    .pop-item:focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 2px;
     }
 
     .site-menu {
-      display: contents;
+      background: #1b1329;
+      border: 1px solid #59406e;
+      border-radius: 12px;
+      box-shadow: 0 18px 48px rgba(0, 0, 0, .6);
+      display: none;
+      max-width: calc(100% - 24px);
+      padding: 12px 16px 16px;
+      position: absolute;
+      right: 12px;
+      top: calc(100% + 6px);
+      width: 760px;
+      z-index: 70;
+    }
+
+    .menu-toggle-input:checked ~ .site-menu {
+      display: block;
+    }
+
+    .menu-head {
+      align-items: center;
+      display: flex;
+      gap: 10px;
+      justify-content: space-between;
+    }
+
+    .site-menu nav {
+      border-top: 1px solid rgba(73, 54, 95, .7);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px 22px;
+      margin-top: 12px;
+      padding-top: 12px;
+    }
+
+    .nav-group {
+      flex: 1 1 150px;
+      min-width: 0;
+    }
+
+    .nav-group-demo {
+      flex: 2 1 300px;
+    }
+
+    .nav-group-label {
+      color: #a996bd;
+      display: block;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .5px;
+      margin: 0 0 6px;
+      padding: 0 10px;
+      text-transform: uppercase;
+    }
+
+    .nav-links {
+      display: grid;
+      gap: 2px 6px;
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .nav-group-demo .nav-links {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .site-menu nav a {
+      border: 1px solid transparent;
+      border-radius: 8px;
+      color: var(--muted);
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      overflow: hidden;
+      padding: 7px 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .site-menu nav a:hover {
+      background: rgba(61, 40, 96, .45);
+      color: var(--text);
+      text-decoration: none;
+    }
+
+    .site-menu nav a.active {
+      background: #3d2860;
+      border-color: #75539b;
+      color: #e8d4ff;
+    }
+
+    .menu-pop {
+      min-width: 0;
+      position: relative;
+    }
+
+    .menu-pop > summary {
+      list-style: none;
+      max-width: 100%;
+      min-height: 34px;
+      padding: 5px 12px;
+    }
+
+    .menu-pop > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .pop-caret {
+      font-size: 11px;
+      opacity: .85;
+    }
+
+    .menu-pop[open] .pop-caret {
+      transform: rotate(180deg);
+    }
+
+    .user-pop {
+      margin-left: auto;
+    }
+
+    .user-name {
+      max-width: 16em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .pop-panel {
+      background: #251a38;
+      border: 1px solid #75539b;
+      border-radius: 10px;
+      box-shadow: 0 14px 36px rgba(0, 0, 0, .6);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 190px;
+      padding: 6px;
+      position: absolute;
+      top: calc(100% + 6px);
+      z-index: 80;
+    }
+
+    .lang-pop .pop-panel {
+      left: 0;
+    }
+
+    .user-pop .pop-panel {
+      right: 0;
+    }
+
+    .pop-panel form {
+      margin: 0;
+    }
+
+    .pop-item {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      color: var(--text);
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      margin: 0;
+      padding: 8px 12px;
+      text-align: left;
+      width: 100%;
+    }
+
+    .pop-item:hover {
+      background: #3d2860;
+    }
+
+    .pop-item.active {
+      background: #3d2860;
+      border-color: #75539b;
+      color: #e8d4ff;
+    }
+
+    .pop-item.active::after {
+      content: " ✓";
+    }
+
+    .pop-meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin: 0;
+      overflow-wrap: anywhere;
+      padding: 6px 12px;
+    }
+
+    .pop-meta strong {
+      color: var(--text);
+      display: block;
+      font-size: 13px;
+    }
+
+    .pop-sep {
+      border-top: 1px solid rgba(117, 83, 155, .55);
+      margin: 4px 0;
     }
 
     /* v0.21.0 mobile layout (phones, 375-430px; must stay the LAST rules).
@@ -1930,130 +2091,78 @@ BASE_TEMPLATE = """
         max-width: 100%;
       }
 
-      /* Compact top bar: ORCH title, current page name, Menu button.
-         The nav, language picker and user line live in .site-menu, which
-         stays collapsed until the (visually hidden) checkbox is checked by
-         tapping its label - works without JavaScript. */
+      /* Same compact bar as desktop (ORCH title, current page name, Menu
+         button), but not sticky and fully opaque: position: relative only
+         anchors the menu panel, which spans the phone width and pushes
+         nothing off-screen. */
       header {
         align-items: center;
         backdrop-filter: none;
         -webkit-backdrop-filter: none;
         background: #171020;
         flex-direction: row;
-        flex-wrap: wrap;
-        gap: 6px 10px;
+        flex-wrap: nowrap;
+        gap: 8px;
         padding: 8px 12px;
-        position: static;
-        z-index: auto;
+        position: relative;
+        z-index: 60;
       }
 
       header h1 {
-        flex: 0 1 auto;
         font-size: 14px;
-        margin: 0;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
       }
 
       .brand-market {
         display: none;
       }
 
-      .mobile-page-name {
-        color: var(--muted);
-        display: block;
-        flex: 1 1 auto;
-        font-size: 13px;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      .menu-toggle-input {
-        clip-path: inset(50%);
-        display: block;
-        height: 1px;
-        margin: 0;
-        opacity: 0;
-        overflow: hidden;
-        position: absolute;
-        width: 1px;
-      }
-
-      .menu-toggle {
-        align-items: center;
-        border: 1px solid #59406e;
-        border-radius: 999px;
-        color: #e8d4ff;
-        cursor: pointer;
-        display: inline-flex;
-        font-size: 13px;
-        font-weight: 600;
-        gap: 6px;
-        margin-left: auto;
-        min-height: 36px;
-        padding: 6px 12px;
-        user-select: none;
-      }
-
-      .menu-toggle:focus-visible,
-      .menu-toggle-input:focus-visible + .menu-toggle {
-        outline: 2px solid var(--blue);
-        outline-offset: 2px;
-      }
-
-      .menu-toggle-input:checked + .menu-toggle {
-        background: #3d2860;
+      .page-name {
+        padding-left: 8px;
       }
 
       .site-menu {
-        display: none;
-        flex: 1 1 100%;
-        width: 100%;
+        left: 8px;
+        max-width: none;
+        padding: 12px;
+        right: 8px;
+        top: calc(100% + 4px);
+        width: auto;
       }
 
-      .menu-toggle-input:checked ~ .site-menu {
-        border-top: 1px solid rgba(73, 54, 95, .7);
-        display: flex;
+      .site-menu nav {
         flex-direction: column;
+        flex-wrap: nowrap;
         gap: 12px;
-        padding: 10px 0 4px;
-      }
-
-      header nav {
-        flex-wrap: wrap;
-        gap: 4px;
         max-width: 100%;
         overflow: visible;
-        width: 100%;
       }
 
-      header nav a {
+      .nav-group,
+      .nav-group-demo {
+        flex: 0 0 auto;
+      }
+
+      .nav-links {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .site-menu nav a {
         font-size: 14px;
-        padding: 8px 12px;
+        padding: 9px 10px;
       }
 
-      header nav .nav-sep {
-        display: none;
+      .menu-pop > summary {
+        font-size: 14px;
+        min-height: 40px;
       }
 
-      header nav .nav-group-label {
-        flex: 1 1 100%;
-        margin-top: 6px;
+      .user-name {
+        max-width: 11em;
       }
 
-      .lang-switch,
-      .user-chip {
-        margin-left: 0;
-      }
-
-      .lang-switch button,
-      .user-chip button {
-        font-size: 13px;
-        padding: 6px 12px;
+      .pop-item {
+        font-size: 15px;
+        padding: 10px 12px;
       }
 
       .chat-page .chat-composer,
@@ -2109,91 +2218,95 @@ BASE_TEMPLATE = """
       {% if branding.client_name %}<span class="brand-client" data-brand-client>{{ branding.client_name }}</span> · {% endif %}{{ t.brand }}
     </h1>
     {% if branding.target_market %}<p class="brand-market" data-brand-market>{{ t.brand_market_label }}: {{ branding.target_market }}</p>{% endif %}
-    {# v0.21.0 mobile menu: CSS-only toggle (checkbox + label). Desktop never
-       sees these three elements and shows .site-menu as display: contents,
-       so the header layout is unchanged there. #}
-    <span class="mobile-page-name" data-mobile-page-name aria-label="{{ t.menu_current_page }}">{{ title }}</span>
-    {# v0.21.1: the label is the control (role=button, aria-expanded); the
-       checkbox only holds the open/closed state for the CSS. #}
+    {# Collapsed header (every width): title, current page, Menu button.
+       CSS-only toggle: the visually hidden checkbox holds the open state, the
+       label is the control (role=button, aria-controls, aria-expanded synced
+       by the script; v0.21.1). input -> label -> panel stay siblings (+ / ~). #}
+    <span class="page-name" data-page-name><span class="visually-hidden">{{ t.menu_current_page }} </span>{{ title }}</span>
     <input type="checkbox" id="site-menu-toggle" class="menu-toggle-input" data-menu-toggle
            autocomplete="off" tabindex="-1" aria-hidden="true">
     <label for="site-menu-toggle" class="menu-toggle" data-menu-button role="button" tabindex="0"
            aria-controls="site-menu" aria-expanded="false" aria-label="{{ t.menu_toggle_aria }}">
-      <span class="menu-toggle-icon">☰</span> <span>{{ t.menu_label }}</span>
+      <span class="menu-toggle-icon" aria-hidden="true">☰</span> <span>{{ t.menu_label }}</span>
     </label>
-    <div class="site-menu" id="site-menu" data-site-menu>
-    {% if current_user %}
-    <nav>
-      <a href="/" class="{{ 'active' if active == 'dashboard' }}">
-        {{ t.nav_dashboard }}
-      </a>
-      <a href="/tasks" class="{{ 'active' if active == 'tasks' }}">
-        {{ t.nav_tasks }}
-      </a>
-      <a href="/events" class="{{ 'active' if active == 'events' }}">
-        {{ t.nav_events }}
-      </a>
-      <a href="/artifacts" class="{{ 'active' if active == 'artifacts' }}">
-        {{ t.nav_artifacts }}
-      </a>
-      <a href="/chat" class="{{ 'active' if active == 'chat' }}">
-        {{ t.nav_chat }}
-      </a>
-      <span class="nav-sep" aria-hidden="true"></span>
-      <span class="nav-group-label">{{ t.nav_demo_group }}</span>
-      {% for href, key, label in [
-        ('/sales', 'sales', t.nav_sales),
-        ('/content', 'content', t.nav_content),
-        ('/knowledge', 'knowledge', t.nav_knowledge),
-        ('/leads', 'leads', t.nav_leads),
-        ('/campaigns', 'campaigns', t.nav_campaigns),
-        ('/market', 'market', t.nav_market),
-        ('/inbox', 'inbox', t.nav_inbox),
-        ('/audit', 'audit', t.nav_audit),
-        ('/import', 'import', t.nav_import),
-      ] %}
-        <a href="{{ href }}" class="{{ 'active' if active == key }}">{{ label }}</a>
-      {% endfor %}
-      {% if current_user.role == 'admin' %}
-      <span class="nav-sep" aria-hidden="true"></span>
-      <span class="nav-group-label">{{ t.nav_admin_group }}</span>
-      {% for href, key, label in [
-        ('/admin/users', 'admin_users', t.nav_admin_users),
-        ('/admin/approvers', 'admin_approvers', t.nav_admin_approvers),
-        ('/admin/retention', 'admin_retention', t.nav_admin_retention),
-        ('/admin/permissions', 'admin_permissions', t.nav_admin_permissions),
-      ] %}
-        <a href="{{ href }}" class="{{ 'active' if active == key }}">{{ label }}</a>
-      {% endfor %}
+    <div class="site-menu" id="site-menu" data-site-menu role="region" aria-label="{{ t.menu_label }}">
+      <div class="menu-head">
+        {# Language: one compact button (current locale + arrow); the three
+           choices still POST to /locale with csrf_token and next. #}
+        <details class="menu-pop lang-pop" data-menu-pop data-lang-menu>
+          <summary aria-controls="lang-menu-panel"><span class="visually-hidden">{{ t.lang_menu_prefix }}</span><span data-lang-current>{{ locale_short }}</span> <span class="pop-caret" aria-hidden="true">▾</span></summary>
+          <div class="pop-panel" id="lang-menu-panel" role="group" aria-label="{{ t.lang_label }}">
+            {% for code, label in locale_choices %}
+            <form method="post" action="/locale">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="locale" value="{{ code }}">
+              <input type="hidden" name="next" value="{{ next_path }}">
+              <button type="submit" class="pop-item{{ ' active' if locale == code }}" lang="{{ code }}"
+                      {% if locale == code %}aria-current="true"{% endif %}>{{ label }}</button>
+            </form>
+            {% endfor %}
+          </div>
+        </details>
+        {% if current_user %}
+        {# Account (top right of the panel): username; opens role + Sign out. #}
+        <details class="menu-pop user-pop user-chip" data-menu-pop data-current-user="{{ current_user.username }}">
+          <summary aria-controls="user-menu-panel"><span class="visually-hidden">{{ t.account_menu_prefix }}</span><span class="user-name">{{ current_user.username }}</span> <span class="pop-caret" aria-hidden="true">▾</span></summary>
+          <div class="pop-panel" id="user-menu-panel" role="group" aria-label="{{ t.account_signed_in_as }}">
+            <p class="pop-meta">{{ t.account_signed_in_as }}<strong>{{ current_user.username }}</strong></p>
+            <p class="pop-meta" data-current-role>{{ t.account_role }}<strong>{{ t['role_' ~ current_user.role] }}</strong></p>
+            <div class="pop-sep" aria-hidden="true"></div>
+            <form method="post" action="/logout">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="pop-item">{{ t.auth_logout }}</button>
+            </form>
+          </div>
+        </details>
+        {% endif %}
+      </div>
+      {% if current_user %}
+      <nav aria-label="{{ t.menu_nav_aria }}">
+        {% set nav_groups = [
+          ('main', t.nav_main_group, [
+            ('/', 'dashboard', t.nav_dashboard),
+            ('/tasks', 'tasks', t.nav_tasks),
+            ('/events', 'events', t.nav_events),
+            ('/artifacts', 'artifacts', t.nav_artifacts),
+            ('/chat', 'chat', t.nav_chat),
+          ]),
+          ('demo', t.nav_demo_group, [
+            ('/sales', 'sales', t.nav_sales),
+            ('/content', 'content', t.nav_content),
+            ('/knowledge', 'knowledge', t.nav_knowledge),
+            ('/leads', 'leads', t.nav_leads),
+            ('/campaigns', 'campaigns', t.nav_campaigns),
+            ('/market', 'market', t.nav_market),
+            ('/inbox', 'inbox', t.nav_inbox),
+            ('/audit', 'audit', t.nav_audit),
+            ('/import', 'import', t.nav_import),
+          ]),
+        ] %}
+        {% if current_user.role == 'admin' %}
+        {% set nav_groups = nav_groups + [
+          ('admin', t.nav_admin_group, [
+            ('/admin/users', 'admin_users', t.nav_admin_users),
+            ('/admin/approvers', 'admin_approvers', t.nav_admin_approvers),
+            ('/admin/retention', 'admin_retention', t.nav_admin_retention),
+            ('/admin/permissions', 'admin_permissions', t.nav_admin_permissions),
+          ]),
+        ] %}
+        {% endif %}
+        {% for group, heading, links in nav_groups %}
+        <div class="nav-group nav-group-{{ group }}" role="group" aria-labelledby="nav-group-{{ group }}" data-nav-group="{{ group }}">
+          <span class="nav-group-label" id="nav-group-{{ group }}">{{ heading }}</span>
+          <div class="nav-links">
+            {% for href, key, label in links %}
+            <a href="{{ href }}" class="{{ 'active' if active == key }}"{% if active == key %} aria-current="page"{% endif %}>{{ label }}</a>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </nav>
       {% endif %}
-    </nav>
-    {% endif %}
-    <div class="lang-switch" aria-label="{{ t.lang_label }}">
-      <span class="lang-switch-label">{{ t.lang_label }}</span>
-      {% for code, label in locale_choices %}
-        <form method="post" action="/locale">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <input type="hidden" name="locale" value="{{ code }}">
-          <input type="hidden" name="next" value="{{ next_path }}">
-          <button
-            type="submit"
-            class="{{ 'active' if locale == code else '' }}"
-            {% if locale == code %}aria-current="true"{% endif %}
-          >
-            {{ label }}
-          </button>
-        </form>
-      {% endfor %}
-    </div>
-    {% if current_user %}
-    <div class="user-chip" data-current-user="{{ current_user.username }}">
-      <span>{{ current_user.username }} · {{ t['role_' ~ current_user.role] }}</span>
-      <form method="post" action="/logout">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit">{{ t.auth_logout }}</button>
-      </form>
-    </div>
-    {% endif %}
     </div>
   </header>
   <main>
@@ -2204,15 +2317,25 @@ BASE_TEMPLATE = """
     <span class="version-chip" data-app-version>ORCH · {{ t.footer_version }} {{ app_version }}</span>
   </footer>
   <script>
-    // v0.21.0 mobile menu: keep aria-expanded (on the label/button that acts
-    // as the control, v0.21.1) in sync and close the menu after a link is
-    // chosen (tapping the label works without JS).
+    // Header menu (every width; v0.21.0 phone menu, v0.21.1 aria on the
+    // label). Without JS the label toggles the checkbox and the <details>
+    // popups open on their own; this only keeps aria-expanded on the label in
+    // sync and adds: keyboard Enter/Space on the label, one popup open at a
+    // time, close after a link is chosen, Esc (innermost popup first, then the
+    // menu) and click-outside.
     (function () {
       var toggle = document.getElementById("site-menu-toggle");
       var button = document.querySelector("[data-menu-button]");
       var menu = document.getElementById("site-menu");
       if (!toggle || !button || !menu) return;
-      function sync() { button.setAttribute("aria-expanded", toggle.checked ? "true" : "false"); }
+      var pops = Array.prototype.slice.call(menu.querySelectorAll("details[data-menu-pop]"));
+      function closePops(except) {
+        pops.forEach(function (pop) { if (pop !== except) pop.open = false; });
+      }
+      function sync() {
+        button.setAttribute("aria-expanded", toggle.checked ? "true" : "false");
+        if (!toggle.checked) closePops(null);
+      }
       function close() { toggle.checked = false; sync(); }
       toggle.addEventListener("change", sync);
       button.addEventListener("keydown", function (event) {
@@ -2222,11 +2345,28 @@ BASE_TEMPLATE = """
           sync();
         }
       });
+      pops.forEach(function (pop) {
+        pop.addEventListener("toggle", function () { if (pop.open) closePops(pop); });
+      });
       menu.addEventListener("click", function (event) {
         if (event.target.closest("a")) close();
       });
       document.addEventListener("keydown", function (event) {
-        if (event.key === "Escape" && toggle.checked) { close(); button.focus(); }
+        if (event.key !== "Escape") return;
+        var open = pops.filter(function (pop) { return pop.open; })[0];
+        if (open) {
+          open.open = false;
+          open.querySelector("summary").focus();
+        } else if (toggle.checked) {
+          close();
+          button.focus();
+        }
+      });
+      document.addEventListener("click", function (event) {
+        var target = event.target;
+        if (!toggle.checked || target === toggle || button.contains(target)) return;
+        if (!menu.contains(target)) { close(); return; }
+        pops.forEach(function (pop) { if (pop.open && !pop.contains(target)) pop.open = false; });
       });
       window.addEventListener("pageshow", sync);
       sync();
@@ -3239,6 +3379,7 @@ def render_page(title, active, body_template, **context):
         html_lang=html_lang_for(locale),
         csrf_token=csrf_token,
         locale_choices=locale_choices,
+        locale_short=LOCALE_SHORT_LABELS[locale],
         next_path=safe_next_path(request.path),
         current_user=g.get("user"),
         branding=deploy_config.load_branding(),
