@@ -50,7 +50,7 @@ import orch_db
 PROJECT_ROOT = Path(__file__).resolve().parent
 AUTH_DIR = Path(os.getenv("ORCH_AUTH_DIR") or (PROJECT_ROOT / "state"))
 
-AUTH_VERSION = "v0.21.1"   # app version recorded in audit rows
+AUTH_VERSION = "v0.21.2"   # app version recorded in audit rows
 ROLES = ("admin", "editor", "approver")
 USERNAME_PATTERN = re.compile(r"^[\w .@'\-]{2,40}$", re.UNICODE)
 MIN_PASSWORD_CHARS = 10

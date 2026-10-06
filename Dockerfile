@@ -1,4 +1,4 @@
-# ORCH v0.21.1 (WP-ORCH-12) - single-container deployment.
+# ORCH v0.21.2 (WP-ORCH-12) - single-container deployment.
 # Secrets are never baked in: OPENROUTER_API_KEY comes from the environment
 # (.env via docker compose); the session key is generated on first start and
 # kept in the state volume (state/secret_key, 0600).

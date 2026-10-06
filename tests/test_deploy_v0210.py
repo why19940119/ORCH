@@ -51,7 +51,7 @@ class HealthzTests(TempStateMixin, unittest.TestCase):
         response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(),
-                         {"ok": True, "version": "v0.21.1", "db": "ok"})
+                         {"ok": True, "version": "v0.21.2", "db": "ok"})
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         self.assertTrue((self.state / "orch.db").is_file())
         orch_auth.bootstrap_admin("First Admin", PASSWORD)
@@ -211,7 +211,7 @@ class BrandingTests(unittest.TestCase):
         t = ui_strings("zh-Hant")
         self.assertIn(f'data-brand-market>{t["brand_market_label"]}: Hong Kong', html)
         self.assertIn('src="/branding/logo"', html)
-        self.assertIn(f"data-app-version>ORCH · {t['footer_version']} v0.21.1", html)
+        self.assertIn(f"data-app-version>ORCH · {t['footer_version']} v0.21.2", html)
         self.assertEqual(logo.status_code, 200)
         self.assertEqual(logo.headers["X-Content-Type-Options"], "nosniff")
         with patch.object(deploy_config, "STATE_DIR", self.tmp):
@@ -314,9 +314,9 @@ class DockerFilesTests(unittest.TestCase):
 
 class VersionAndI18nTests(unittest.TestCase):
     def test_version(self):
-        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.21.1")
-        self.assertEqual(orch_ui.APP_VERSION, "v0.21.1")
-        self.assertIn("v0.21.1", (PROJECT_ROOT / "README.md").read_text(encoding="utf-8"))
+        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.21.2")
+        self.assertEqual(orch_ui.APP_VERSION, "v0.21.2")
+        self.assertIn("v0.21.2", (PROJECT_ROOT / "README.md").read_text(encoding="utf-8"))
 
     def test_i18n_parity(self):
         keys = {loc: set(ui_strings(loc)) for loc in SUPPORTED_LOCALES}

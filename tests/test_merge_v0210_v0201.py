@@ -38,7 +38,7 @@ class SweepOnSqliteTests(unittest.TestCase):
         rows = [r for r in orch_db.read_log(orch_auth.audit_file())
                 if r["event"] == "account_change_auto_closed"]
         self.assertIn(stale["id"], [r["change_id"] for r in rows])
-        self.assertTrue(all(r["audit_version"] == "v0.21.1" for r in rows))
+        self.assertTrue(all(r["audit_version"] == "v0.21.2" for r in rows))
         # SQLite only: no legacy JSON audit/store files are written
         self.assertFalse((Path(self.dir) / "auth_audit.jsonl").exists())
         self.assertFalse((Path(self.dir) / "auth.json").exists())
