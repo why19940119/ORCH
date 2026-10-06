@@ -163,9 +163,13 @@ class MigrationTests(TempState):
             orch_db.main(["--state-dir", str(self.state), "migrate"])
         self.assertIn("nothing to migrate", again.getvalue())
         self.assertEqual(orch_db.summary(self.state)["counts"], counts)
-        # the same file dropped back in is recognised by sha256 and skipped
+        # the same file dropped back in: refused (DB has data), file untouched
         shutil.copy2(FIXTURE / "events.jsonl", self.events)
-        report = orch_db.migrate(self.state)
+        with self.assertRaises(orch_db.MigrationRefused):
+            orch_db.migrate(self.state)
+        self.assertTrue(self.events.is_file())
+        # --force: recognised by sha256 and skipped
+        report = orch_db.migrate(self.state, force=True)
         self.assertTrue(report[0]["skipped_already_imported"])
         self.assertEqual(orch_db.summary(self.state)["counts"], counts)
         # export (rollback to v0.20 files) round-trips the content
@@ -207,16 +211,107 @@ class MigrationTests(TempState):
         with self.assertRaises(ValueError):
             orch_db.migrate(self.state)
         self.assertEqual(len(orch_db.legacy_files(self.state)), 7)
-        self.assertEqual(list(self.state.glob("json-backup-*/*")), [])
-        conn = sqlite3.connect(str(self.state / "orch.db"))
-        try:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM task_status").fetchone()[0], 0)
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM migrations").fetchone()[0], 0)
-        finally:
-            conn.close()
+        # nothing left behind: no (empty) backup folder, no empty orch.db
+        self.assertEqual(list(self.state.glob("json-backup-*")), [])
+        for name in ("orch.db", "orch.db-wal", "orch.db-shm"):
+            self.assertFalse((self.state / name).exists(), name)
+        # the same through the auto path (first open)
+        with self.assertRaises(ValueError):
+            orch_db.load(self.status)
+        self.assertEqual(list(self.state.glob("json-backup-*")), [])
+        self.assertFalse((self.state / "orch.db").exists())
         # fixing the bad file lets the next open migrate everything
         shutil.copy2(FIXTURE / "ecom_import.json", self.state / "ecom_import.json")
         self.assertEqual(len(orch_db.migrate(self.state)), 7)
+
+
+class MigrationSafetyTests(TempState):
+    """Review fix 1: auto-migration only into an EMPTY DB; --force backs up
+    first; log re-imports are idempotent."""
+
+    def seed_db(self, tasks=25, events=82):
+        orch_db.save(self.status, {f"task_{i:03d}": {"status": "done", "approval_status": None}
+                                   for i in range(tasks)})
+        for i in range(events):
+            orch_db.append(self.events, {"timestamp": f"2026-09-29T00:00:{i % 60:02d}",
+                                         "event": "task_done", "task_id": f"task_{i:03d}", "n": i})
+
+    def counts(self):
+        return orch_db.summary(self.state)["counts"]
+
+    def test_stray_status_json_never_replaces_rows(self):
+        self.seed_db()
+        before = orch_db.load(self.status)
+        self.status.write_text(json.dumps({"task_999": {"status": "pending"}}), encoding="utf-8")
+        with self.assertLogs("orch.db", "ERROR") as logged:
+            self.assertEqual(orch_db.load(self.status), before)      # auto path: refused
+            orch_db.load(self.status)                                # warned only once
+        self.assertEqual(len(logged.records), 1)
+        self.assertIn("REFUSED", logged.output[0])
+        self.assertIn("task_status.json", logged.output[0])
+        self.assertEqual(self.counts()["task_status"], 25)
+        self.assertTrue(self.status.is_file())                       # left untouched
+        self.assertEqual(list(self.state.glob("json-backup-*")), [])
+        # explicit migrate without --force: refused too, CLI exits 1
+        with self.assertRaises(orch_db.MigrationRefused):
+            orch_db.migrate(self.state)
+        err = io.StringIO()
+        with patch("sys.stderr", err), redirect_stdout(io.StringIO()), \
+                patch.dict(os.environ, {"ORCH_AUTH_DIR": str(self.state)}):
+            self.assertEqual(orch_db.main(["--state-dir", str(self.state), "migrate"]), 1)
+        self.assertIn("migrate --force", err.getvalue())
+        self.assertEqual(self.counts()["task_status"], 25)
+
+    def test_startup_auto_migrate_refuses_without_crashing(self):
+        self.seed_db(tasks=3, events=2)
+        self.status.write_text(json.dumps({"x": {}}), encoding="utf-8")
+        orch_db._refusal_warned.clear()
+        with self.assertLogs("orch.db", "ERROR"):
+            self.assertEqual(orch_db.auto_migrate(self.state), [])
+        self.assertEqual(self.counts()["task_status"], 3)
+
+    def test_force_backs_up_first_and_upserts_without_deleting(self):
+        self.seed_db()
+        self.status.write_text(json.dumps({"task_000": {"status": "pending"},
+                                           "task_999": {"status": "pending"}}), encoding="utf-8")
+        report = orch_db.migrate(self.state, force=True)
+        backup = Path(report[0]["db_backup"])
+        self.assertTrue(backup.name.startswith("orch.db.pre-migrate-"))
+        self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600)
+        conn = sqlite3.connect(str(backup))
+        try:   # the backup holds the state from BEFORE the import
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM task_status").fetchone()[0], 25)
+            self.assertEqual(conn.execute("SELECT data FROM task_status WHERE task_id='task_000'")
+                             .fetchone()[0], json.dumps({"status": "done", "approval_status": None}))
+        finally:
+            conn.close()
+        statuses = orch_db.load(self.status)
+        self.assertEqual(len(statuses), 26)                           # nothing deleted
+        self.assertEqual(statuses["task_000"], {"status": "pending"})
+        self.assertFalse(self.status.exists())                        # moved to json-backup-*
+
+    def test_log_reimport_and_export_round_trip_are_idempotent(self):
+        self.seed_db(tasks=2, events=82)
+        out = self.tmp / "export"
+        orch_db.export_json(self.state, out)
+        before = self.counts()
+        # re-import the export into the same (non-empty) DB, twice
+        for attempt in range(2):
+            for f in out.iterdir():
+                shutil.copy2(f, self.state / f.name)
+            # change the bytes so the sha256 shortcut cannot hide duplicates
+            with self.events.open("a", encoding="utf-8") as fh:
+                fh.write("\n" * (attempt + 1))
+            report = orch_db.migrate(self.state, force=True)
+            events_row = [r for r in report if r["file"] == "events.jsonl"][0]
+            self.assertEqual(events_row["records"], 0)
+            self.assertEqual(events_row["duplicates_skipped"], 82)
+            self.assertEqual(self.counts(), before)
+        # genuinely new records (incl. two identical ones) are still appended
+        new = {"timestamp": "2026-09-30T00:00:00", "event": "task_done", "task_id": "z"}
+        self.events.write_text(json.dumps(new) + "\n" + json.dumps(new) + "\n", encoding="utf-8")
+        orch_db.migrate(self.state, force=True)
+        self.assertEqual(self.counts()["events"], 84)
 
 
 # ---------------------------------------------------------------------------

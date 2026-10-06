@@ -1010,16 +1010,24 @@ content-addressed objects + manifests), `uploads/`, `data/import/` CSVs,
 
 ### Migration from v0.20.x
 
-Automatic: the first time the DB is opened (app start, CLI, any read), every
-legacy JSON file in `state/` is moved into `state/json-backup-<UTC>/` and
-imported in the same transaction (a file already imported, by sha256, is
-skipped; on any error the files are moved back and nothing is written).
-Explicitly:
+Automatic, **only into an empty DB**: the first time the DB is opened (app
+start, CLI, any read), every legacy JSON file in `state/` is moved into
+`state/json-backup-<UTC>/` and imported in the same transaction (on any
+error the files are moved back, nothing is written and no empty `orch.db` /
+backup folder is left behind). Once `orch.db` holds data, a JSON file that
+appears in `state/` is **refused**: it stays where it is, nothing is
+imported or deleted, and an `ERROR ... REFUSED to import legacy JSON` line
+is logged (once per process). To import such files on purpose:
+`orch_db.py migrate --force` writes `state/orch.db.pre-migrate-<UTC>` (0600)
+first, then upserts task rows (never deletes), replaces documents and appends
+only log records not already present (deduplicated on their canonical JSON,
+so re-importing a log or an export adds nothing). Explicitly:
 
 ```bash
 # stop the UI first (Ctrl-C), then
 cp -a state state.pre-v0210-backup          # extra safety copy
-.venv/bin/python orch_db.py migrate         # idempotent; prints what it imported
+.venv/bin/python orch_db.py migrate         # empty DB only; prints what it imported
+# .venv/bin/python orch_db.py migrate --force   # non-empty DB: backs up orch.db first
 .venv/bin/python orch_db.py status          # schema version, row counts, migrations
 .venv/bin/python orch_db.py check           # PRAGMA integrity_check
 ```

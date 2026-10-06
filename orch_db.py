@@ -16,11 +16,17 @@ addressing state by its historical file path (``state/task_status.json``
 The database lives next to the named file (``Path(path).parent/orch.db``),
 so tests that point the modules at a temp ``state/`` get their own DB.
 
-Legacy JSON files found next to the DB are imported automatically when the
-DB is opened (one-time migration, or a deliberate restore): each file is
-first moved into ``json-backup-<UTC timestamp>/`` and then imported in the
-same write transaction; a file whose sha256 was already imported is skipped
-(idempotent). ``python orch_db.py migrate`` does the same explicitly.
+Legacy JSON files found next to the DB are imported automatically only
+while the DB is still EMPTY (the one-time v0.20 -> v0.21 migration): each
+file is first moved into ``json-backup-<UTC timestamp>/`` and then imported
+in the same write transaction. Once the DB holds data, a stray JSON file is
+left untouched and a loud warning is logged instead - it can never replace
+or delete rows. ``python orch_db.py migrate --force`` imports into a
+non-empty DB deliberately: it first writes a backup of orch.db, upserts task
+rows (never deletes), replaces documents, and appends only log records that
+are not already present (deduplicated on their canonical JSON), so running
+it twice or re-importing an export adds nothing. A file whose sha256 was
+already imported is skipped.
 
 Transactions: ``transaction(path)`` opens ``BEGIN IMMEDIATE`` (one writer
 at a time across processes) and is re-entrant per thread; every load/save
@@ -31,15 +37,19 @@ their audit rows commit (or roll back) together.
 import argparse
 import hashlib
 import json
+import logging
 import os
 import shutil
 import sqlite3
 import sys
 import threading
 import time
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+
+LOG = logging.getLogger("orch.db")
 
 SCHEMA_VERSION = 1
 DB_NAME = "orch.db"
@@ -114,6 +124,12 @@ BEGIN SELECT RAISE(ABORT, 'auth_audit is append-only'); END;
 """
 
 _local = threading.local()
+_refusal_warned = set()
+DATA_TABLES = ("task_status", "docs") + ("events", "auth_audit", "chat_usage")
+
+
+class MigrationRefused(RuntimeError):
+    """Legacy JSON files next to a DB that already holds data."""
 
 
 def _utc():
@@ -198,14 +214,44 @@ def legacy_files(directory):
     return [directory / name for name in MANAGED if (directory / name).is_file()]
 
 
+def _remove_db_files(db_file):
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            os.unlink(f"{db_file}{suffix}")
+        except FileNotFoundError:
+            pass
+
+
+def _warn_refused(db_file, exc):
+    """Log a refused auto-migration once per process and file set."""
+    files = []
+    for path in legacy_files(db_file.parent):
+        try:
+            st = path.stat()
+            files.append((path.name, st.st_size, st.st_mtime_ns))
+        except OSError:
+            continue
+    key = (str(db_file), tuple(files))
+    if key in _refusal_warned:
+        return
+    _refusal_warned.add(key)
+    LOG.error("%s", exc)
+
+
 def _open(db_file):
+    created = not db_file.exists()
     conn = _connect(db_file)
     try:
         _ensure_schema(conn)
         if legacy_files(db_file.parent):
-            _migrate_locked(conn, db_file.parent)
+            try:
+                _migrate_locked(conn, db_file.parent)
+            except MigrationRefused as exc:
+                _warn_refused(db_file, exc)
     except BaseException:
         conn.close()
+        if created:
+            _remove_db_files(db_file)   # no empty orch.db left behind
         raise
     return conn
 
@@ -476,9 +522,52 @@ def _parse_legacy(path):
     return json.loads(text)
 
 
+def _is_empty(conn):
+    return all(conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() is None
+               for table in DATA_TABLES)
+
+
+def _canonical(record):
+    return json.dumps(record, ensure_ascii=False, sort_keys=True)
+
+
+def _upsert_statuses(conn, statuses):
+    """Migration import: insert/update the file's task rows, never delete."""
+    for task_id, state in statuses.items():
+        conn.execute(
+            "INSERT INTO task_status (task_id, status, approval_status, data, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET "
+            "status=excluded.status, approval_status=excluded.approval_status, "
+            "data=excluded.data, updated_at=excluded.updated_at",
+            _status_row(task_id, state),
+        )
+
+
+def _append_new_logs(conn, table, records):
+    """Append only records not already in ``table`` (multiset on canonical
+    JSON), so re-importing a log or an export never duplicates rows."""
+    present = Counter(_canonical(json.loads(row[0]))
+                      for row in conn.execute(f"SELECT data FROM {table}"))
+    count = skipped = 0
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        key = _canonical(record)
+        if present[key] > 0:
+            present[key] -= 1
+            skipped += 1
+            continue
+        conn.execute(*_log_row(table, record))
+        count += 1
+    return count, skipped
+
+
+def _stamp():
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
 def _backup_dir(directory):
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    base = Path(directory) / f"json-backup-{stamp}"
+    base = Path(directory) / f"json-backup-{_stamp()}"
     candidate, n = base, 1
     while candidate.exists():
         n += 1
@@ -487,18 +576,53 @@ def _backup_dir(directory):
     return candidate
 
 
-def _migrate_locked(conn, directory):
+def _db_backup_locked(conn, directory):
+    """Copy of the DB taken while the migration holds the write lock. A
+    second (WAL reader) connection copies the committed state, so nothing
+    can change between the backup and the import."""
+    target = Path(directory) / f"orch.db.pre-migrate-{_stamp()}"
+    n = 1
+    while target.exists():
+        n += 1
+        target = Path(directory) / f"orch.db.pre-migrate-{_stamp()}-{n}"
+    os.close(os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    reader = sqlite3.connect(str(db_path_for(directory)), timeout=BUSY_TIMEOUT_MS / 1000)
+    dest = sqlite3.connect(str(target))
+    try:
+        reader.backup(dest)
+    finally:
+        dest.close()
+        reader.close()
+    os.chmod(target, 0o600)
+    return target
+
+
+def _migrate_locked(conn, directory, force=False):
     """Import every legacy file in ``directory`` (under BEGIN IMMEDIATE).
-    Files are moved into a timestamped backup folder first; if anything
-    fails the files are moved back and nothing is committed."""
+
+    Only into an empty DB unless ``force`` (then a DB backup is written
+    first). Files are moved into a timestamped backup folder first; if
+    anything fails the files are moved back and nothing is committed."""
     conn.execute("BEGIN IMMEDIATE")
     moved = []
     report = []
+    backup = None
     try:
         files = legacy_files(directory)     # re-check under the write lock
         if not files:
             conn.execute("COMMIT")
             return report
+        db_backup = None
+        if not _is_empty(conn):
+            if not force:
+                names = ", ".join(path.name for path in files)
+                raise MigrationRefused(
+                    f"REFUSED to import legacy JSON ({names}) into {db_path_for(directory)}: "
+                    "the database already holds data, so the files were left untouched and "
+                    "NOT imported. Move them away, or run `python orch_db.py --state-dir "
+                    f"{directory} migrate --force` (backs up orch.db first) to import them "
+                    "on purpose.")
+            db_backup = _db_backup_locked(conn, directory)
         backup = _backup_dir(directory)
         for path in files:
             target = backup / path.name
@@ -509,12 +633,12 @@ def _migrate_locked(conn, directory):
             digest = _sha256(target)
             seen = conn.execute("SELECT 1 FROM migrations WHERE name=? AND sha256=?",
                                 (original.name, digest)).fetchone()
-            count = 0
+            count = duplicates = 0
             if not seen:
                 data = _parse_legacy(target)
                 if kind == "status":
                     data = data if isinstance(data, dict) else {}
-                    _write_statuses(conn, data)
+                    _upsert_statuses(conn, data)
                     count = len(data)
                 elif kind == "doc":
                     if data is not None:
@@ -524,16 +648,15 @@ def _migrate_locked(conn, directory):
                             "updated_at=excluded.updated_at", (name, _dumps(data), _utc()))
                         count = 1
                 else:
-                    for record in data:
-                        if isinstance(record, dict):
-                            conn.execute(*_log_row(name, record))
-                            count += 1
+                    count, duplicates = _append_new_logs(conn, name, data)
                 conn.execute(
                     "INSERT INTO migrations (name, sha256, records, backup_path, migrated_at) "
                     "VALUES (?, ?, ?, ?, ?)",
                     (original.name, digest, count, str(target), _utc()))
             report.append({"file": original.name, "records": count,
-                           "skipped_already_imported": bool(seen), "backup": str(target)})
+                           "duplicates_skipped": duplicates,
+                           "skipped_already_imported": bool(seen), "backup": str(target),
+                           "db_backup": str(db_backup) if db_backup else None})
         conn.execute("INSERT OR REPLACE INTO meta VALUES ('last_migration_utc', ?)", (_utc(),))
         conn.execute("COMMIT")
     except BaseException:
@@ -546,19 +669,46 @@ def _migrate_locked(conn, directory):
                 os.replace(target, original)
             except OSError:
                 pass
+        if backup is not None:
+            try:
+                backup.rmdir()          # only if empty: no stray empty folder
+            except OSError:
+                pass
         raise
     return report
 
 
-def migrate(directory):
-    """Explicit migration (the CLI); returns the per-file report."""
+def migrate(directory, force=False):
+    """Explicit migration (CLI / startup); returns the per-file report.
+    Raises MigrationRefused when legacy files sit next to a non-empty DB
+    and ``force`` is not set."""
     db_file = db_path_for(Path(directory))
+    created = not db_file.exists()
+    if created and not legacy_files(directory):
+        return []                       # nothing to do; do not create a DB
     conn = _connect(db_file)
     try:
         _ensure_schema(conn)
-        return _migrate_locked(conn, Path(directory))
+        return _migrate_locked(conn, Path(directory), force=force)
+    except MigrationRefused:
+        raise
+    except BaseException:
+        conn.close()
+        if created:
+            _remove_db_files(db_file)
+        raise
     finally:
         conn.close()
+
+
+def auto_migrate(directory):
+    """Startup hook: migrate into an empty DB, otherwise log the refusal
+    loudly and keep serving from the DB (the files stay untouched)."""
+    try:
+        return migrate(directory)
+    except MigrationRefused as exc:
+        _warn_refused(db_path_for(Path(directory)), exc)
+        return []
 
 
 def schema_version(path):
@@ -652,7 +802,10 @@ def main(argv=None):
     parser.add_argument("--state-dir", default=None,
                         help="state directory (default: ./state or ORCH_STATE_DIR)")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("migrate", help="import state/*.json into state/orch.db (idempotent)")
+    m = sub.add_parser("migrate", help="import state/*.json into an empty state/orch.db")
+    m.add_argument("--force", action="store_true",
+                   help="also import into a DB that already holds data (backs up orch.db "
+                        "first; task rows upserted, never deleted; log rows deduplicated)")
     sub.add_parser("status", help="schema version, row counts, migrations")
     sub.add_parser("check", help="PRAGMA integrity_check")
     b = sub.add_parser("backup", help="consistent copy of orch.db (SQLite backup API)")
@@ -665,15 +818,26 @@ def main(argv=None):
 
     if args.command == "migrate":
         dirs = [state_dir] + ([auth_dir] if auth_dir.resolve() != state_dir.resolve() else [])
+        status = 0
         for directory in dirs:
-            report = migrate(directory)
-            print(f"{db_path_for(directory)}: schema_version {schema_version(directory)}")
+            try:
+                report = migrate(directory, force=args.force)
+            except MigrationRefused as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                status = 1
+                continue
+            if db_path_for(directory).exists():
+                print(f"{db_path_for(directory)}: schema_version {schema_version(directory)}")
             if not report:
-                print("  nothing to migrate (no legacy JSON files)")
+                print(f"{directory}: nothing to migrate (no legacy JSON files)")
+            if report and report[0].get("db_backup"):
+                print(f"  database backed up first: {report[0]['db_backup']}")
             for row in report:
                 note = " (already imported, skipped)" if row["skipped_already_imported"] else ""
+                if row.get("duplicates_skipped"):
+                    note += f" ({row['duplicates_skipped']} duplicate(s) skipped)"
                 print(f"  {row['file']}: {row['records']} record(s){note}; backup {row['backup']}")
-        return 0
+        return status
     if args.command == "status":
         print(json.dumps({"summary": summary(state_dir),
                           "migrations": migration_history(state_dir)},

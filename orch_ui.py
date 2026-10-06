@@ -4563,9 +4563,10 @@ admin_ui.register(
 
 
 def startup():
-    """v0.21.0: one-time JSON -> SQLite migration before serving."""
+    """v0.21.0: one-time JSON -> SQLite migration before serving (only into
+    an empty DB; stray JSON next to a DB with data is refused and logged)."""
     for directory in {Path(STATUS_FILE).parent, Path(orch_auth.AUTH_DIR)}:
-        for row in orch_db.migrate(directory):
+        for row in orch_db.auto_migrate(directory):
             print(f"migrated {row['file']}: {row['records']} record(s) "
                   f"-> {orch_db.db_path_for(directory)} (backup {row['backup']})",
                   file=sys.stderr)
