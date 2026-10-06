@@ -168,6 +168,17 @@ class SetupTokenTests(unittest.TestCase):
             self.assertEqual(self.post().status_code, 302)
         self.assertTrue(orch_auth.has_users())
 
+    def test_docker_proxy_warning_even_with_users(self):
+        orch_auth.bootstrap_admin("First Admin", PASSWORD)
+        real_exists = Path.exists
+        with self.env(ORCH_PROXY_FIX="1", ORCH_TRUSTED_PROXY=""), \
+                patch.object(Path, "exists", lambda p: str(p) == "/.dockerenv" or real_exists(p)):
+            err = io.StringIO()
+            with redirect_stderr(err):
+                orch_ui.setup_warnings()
+        self.assertIn("ORCH_TRUSTED_PROXY=172.16.0.0/12", err.getvalue())
+        self.assertNotIn("one-time token", err.getvalue())         # admin exists
+
     def test_docs_mark_token_required(self):
         guide = (orch_ui.PROJECT_ROOT / "docs" / "安裝指南.md").read_text(encoding="utf-8")
         line = next(l for l in guide.splitlines() if l.startswith("| `ORCH_SETUP_TOKEN`"))

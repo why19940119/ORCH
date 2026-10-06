@@ -4576,7 +4576,13 @@ def startup():
 
 
 def setup_warnings():
-    """Startup warnings about the first-admin wizard (/setup)."""
+    """Startup warnings: proxy trust in Docker, first-admin wizard (/setup)."""
+    if deploy_config.proxy_hops() and not os.getenv("ORCH_TRUSTED_PROXY") \
+            and Path("/.dockerenv").exists():
+        print("ORCH WARNING: ORCH_PROXY_FIX is set inside Docker but ORCH_TRUSTED_PROXY is "
+              "not: the proxy reaches the container from the Docker bridge, so set e.g. "
+              "ORCH_TRUSTED_PROXY=172.16.0.0/12 (docs/反向代理與HTTPS.md).",
+              file=sys.stderr, flush=True)
     if orch_auth.has_users():
         return
     token, source = deploy_config.effective_setup_token()   # prints a generated one
@@ -4587,12 +4593,6 @@ def setup_warnings():
               "or run `python orch_auth.py create-admin`.", file=sys.stderr, flush=True)
     elif source == "env":
         print("ORCH: no admin account yet - /setup requires ORCH_SETUP_TOKEN.",
-              file=sys.stderr, flush=True)
-    if deploy_config.proxy_hops() and not os.getenv("ORCH_TRUSTED_PROXY") \
-            and Path("/.dockerenv").exists():
-        print("ORCH WARNING: ORCH_PROXY_FIX is set inside Docker but ORCH_TRUSTED_PROXY is "
-              "not: the proxy reaches the container from the Docker bridge, so set e.g. "
-              "ORCH_TRUSTED_PROXY=172.16.0.0/12 (docs/反向代理與HTTPS.md).",
               file=sys.stderr, flush=True)
 
 
