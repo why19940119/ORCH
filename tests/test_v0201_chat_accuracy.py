@@ -581,11 +581,11 @@ class ReviewFixPromptAndUiTests(unittest.TestCase):
 
     def test_versions(self):
         # v0.21.0 merge: the app version wins (was v0.20.1 in PR #6).
-        self.assertEqual(orch_auth.AUTH_VERSION, "v0.21.1")
-        self.assertEqual(commerce_import.IMPORT_VERSION, "v0.21.1")
+        self.assertEqual(orch_auth.AUTH_VERSION, "v0.21.2")
+        self.assertEqual(commerce_import.IMPORT_VERSION, "v0.21.2")
         use_temp_auth(self, users=())
         record = orch_auth.audit("test_event", "cli")
-        self.assertEqual(record["audit_version"], "v0.21.1")
+        self.assertEqual(record["audit_version"], "v0.21.2")
 
 
 class ChatDataSourceUiTests(ImportSandbox):
@@ -608,10 +608,11 @@ class ChatDataSourceUiTests(ImportSandbox):
         keys = {code: set(ui_strings(code)) for code in SUPPORTED_LOCALES}
         self.assertEqual(keys["en"], keys["zh-Hant"])
         self.assertEqual(keys["en"], keys["zh-Hans"])
-        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.21.1")
+        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.21.2")
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("v0.20.1", readme)      # changelog line kept
-        self.assertIn("v0.21.1", readme)
+        self.assertIn("v0.21.2", readme)
+        self.assertIn("v0.21.1", readme)      # changelog line kept
 
 
 if __name__ == "__main__":

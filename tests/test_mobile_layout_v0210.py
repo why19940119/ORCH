@@ -2,10 +2,12 @@
 
 Measured in headless Chrome with device-width emulation at 375 / 390 / 430
 for /chat, / and /inbox as an admin: document.scrollWidth <= innerWidth,
-static opaque header, stacked composer, 16px fields.
-The header is a compact bar (ORCH, current page, Menu button); nav, language
-picker and the user line / Sign out sit in a collapsible menu that works
-without JavaScript (checkbox + label), and desktop (>720px) is unchanged.
+non-sticky opaque header, stacked composer, 16px fields.
+The header is a compact bar (ORCH, current page, Menu button); nav, the
+language popup and the account popup (role, Sign out) sit in a collapsible
+menu panel that works without JavaScript (checkbox + label, <details>).
+Since the collapsed header menu the desktop uses the same bar and panel
+(tests/test_header_menu.py); on phones the panel spans the width.
 These tests pin the CSS and markup that produce that result.
 """
 
@@ -51,15 +53,21 @@ class MobileCssContractTests(unittest.TestCase):
         for later in ("position: sticky", "rgba(23, 16, 32"):
             self.assertNotIn(later, block)
 
-    def test_header_static_opaque_nav_wraps_inside_menu(self):
+    def test_header_not_sticky_opaque_nav_stacks_inside_menu(self):
         block = mobile_block()
         header = rule(block, "header")
-        for decl in ("position: static;", "background: #171020;", "backdrop-filter: none;",
-                     "-webkit-backdrop-filter: none;", "z-index: auto;"):
+        # not sticky (no pinned header over the page); relative only anchors the panel
+        for decl in ("position: relative;", "background: #171020;", "backdrop-filter: none;",
+                     "-webkit-backdrop-filter: none;", "flex-wrap: nowrap;"):
             self.assertIn(decl, header)
-        nav = rule(block, "header nav")
-        for decl in ("flex-wrap: wrap;", "overflow: visible;", "max-width: 100%;"):
+        # above the page content (the panel is a child of the header)
+        z = int(re.search(r"z-index: (\d+);", header).group(1))
+        self.assertGreater(z, 50)
+        nav = rule(block, ".site-menu nav")
+        for decl in ("flex-direction: column;", "overflow: visible;", "max-width: 100%;"):
             self.assertIn(decl, nav)
+        # two link columns per group; no fixed widths that could overflow 375px
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", rule(block, ".nav-links"))
 
     def test_composer_stacked_and_not_overlapping(self):
         block = mobile_block()
@@ -101,6 +109,11 @@ def desktop_css():
 
 
 MENU_LABELS = {"en": "Menu", "zh-Hant": "選單", "zh-Hans": "菜单"}
+
+
+def site_menu(html):
+    """Markup of the collapsible menu panel (up to the end of the header)."""
+    return html.split('id="site-menu" data-site-menu', 1)[1].split("</header>", 1)[0]
 
 
 class MobileMenuTests(unittest.TestCase):
@@ -148,49 +161,51 @@ class MobileMenuTests(unittest.TestCase):
             header = html.split("<header", 1)[1].split("</header>", 1)[0]
             self.assertIn(f"<span>{label}</span>", header)
             self.assertIn(f'aria-label="{t["menu_toggle_aria"]}"', header)
-            self.assertIn(f'aria-label="{t["menu_current_page"]}"', header)
+            # the page name is announced with a visually hidden "Current page" prefix
+            page_name = re.search(r"<span class=\"page-name\" data-page-name>(.*?)</span>\s*<input",
+                                  header, re.S).group(1)
+            self.assertIn(f'<span class="visually-hidden">{t["menu_current_page"]} </span>', page_name)
             # current page name is the localized page title
             title = re.search(r"<title>(.*?)</title>", html, re.S).group(1)
-            name = re.search(r"data-mobile-page-name[^>]*>(.*?)</span>", header, re.S).group(1)
+            name = page_name.split("</span>", 1)[1]
+            self.assertTrue(name.strip())
             self.assertIn(name.strip(), title)
 
     def test_menu_holds_nav_language_and_logout_with_csrf(self):
         html = self.page()
-        menu = html.split('data-site-menu>', 1)[1].split("</header>", 1)[0]
-        self.assertIn("<nav>", menu)
+        menu = site_menu(html)
+        self.assertIn("<nav aria-label=", menu)
         self.assertIn('href="/admin/users"', menu)
         self.assertIn('action="/locale"', menu)
         logout = re.search(r'<form method="post" action="/logout">.*?</form>', menu, re.S).group(0)
         self.assertRegex(logout, r'name="csrf_token" value="[^"]+"')
         self.assertIn('type="submit"', logout)
 
-    def test_mobile_css_collapses_menu_until_checked(self):
+    def test_phone_panel_spans_the_width(self):
         block = mobile_block()
-        self.assertIn("display: none;", rule(block, ".site-menu"))
-        opened = rule(block, ".menu-toggle-input:checked ~ .site-menu")
-        self.assertIn("display: flex;", opened)
-        self.assertIn("display: inline-flex;", rule(block, ".menu-toggle"))
-        self.assertIn("display: block;", rule(block, ".mobile-page-name"))
-        hidden_input = rule(block, ".menu-toggle-input")
-        # visually hidden but still focusable (no display: none)
-        for decl in ("position: absolute;", "opacity: 0;", "display: block;"):
-            self.assertIn(decl, hidden_input)
-        self.assertIn("outline:", rule(block, ".menu-toggle:focus-visible"))   # the control
-        self.assertIn("outline:", rule(block, ".menu-toggle-input:focus-visible + .menu-toggle"))
+        panel = rule(block, ".site-menu")
+        for decl in ("left: 8px;", "right: 8px;", "width: auto;", "max-width: none;"):
+            self.assertIn(decl, panel)
+        # the collapse itself is shared with desktop (top-level rules), not phone-only
+        self.assertNotIn(".menu-toggle-input:checked ~ .site-menu", block)
+        self.assertNotIn("display: none", panel)
+        # touch-sized controls in the panel
+        self.assertIn("min-height: 40px;", rule(block, ".menu-pop > summary"))
 
-    def test_desktop_keeps_nav_visible_and_hides_toggle(self):
+    def test_toggle_input_visually_hidden_but_focusable(self):
         desktop = desktop_css()
-        self.assertIn("display: contents;", rule(desktop, ".site-menu"))
-        for selector in (".mobile-page-name", ".menu-toggle", ".menu-toggle-input"):
-            self.assertIn("display: none;", rule(desktop, selector))
-        # those desktop rules are top level, not inside a media query
-        top = desktop.split(".site-menu {", 1)[0]
-        self.assertEqual(top.count("{") - top.count("}"), 0)
+        hidden_input = rule(desktop, ".menu-toggle-input")
+        for decl in ("position: absolute;", "clip-path: inset(50%);"):
+            self.assertIn(decl, hidden_input)
+        self.assertNotIn("display: none", hidden_input)
+        self.assertIn("outline:", rule(desktop, ".menu-toggle:focus-visible"))   # the control
+        self.assertIn("outline:", rule(desktop, ".menu-toggle-input:focus-visible + .menu-toggle"))
 
     def test_js_syncs_aria_and_closes_on_link(self):
         script = BASE_TEMPLATE.split("</footer>", 1)[1]
         for needle in ('getElementById("site-menu-toggle")', 'setAttribute("aria-expanded"',
-                       'closest("a")', '"Escape"', '"pageshow"'):
+                       'closest("a")', '"Escape"', '"pageshow"', '"toggle"',
+                       'details[data-menu-pop]', '!menu.contains(target)'):
             self.assertIn(needle, script)
         # v0.21.1: the sync targets the label/button, which is also keyboard operable
         self.assertIn('querySelector("[data-menu-button]")', script)
@@ -202,9 +217,10 @@ class MobileMenuTests(unittest.TestCase):
         client = app.test_client()
         html = client.get("/login", follow_redirects=True).get_data(as_text=True)
         self.assertIn("data-menu-toggle", html)
-        menu = html.split('data-site-menu>', 1)[1].split("</header>", 1)[0]
+        menu = site_menu(html)
         self.assertIn('action="/locale"', menu)
-        self.assertNotIn("<nav>", menu)
+        self.assertNotIn("<nav", menu)
+        self.assertNotIn('action="/logout"', menu)
 
 
 if __name__ == "__main__":

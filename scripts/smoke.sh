@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ORCH v0.21.1 smoke test.
+# ORCH v0.21.2 smoke test.
 #
 #   scripts/smoke.sh            # Docker: build, compose up (throw-away project
 #                               # + volumes), /healthz, /setup, login, pages, teardown
@@ -25,7 +25,7 @@ PASSWORD="${SMOKE_PASSWORD:-Smoke-Test-Pass-$RANDOM-x}"
 WORK="$(mktemp -d)"
 JAR="$WORK/cookies.txt"
 # Own compose project, container, volumes and image tag: never touches a real
-# deployment (project "orch" / image orch:0.21.1) running on the same host.
+# deployment (project "orch" / image orch:0.21.2) running on the same host.
 PROJECT="orch-smoke-$$"
 SMOKE_IMAGE="orch-smoke:$$"
 PID=""

@@ -119,6 +119,13 @@ v0.21.1     Hardening: /setup requires a setup token by default (generated
             OPENROUTER_VISION_MODEL is unset, provider failures logged
             server-side incl. incomplete / non-UTF-8 bodies (code / status /
             model / kind; never the key, prompt or image data)
+v0.21.2     Header: nav, language and account (role, 登出) collapse into
+            the ☰ menu at every width (compact bar: ORCH, current page,
+            ☰ 選單; works without JavaScript), the language switch and
+            Sign out stay POST forms carrying the CSRF token; page intro /
+            hero (.chat-hero, .module-hero) stays left-aligned with the
+            content at <=720px (a desktop align-items: center no longer
+            centres the stacked intro; one shared rule, no per-page CSS)
 ```
 
 ## Core Architecture

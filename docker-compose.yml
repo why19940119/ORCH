@@ -1,4 +1,4 @@
-# ORCH v0.21.1 - docker compose up -d --build
+# ORCH v0.21.2 - docker compose up -d --build
 # Secrets: put OPENROUTER_API_KEY in .env next to this file (never in the image).
 # ORCH_UI_SECRET_KEY is optional: without it a key is generated on first start
 # and kept in the state volume (state/secret_key).
@@ -8,7 +8,7 @@ services:
     # No fixed container_name: compose names it <project>-orch-1, so a second
     # project (scripts/smoke.sh uses -p orch-smoke-<pid>) never collides with
     # a real deployment on the same host. ORCH_IMAGE lets smoke use its own tag.
-    image: ${ORCH_IMAGE:-orch:0.21.1}
+    image: ${ORCH_IMAGE:-orch:0.21.2}
     restart: unless-stopped
     # ORCH_ENV_FILE: scripts/smoke.sh points this at its own generated file so
     # a smoke run never loads the deployment's real .env.

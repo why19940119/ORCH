@@ -61,7 +61,7 @@ AUDIT_LOGICAL_NAME = "ecom_audit"
 # only audit artifacts confirmed by it (a rolled-back decision never shows).
 AUDIT_COMMIT_EVENT = "ecom_audit_recorded"
 AUDIT_SCHEMA_VERSION = "1.0"
-DEMO_VERSION = "v0.21.1"
+DEMO_VERSION = "v0.21.2"
 
 MAX_DRAFT_CHARS = 4000
 MAX_NOTE_CHARS = 300
