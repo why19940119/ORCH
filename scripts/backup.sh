@@ -37,6 +37,7 @@ fi
 # folder is removed on every exit path (success, error, Ctrl-C).
 INNER='set -e
 umask 077
+export COPYFILE_DISABLE=1   # macOS bsdtar: no ._* AppleDouble members
 trap "rm -rf state/.snapshot" EXIT
 trap "exit 130" INT TERM
 rm -rf state/.snapshot && mkdir -p state/.snapshot

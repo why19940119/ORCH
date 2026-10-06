@@ -130,10 +130,9 @@ class MigrateCliErrorTests(TempState):
         self.assertEqual(len(proc.stderr.strip().splitlines()), 1, proc.stderr)
 
 
-class RestoreValidatesFirstTests(unittest.TestCase):
-    """Item 4: restore.sh validates the archive before it stops the service
-    or takes the safety backup. Docker is stubbed: a fake ``docker`` on PATH
-    logs every call, so "service untouched" means "docker never called"."""
+class RestoreFixture(unittest.TestCase):
+    """Temp app (scripts + orch_db.py + live data) and a fake ``docker`` on
+    PATH that logs every call."""
 
     def setUp(self):
         import shutil
@@ -156,9 +155,9 @@ class RestoreValidatesFirstTests(unittest.TestCase):
         fake.write_text(f"#!/bin/sh\necho \"$*\" >> '{self.docker_log}'\nexit 0\n")
         os.chmod(fake, 0o755)
 
-    def run_restore(self, archive, *flags):
+    def run_restore(self, archive, *flags, python=sys.executable):
         env = {k: v for k, v in os.environ.items() if not k.startswith("ORCH_")}
-        env.update({"PYTHON": sys.executable,
+        env.update({"PYTHON": python,
                     "PATH": f"{self.fakebin}{os.pathsep}{env.get('PATH', '')}"})
         return subprocess.run(["bash", "scripts/restore.sh", *flags, str(archive)],
                               cwd=self.app, env=env, capture_output=True, text=True,
@@ -178,6 +177,13 @@ class RestoreValidatesFirstTests(unittest.TestCase):
         src = self.app / "snap.db"
         orch_db.backup(self.state / "task_status.json", src)
         return src.read_bytes()
+
+
+
+class RestoreValidatesFirstTests(RestoreFixture):
+    """Item 4: restore.sh validates the archive before it stops the service
+    or takes the safety backup. Docker is stubbed, so "service untouched"
+    means "docker never called"."""
 
     def bad_archives(self):
         garbage = self.app / "garbage.tar.gz"
@@ -640,6 +646,234 @@ class ProviderFailureLoggingTests(unittest.TestCase):
             log.propagate = saved[2]
         self.assertIn("deploy_config.configure_app_logging()",
                       (ROOT / "serve.py").read_text(encoding="utf-8"))
+
+
+class RestoreLinkAndSwapTests(RestoreFixture):
+    """Review blocker: link members are refused (host validation AND the
+    in-container extractor), and the restore never deletes live data before
+    a successful extraction: it stages, verifies, swaps and rolls back."""
+
+    def setUp(self):
+        super().setUp()
+        (self.state / "secret_key").write_text("live-secret-" + "k" * 30)
+        os.chmod(self.state / "secret_key", 0o600)
+        (self.app / "uploads" / "nested").mkdir()
+        (self.app / "uploads" / "nested" / "b.bin").write_bytes(bytes(range(256)))
+        self.outside = self.tmp_outside = Path(self.app.parent / (self.app.name + "-outside"))
+        self.outside.mkdir()
+        import shutil
+        self.addCleanup(shutil.rmtree, self.outside, True)
+        self.victim = self.outside / "victim"
+        self.victim.write_text("victim content")
+        os.chmod(self.victim, 0o644)
+
+    # -- helpers -----------------------------------------------------------
+    def live_snapshot(self):
+        import hashlib
+        snap = {}
+        for top in ("state", "uploads", "data", "artifacts"):
+            base = self.app / top
+            if not base.exists():
+                continue
+            for path in sorted(base.rglob("*")):
+                st = path.lstat()
+                digest = (hashlib.sha256(path.read_bytes()).hexdigest()
+                          if stat.S_ISREG(st.st_mode) else None)
+                snap[str(path.relative_to(self.app))] = (stat.S_IFMT(st.st_mode),
+                                                         stat.S_IMODE(st.st_mode), digest)
+        return snap
+
+    def victim_state(self):
+        return (stat.S_IMODE(self.victim.stat().st_mode), self.victim.read_text(),
+                sorted(p.name for p in self.outside.iterdir()))
+
+    def build(self, name, members):
+        """members: list of (TarInfo kwargs, data-or-None)."""
+        import tarfile
+        path = self.app / name
+        with tarfile.open(path, "w:gz", format=tarfile.GNU_FORMAT) as tar:
+            for fields, data in members:
+                info = tarfile.TarInfo(fields.pop("name"))
+                for key, value in fields.items():
+                    setattr(info, key, value)
+                if data is not None:
+                    info.size = len(data)
+                    tar.addfile(info, io.BytesIO(data))
+                else:
+                    tar.addfile(info)
+        return path
+
+    def regular(self, name, data):
+        import tarfile
+        return ({"name": name, "type": tarfile.REGTYPE, "mode": 0o600}, data)
+
+    def folder(self, name):
+        import tarfile
+        return ({"name": name, "type": tarfile.DIRTYPE, "mode": 0o700}, None)
+
+    def base_members(self, uploads_text=b"restored upload"):
+        return [self.folder("./state"), self.folder("./state/.snapshot"),
+                self.regular("./state/.snapshot/orch.db", self.good_db_bytes()),
+                self.regular("./state/secret_key", b"restored-secret-" + b"r" * 30),
+                self.folder("./uploads"), self.regular("./uploads/a.txt", uploads_text)]
+
+    def link_archives(self):
+        import tarfile
+        rel_escape = os.path.relpath(self.victim, self.app / "uploads")
+        return {
+            "symlink to outside file": self.build("l1.tar.gz", [
+                self.folder("./state"), self.folder("./state/.snapshot"),
+                self.regular("./state/.snapshot/orch.db", self.good_db_bytes()),
+                ({"name": "./state/secret_key", "type": tarfile.SYMTYPE,
+                  "linkname": str(self.victim)}, None)]),
+            "symlinked directory": self.build("l2.tar.gz", self.base_members()[:4] + [
+                ({"name": "./uploads", "type": tarfile.SYMTYPE,
+                  "linkname": str(self.outside)}, None),
+                self.regular("./uploads/victim", b"overwritten through the dir link")]),
+            "hardlink to absolute path": self.build("l3.tar.gz", self.base_members() + [
+                ({"name": "./state/secret_key2", "type": tarfile.LNKTYPE,
+                  "linkname": str(self.victim)}, None)]),
+            "hardlink to relative path outside": self.build("l4.tar.gz", self.base_members() + [
+                ({"name": "./uploads/h", "type": tarfile.LNKTYPE,
+                  "linkname": rel_escape}, None)]),
+            "fifo member": self.build("l5.tar.gz", self.base_members() + [
+                ({"name": "./uploads/pipe", "type": tarfile.FIFOTYPE}, None)]),
+        }
+
+    def inner_code(self):
+        text = (ROOT / "scripts" / "restore.sh").read_text(encoding="utf-8")
+        return re.search(r"<<'PYINNER'\n(.*?)\nPYINNER\n", text, re.S).group(1)
+
+    def run_inner(self, archive, prelude=""):
+        """The extractor alone (as `docker compose run ... python -c "$INNER"`
+        runs it), bypassing the host-side validation."""
+        code = prelude + "\nexec(compile(INNER, 'inner', 'exec'))\n"
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ORCH_")}
+        env.update({"DIRS": "state uploads data artifacts", "INNER": self.inner_code()})
+        code = "import os\nINNER = os.environ['INNER']\n" + code
+        with open(archive, "rb") as stdin:
+            return subprocess.run([sys.executable, "-c", code], cwd=self.app, env=env,
+                                  stdin=stdin, capture_output=True, text=True, timeout=120)
+
+    def assert_no_leftovers(self):
+        for top in ("state", "uploads", "data", "artifacts"):
+            base = self.app / top
+            if base.exists():
+                self.assertEqual([p.name for p in base.iterdir()
+                                  if p.name.startswith(".restore-")], [], top)
+
+    # -- full script, both modes ------------------------------------------
+    def test_link_archives_are_refused_before_anything_happens(self):
+        for label, archive in self.link_archives().items():
+            for flags in ((), ("--local",)):
+                with self.subTest(label=label, mode=flags or "docker"):
+                    before, victim = self.live_snapshot(), self.victim_state()
+                    result = self.run_restore(archive, *flags)
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn("RESTORE ABORTED", result.stderr)
+                    self.assertFalse(self.docker_log.exists(), "docker was called")
+                    self.assertFalse((self.app / "backups").exists())
+                    self.assertEqual(self.live_snapshot(), before)      # byte-for-byte
+                    self.assertEqual(self.victim_state(), victim)       # mode + content
+
+    def test_host_listing_check_works_without_python(self):
+        # Docker hosts may have no python3: the `tar -tv` type column check
+        # alone must refuse every link archive.
+        for label, archive in self.link_archives().items():
+            with self.subTest(label):
+                before = self.live_snapshot()
+                result = self.run_restore(archive, python="/nonexistent/python3")
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("link or special file", result.stderr)
+                self.assertFalse(self.docker_log.exists())
+                self.assertEqual(self.live_snapshot(), before)
+
+    # -- the extractor alone (defence in depth) ----------------------------
+    def test_extractor_refuses_links_and_keeps_live_data(self):
+        for label, archive in self.link_archives().items():
+            with self.subTest(label):
+                before, victim = self.live_snapshot(), self.victim_state()
+                result = self.run_inner(archive)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("RESTORE FAILED", result.stderr)
+                self.assertIn("left unchanged", result.stderr)
+                self.assertEqual(self.live_snapshot(), before)
+                self.assertEqual(self.victim_state(), victim)
+                self.assert_no_leftovers()
+
+    def test_mid_extraction_failure_leaves_live_data_intact(self):
+        good = self.build("good.tar.gz", self.base_members() + [
+            self.regular("./uploads/big.bin", os.urandom(200000))])
+        truncated = self.app / "truncated.tar.gz"
+        truncated.write_bytes(good.read_bytes()[: len(good.read_bytes()) // 2])
+        bad_db = self.build("baddb.tar.gz", [
+            self.folder("./state"), self.folder("./state/.snapshot"),
+            self.regular("./state/.snapshot/orch.db", b"SQLite format 3\x00" + b"\xff" * 4000),
+            self.folder("./uploads"), self.regular("./uploads/a.txt", b"x")])
+        for label, archive in (("truncated stream", truncated), ("corrupt staged DB", bad_db)):
+            with self.subTest(label):
+                before = self.live_snapshot()
+                result = self.run_inner(archive)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(self.live_snapshot(), before)
+                self.assert_no_leftovers()
+
+    def test_failure_during_swap_rolls_back(self):
+        archive = self.build("ok.tar.gz", self.base_members())
+        # 8 renames on success: staged DB, 2 + 2 in state/, 2 + 1 in uploads/
+        for fail_at in range(1, 9):
+            with self.subTest(fail_at=fail_at):
+                before = self.live_snapshot()
+                prelude = ("real_rename = os.rename\ncalls = [0]\n"
+                           "def rename(a, b):\n"
+                           "    calls[0] += 1\n"
+                           f"    if calls[0] == {fail_at}:\n"
+                           "        raise OSError('injected rename failure')\n"
+                           "    return real_rename(a, b)\n"
+                           "os.rename = rename\n")
+                result = self.run_inner(archive, prelude)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("injected rename failure", result.stderr)
+                self.assertEqual(self.live_snapshot(), before)
+                self.assert_no_leftovers()
+
+    def test_failed_db_check_after_swap_rolls_back(self):
+        archive = self.build("ok.tar.gz", self.base_members())
+        before = self.live_snapshot()
+        prelude = ("import subprocess, types\n"
+                   "subprocess.run = lambda *a, **k: types.SimpleNamespace(returncode=1)\n")
+        result = self.run_inner(archive, prelude)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("orch_db.py check failed", result.stderr)
+        self.assertEqual(self.live_snapshot(), before)
+        self.assert_no_leftovers()
+
+    def test_successful_swap_replaces_data_and_cleans_up(self):
+        archive = self.build("ok.tar.gz", self.base_members(b"from the archive"))
+        result = self.run_inner(archive)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.app / "uploads" / "a.txt").read_bytes(), b"from the archive")
+        self.assertFalse((self.app / "uploads" / "nested").exists())     # old content gone
+        self.assertTrue((self.state / "secret_key").read_text().startswith("restored-secret-"))
+        self.assertEqual(orch_db.load(self.state / "task_status.json"),
+                         {"task_a": {"status": "done"}})
+        for name in ("orch.db", "secret_key"):
+            self.assertEqual(stat.S_IMODE((self.state / name).stat().st_mode), 0o600)
+        self.assertFalse((self.state / ".snapshot").exists())
+        self.assert_no_leftovers()
+
+    def test_no_link_following_chmod_and_no_delete_before_extract(self):
+        text = (ROOT / "scripts" / "restore.sh").read_text(encoding="utf-8")
+        self.assertNotIn("find \"$d\" -mindepth 1 -delete", text)
+        self.assertNotIn("chmod 600 state/orch.db state/secret_key", text)
+        self.assertIn("if not (member.isfile() or member.isdir()):", text)
+        self.assertIn("O_NOFOLLOW", text)
+        self.assertIn("not os.path.islink(path)", text)
+        inner = self.inner_code()
+        self.assertLess(inner.index("extract(sys.stdin.buffer)"), inner.index("swap()\n    check"))
+        self.assertLess(inner.index("verify_staged_db()\n"), inner.index("swap()\n    check"))
+        self.assertIn('-c "$INNER" < "$ARCHIVE"', text)                 # both modes
+        self.assertEqual(text.count('-c "$INNER" < "$ARCHIVE"'), 2)
 
 
 if __name__ == "__main__":

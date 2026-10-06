@@ -320,7 +320,8 @@ class BackupScriptTests(unittest.TestCase):
         self.assertIn('-c "$INNER" < "$ARCHIVE"', restore)          # streamed in on stdin
         self.assertNotIn(":/restore", restore)
         self.assertIn("umask 077", restore)
-        self.assertIn('trap "rm -rf', restore)
+        self.assertIn("""trap 'rm -rf "$CHECK_DIR"' EXIT""", restore)   # host-side check dir
+        self.assertIn('--entrypoint python orch -c "$INNER" < "$ARCHIVE"', restore)
 
     def test_backup_is_0600_complete_and_leaves_no_snapshot(self):
         result = self.run_script("scripts/backup.sh", "--local")
