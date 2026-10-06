@@ -286,6 +286,7 @@ class DockerFilesTests(unittest.TestCase):
         backup = self.read("scripts/backup.sh")
         self.assertIn("orch_db.py --state-dir state backup", backup)   # SQLite backup API
         self.assertIn('--exclude="./state/orch.db"', backup)
+        self.assertIn("tar -czf - ", backup)       # streamed (review fix 2)
 
     def test_zh_hant_docs(self):
         docs = PROJECT_ROOT / "docs"

@@ -242,6 +242,117 @@ class SmokeIsolationTests(unittest.TestCase):
         self.assertIn('docker image rm "$SMOKE_IMAGE"', text)
 
 
+class BackupScriptTests(unittest.TestCase):
+    """Review fix 2: backup/restore work as a non-root container user (the
+    archive is streamed, never written by the container to a host folder),
+    the snapshot folder is always cleaned up and archives are 0600. These
+    run the real scripts in --local mode (no Docker needed)."""
+
+    ROOT = orch_ui.PROJECT_ROOT
+
+    def setUp(self):
+        import shutil
+        import stat as stat_mod
+        import tempfile
+        self.stat = stat_mod
+        self.app = Path(tempfile.mkdtemp(prefix="orch_backup_test_"))
+        self.addCleanup(shutil.rmtree, self.app, True)
+        (self.app / "scripts").mkdir()
+        for name in ("backup.sh", "restore.sh"):
+            shutil.copy2(self.ROOT / "scripts" / name, self.app / "scripts" / name)
+        shutil.copy2(self.ROOT / "orch_db.py", self.app / "orch_db.py")
+        self.state = self.app / "state"
+        self.state.mkdir()
+        orch_db.save(self.state / "task_status.json", {"task_a": {"status": "done"}})
+        (self.state / "secret_key").write_text("k" * 40)
+        os.chmod(self.state / "secret_key", 0o600)
+        (self.app / "uploads").mkdir()
+        (self.app / "uploads" / "a.txt").write_text("upload")
+
+    def run_script(self, *args, env=None, python=sys.executable):
+        import subprocess
+        full = {k: v for k, v in os.environ.items() if not k.startswith("ORCH_")}
+        full.update({"PYTHON": python, "BACKUP_DIR": str(self.app / "bk")})
+        full.update(env or {})
+        return subprocess.run(["bash", *args], cwd=self.app, env=full,
+                              capture_output=True, text=True, timeout=120)
+
+    def mode(self, path):
+        return self.stat.S_IMODE(Path(path).stat().st_mode)
+
+    def test_scripts_are_valid_bash_and_stream_the_archive(self):
+        import subprocess
+        for name in ("backup.sh", "restore.sh", "smoke.sh"):
+            subprocess.run(["bash", "-n", str(self.ROOT / "scripts" / name)], check=True)
+        backup = (self.ROOT / "scripts" / "backup.sh").read_text(encoding="utf-8")
+        self.assertIn("umask 077", backup)
+        self.assertIn('trap "rm -rf state/.snapshot" EXIT', backup)
+        self.assertIn('chmod 600 "$PART"', backup)
+        self.assertIn("tar -czf - ", backup)                       # to stdout
+        self.assertIn('-c "$INNER" > "$PART"', backup)              # host shell writes it
+        self.assertNotIn(":/backup", backup)                       # no host bind mount
+        restore = (self.ROOT / "scripts" / "restore.sh").read_text(encoding="utf-8")
+        self.assertIn('-c "$INNER" < "$ARCHIVE"', restore)          # streamed in on stdin
+        self.assertNotIn(":/restore", restore)
+        self.assertIn("umask 077", restore)
+        self.assertIn('trap "rm -rf', restore)
+
+    def test_backup_is_0600_complete_and_leaves_no_snapshot(self):
+        result = self.run_script("scripts/backup.sh", "--local")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        archive = Path(result.stdout.strip().splitlines()[-1])
+        self.assertTrue(archive.is_file())
+        self.assertEqual(self.mode(archive), 0o600)
+        self.assertFalse((self.state / ".snapshot").exists())
+        self.assertEqual([p.name for p in (self.app / "bk").iterdir()], [archive.name])
+        import tarfile
+        with tarfile.open(archive) as tar:
+            names = tar.getnames()
+        for needed in ("./state/.snapshot/orch.db", "./state/secret_key", "./uploads/a.txt"):
+            self.assertIn(needed, names)
+        self.assertNotIn("./state/orch.db", names)
+
+    def test_failed_backup_cleans_snapshot_and_partial_file(self):
+        fake_bin = self.app / "fakebin"
+        fake_bin.mkdir()
+        fake = fake_bin / "python"
+        fake.write_text("#!/bin/sh\necho simulated failure >&2\nexit 1\n")
+        os.chmod(fake, 0o755)
+        result = self.run_script("scripts/backup.sh", "--local", python=str(fake))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.state / ".snapshot").exists())
+        self.assertEqual(list((self.app / "bk").iterdir()), [])
+
+    def test_restore_round_trip_with_safety_backup(self):
+        first = self.run_script("scripts/backup.sh", "--local")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        archive = first.stdout.strip().splitlines()[-1]
+        orch_db.save(self.state / "task_status.json", {"task_b": {"status": "todo"}})
+        (self.app / "uploads" / "a.txt").unlink()
+        result = self.run_script("scripts/restore.sh", "--local", archive)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ok", result.stdout)                          # orch_db check
+        self.assertEqual(orch_db.load(self.state / "task_status.json"),
+                         {"task_a": {"status": "done"}})
+        self.assertEqual((self.app / "uploads" / "a.txt").read_text(), "upload")
+        self.assertEqual(self.mode(self.state / "orch.db"), 0o600)
+        self.assertFalse((self.state / ".snapshot").exists())
+        safety = list((self.app / "backups" / "pre-restore").glob("orch-backup-*.tar.gz"))
+        self.assertEqual(len(safety), 1)
+        self.assertEqual(self.mode(safety[0]), 0o600)
+
+    def test_restore_refuses_a_non_backup_without_deleting(self):
+        import tarfile
+        bogus = self.app / "bogus.tar.gz"
+        with tarfile.open(bogus, "w:gz") as tar:
+            tar.add(self.app / "uploads" / "a.txt", arcname="./uploads/a.txt")
+        result = self.run_script("scripts/restore.sh", "--local", str(bogus))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not an ORCH backup", result.stderr)
+        self.assertEqual(orch_db.load(self.state / "task_status.json"),
+                         {"task_a": {"status": "done"}})
+
+
 class ProxyHeaderTests(unittest.TestCase):
     """Review fix 6: X-Forwarded-* only from a trusted proxy peer."""
 

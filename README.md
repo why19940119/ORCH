@@ -1084,6 +1084,11 @@ open http://127.0.0.1:5050/setup    # create the first admin (only while no acco
   `docs/反向代理與HTTPS.md`.
 - Backup / restore: `scripts/backup.sh` (SQLite backup API snapshot + tar of
   the volumes) and `scripts/restore.sh <archive>`; `--local` for a plain checkout.
+  The archive is streamed through stdout / stdin of the one-off container (the
+  uid 10001 container never writes or reads host files, so it works on Linux
+  hosts), created 0600 under umask 077 (it holds secret_key and password
+  hashes), the snapshot folder is removed on every exit path, and restore
+  deletes nothing unless the archive is a valid ORCH backup.
 - Upgrade: `git pull` (or pull the new image), `scripts/backup.sh`,
   `docker compose up -d --build`; schema migrations run on start.
 - Smoke test: `scripts/smoke.sh` (Docker) or `scripts/smoke.sh --local`.
