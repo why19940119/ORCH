@@ -156,6 +156,27 @@ def proxy_hops():
 DEFAULT_TRUSTED_PROXIES = ("127.0.0.1", "::1")
 
 
+def seed_task_queue(project_root=None):
+    """Docker: /app/task_queue.json is a symlink into the state volume; on
+    first start (target missing) copy the image's defaults/task_queue.json
+    there. Never overwrites; a plain checkout (real file) is untouched.
+    Returns the seeded path or None."""
+    root = Path(project_root or PROJECT_ROOT)
+    link = root / "task_queue.json"
+    default = root / "defaults" / "task_queue.json"
+    if not link.is_symlink() or link.exists() or not default.is_file():
+        return None
+    target = root / os.readlink(link) if not os.path.isabs(os.readlink(link)) \
+        else Path(os.readlink(link))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(target, "xb") as out:     # exclusive: never clobber
+            out.write(default.read_bytes())
+    except FileExistsError:
+        return None
+    return target
+
+
 def trusted_proxies():
     items = [p.strip() for p in (os.getenv("ORCH_TRUSTED_PROXY") or "").split(",") if p.strip()]
     return items or list(DEFAULT_TRUSTED_PROXIES)

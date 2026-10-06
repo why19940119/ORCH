@@ -1059,8 +1059,11 @@ open http://127.0.0.1:5050/setup    # create the first admin (only while no acco
 - Image: `python:3.12-slim`, non-root user `orch` (uid 10001), `HEALTHCHECK`
   on `GET /healthz` (unauthenticated; returns version + DB status only),
   served by waitress (`serve.py`).
-- Volumes: `state/` (orch.db, secret_key, branding.json), `uploads/`,
-  `data/`, `artifacts/`.
+- Volumes: `state/` (orch.db, secret_key, branding.json, task_queue.json),
+  `uploads/`, `data/`, `artifacts/`, `output/`. In the image
+  `/app/task_queue.json` is a symlink to `state/task_queue.json`, seeded from
+  `defaults/task_queue.json` on first start, so tasks added at runtime survive
+  `docker compose down` / `up` and image rebuilds.
 - Session key: `ORCH_UI_SECRET_KEY` if set, otherwise generated on first
   start and kept in `state/secret_key` (0600).
 - First admin: `/setup` wizard (CSRF, only while no account exists;

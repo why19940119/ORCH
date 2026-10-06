@@ -261,7 +261,8 @@ class DockerFilesTests(unittest.TestCase):
         service = compose["services"]["orch"]
         self.assertEqual(service["build"], ".")
         mounts = {v.split(":")[1] for v in service["volumes"]}
-        self.assertEqual(mounts, {"/app/state", "/app/uploads", "/app/data", "/app/artifacts"})
+        self.assertEqual(mounts, {"/app/state", "/app/uploads", "/app/data", "/app/artifacts",
+                                  "/app/output"})
         for v in service["volumes"]:
             self.assertIn(v.split(":")[0], compose["volumes"])
         self.assertIn("/healthz", " ".join(service["healthcheck"]["test"]))

@@ -175,6 +175,50 @@ class SetupTokenTests(unittest.TestCase):
         self.assertNotIn("選填", line)
 
 
+class DockerPersistenceTests(unittest.TestCase):
+    """Review fix 7: runtime task_queue.json and output/ survive down/up."""
+
+    ROOT = orch_ui.PROJECT_ROOT
+
+    def test_dockerfile_moves_task_queue_into_state_volume(self):
+        text = (self.ROOT / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("mv task_queue.json defaults/task_queue.json", text)
+        self.assertIn("ln -s state/task_queue.json task_queue.json", text)
+        volumes = re.search(r"(?m)^VOLUME (\[.*\])$", text).group(1)
+        self.assertEqual(set(json.loads(volumes)), {"/app/state", "/app/uploads", "/app/data",
+                                                    "/app/artifacts", "/app/output"})
+
+    def test_compose_mounts_output(self):
+        text = (self.ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        self.assertIn("- orch_output:/app/output", text)
+        self.assertRegex(text, r"(?m)^  orch_output:$")
+
+    def test_seed_copies_defaults_once_and_never_overwrites(self):
+        import shutil
+        import tempfile
+        root = Path(tempfile.mkdtemp(prefix="orch_seed_"))
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "defaults").mkdir()
+        (root / "state").mkdir()
+        (root / "defaults" / "task_queue.json").write_text('[{"id": "task_001"}]', encoding="utf-8")
+        os.symlink("state/task_queue.json", root / "task_queue.json")
+        self.assertEqual(deploy_config.seed_task_queue(root), root / "state" / "task_queue.json")
+        self.assertEqual(json.loads((root / "task_queue.json").read_text("utf-8")), [{"id": "task_001"}])
+        # a task added at runtime is kept on the next start
+        (root / "task_queue.json").write_text('[{"id": "task_001"}, {"id": "task_new"}]',
+                                              encoding="utf-8")
+        self.assertIsNone(deploy_config.seed_task_queue(root))
+        self.assertIn("task_new", (root / "state" / "task_queue.json").read_text("utf-8"))
+        # a plain checkout (real file, no symlink) is never touched
+        plain = root / "plain"
+        (plain / "defaults").mkdir(parents=True)
+        (plain / "defaults" / "task_queue.json").write_text("[]", encoding="utf-8")
+        (plain / "task_queue.json").write_text('["mine"]', encoding="utf-8")
+        self.assertIsNone(deploy_config.seed_task_queue(plain))
+        self.assertEqual((plain / "task_queue.json").read_text("utf-8"), '["mine"]')
+        self.assertIsNone(deploy_config.seed_task_queue(self.ROOT))   # this checkout
+
+
 class ProxyHeaderTests(unittest.TestCase):
     """Review fix 6: X-Forwarded-* only from a trusted proxy peer."""
 

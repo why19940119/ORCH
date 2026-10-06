@@ -4564,6 +4564,9 @@ admin_ui.register(
 def startup():
     """v0.21.0: one-time JSON -> SQLite migration before serving (only into
     an empty DB; stray JSON next to a DB with data is refused and logged)."""
+    seeded = deploy_config.seed_task_queue()        # Docker: state volume copy
+    if seeded:
+        print(f"seeded {seeded} from defaults/task_queue.json", file=sys.stderr)
     for directory in {Path(STATUS_FILE).parent, Path(orch_auth.AUTH_DIR)}:
         for row in orch_db.auto_migrate(directory):
             print(f"migrated {row['file']}: {row['records']} record(s) "

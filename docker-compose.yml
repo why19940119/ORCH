@@ -36,6 +36,7 @@ services:
       - orch_uploads:/app/uploads
       - orch_data:/app/data
       - orch_artifacts:/app/artifacts
+      - orch_output:/app/output
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5050/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
@@ -48,3 +49,4 @@ volumes:
   orch_uploads:
   orch_data:
   orch_artifacts:
+  orch_output:
