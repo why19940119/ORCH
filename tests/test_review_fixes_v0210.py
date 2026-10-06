@@ -219,6 +219,29 @@ class DockerPersistenceTests(unittest.TestCase):
         self.assertIsNone(deploy_config.seed_task_queue(self.ROOT))   # this checkout
 
 
+class SmokeIsolationTests(unittest.TestCase):
+    """Review fix 8: smoke never collides with a real deployment."""
+
+    ROOT = orch_ui.PROJECT_ROOT
+
+    def test_compose_has_no_fixed_container_name(self):
+        text = (self.ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        self.assertNotRegex(text, r"(?m)^\s*container_name:")
+        self.assertIn("image: ${ORCH_IMAGE:-orch:0.21.0}", text)
+
+    def test_smoke_uses_own_project_and_image(self):
+        text = (self.ROOT / "scripts" / "smoke.sh").read_text(encoding="utf-8")
+        self.assertIn('PROJECT="orch-smoke-$$"', text)
+        self.assertIn('SMOKE_IMAGE="orch-smoke:$$"', text)
+        self.assertIn('docker compose -p "$PROJECT"', text)
+        # every docker compose call goes through the project-scoped helper
+        calls = re.findall(r"docker compose[^\n]*", text)
+        self.assertTrue(calls)
+        for call in calls:
+            self.assertIn('-p "$PROJECT"', call)
+        self.assertIn('docker image rm "$SMOKE_IMAGE"', text)
+
+
 class ProxyHeaderTests(unittest.TestCase):
     """Review fix 6: X-Forwarded-* only from a trusted proxy peer."""
 

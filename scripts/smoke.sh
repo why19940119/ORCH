@@ -18,12 +18,18 @@ ADMIN="Smoke Admin"
 PASSWORD="${SMOKE_PASSWORD:-Smoke-Test-Pass-$RANDOM-x}"
 WORK="$(mktemp -d)"
 JAR="$WORK/cookies.txt"
+# Own compose project, container, volumes and image tag: never touches a real
+# deployment (project "orch" / image orch:0.21.0) running on the same host.
 PROJECT="orch-smoke-$$"
+SMOKE_IMAGE="orch-smoke:$$"
 PID=""
+
+compose() { (cd "$ROOT" && ORCH_PUBLISH_PORT="$PORT" ORCH_IMAGE="$SMOKE_IMAGE" docker compose -p "$PROJECT" "$@"); }
 
 cleanup() {
   if [[ "$MODE" == docker ]]; then
-    (cd "$ROOT" && ORCH_PUBLISH_PORT="$PORT" docker compose -p "$PROJECT" down -v --remove-orphans >/dev/null 2>&1) || true
+    compose down -v --remove-orphans >/dev/null 2>&1 || true
+    docker image rm "$SMOKE_IMAGE" >/dev/null 2>&1 || true
   elif [[ -n "$PID" ]]; then
     kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true
   fi
@@ -38,8 +44,8 @@ code() { curl -s -o "$WORK/body" -w '%{http_code}' -b "$JAR" -c "$JAR" "$@"; }
 if [[ "$MODE" == docker ]]; then
   command -v docker >/dev/null || fail "docker not found (run with --local to smoke-test without Docker)"
   cd "$ROOT"
-  echo "== build + up ($PROJECT, port $PORT)"
-  ORCH_PUBLISH_PORT="$PORT" docker compose -p "$PROJECT" up -d --build
+  echo "== build + up ($PROJECT, image $SMOKE_IMAGE, port $PORT)"
+  compose up -d --build
 else
   PY="${PYTHON:-python3}"
   [[ -x "$ROOT/.venv/bin/python" ]] && PY="$ROOT/.venv/bin/python"

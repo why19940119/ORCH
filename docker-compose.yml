@@ -5,8 +5,10 @@
 services:
   orch:
     build: .
-    image: orch:0.21.0
-    container_name: orch
+    # No fixed container_name: compose names it <project>-orch-1, so a second
+    # project (scripts/smoke.sh uses -p orch-smoke-<pid>) never collides with
+    # a real deployment on the same host. ORCH_IMAGE lets smoke use its own tag.
+    image: ${ORCH_IMAGE:-orch:0.21.0}
     restart: unless-stopped
     env_file:
       - path: .env
