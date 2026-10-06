@@ -26,9 +26,10 @@ Environment (all optional):
                               nothing but the proxy can reach the port)
     ORCH_TRUSTED_HOSTS        extra host names, comma separated
     ORCH_SETUP_TOKEN          the /setup (first admin) wizard asks for it.
-                              v0.21.1: ALWAYS required - if unset, a one-time
-                              token is generated per process and printed to
-                              the log / console (docker logs) at startup
+                              v0.21.1: /setup always needs a token - this one,
+                              or (if unset) a one-time token generated per
+                              process and printed to the log / console
+                              (docker logs) at startup
     ORCH_SETUP_LOCAL_NO_TOKEN=1  local development only: /setup without a
                               token (startup warning; ignored when
                               ORCH_TRUSTED_HOSTS / ORCH_PROXY_FIX is set)

@@ -349,12 +349,14 @@ class SetupTokenByDefaultTests(unittest.TestCase):
     def test_docs_describe_default_token_and_opt_out(self):
         guide = (ROOT / "docs" / "安裝指南.md").read_text(encoding="utf-8")
         row = next(l for l in guide.splitlines() if l.startswith("| `ORCH_SETUP_TOKEN`"))
-        self.assertIn("一律必填", row)
+        self.assertIn("設定權杖必填", row)
+        self.assertIn("兩種方式擇一", row)
         self.assertIn("one-time token", row)
         self.assertIn("| `ORCH_SETUP_LOCAL_NO_TOKEN` |", guide)
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("ORCH_SETUP_LOCAL_NO_TOKEN=1", readme)
-        self.assertIn("a setup token is ALWAYS required", readme)
+        self.assertIn("/setup always requires a setup token - either set", readme)
+        self.assertIn("use the one-time token printed in", readme)
         self.assertIn("ORCH_SETUP_LOCAL_NO_TOKEN=1", (ROOT / ".env.example").read_text())
 
 
@@ -506,6 +508,29 @@ class VisionModelTests(unittest.TestCase):
             self.assertEqual(orch_chat.resolve_vision_model(), orch_chat.DEFAULT_VISION_MODEL)
             self.assertEqual(orch_chat.get_chat_config()["model"], "deepseek/deepseek-chat")
 
+    def test_image_capable_list_is_exact(self):
+        for model in ("mistralai/mistral-medium-3.1", "openai/gpt-4o", "openai/gpt-4o-mini",
+                      "openai/gpt-4o-2024-11-20", "openai/gpt-4.1-mini", "openai/gpt-5",
+                      "anthropic/claude-3-haiku", "anthropic/claude-3.5-sonnet",
+                      "anthropic/claude-sonnet-4", "anthropic/claude-sonnet-4.5",
+                      "anthropic/claude-opus-4.1", "google/gemini-2.5-flash",
+                      "x-ai/grok-4", "meta-llama/llama-4-maverick", " OpenAI/GPT-4o "):
+            with self.subTest(model):
+                self.assertTrue(orch_chat.model_accepts_images(model))
+        for model in ("openai/gpt-4o-audio-preview", "openai/gpt-4o-search-preview",
+                      "openai/gpt-4o-mini-tts", "openai/gpt-4o:extended",
+                      "anthropic/claude-3.5-haiku", "anthropic/claude-3-5-haiku",
+                      "anthropic/claude-3.5-haiku-20241022", "anthropic/claude-sonnet-4-x",
+                      "mistralai/mistral-medium-3.1-experimental", "openai/gpt-5-chat-audio",
+                      "google/gemini-2.5-flash-image-preview-tts", "deepseek/deepseek-chat",
+                      "", "x-ai/grok-4-fake"):
+            with self.subTest(model):
+                self.assertFalse(orch_chat.model_accepts_images(model))
+        with self.env(OPENROUTER_MODEL="openai/gpt-4o-audio-preview"):
+            self.assertEqual(orch_chat.resolve_vision_model(), orch_chat.DEFAULT_VISION_MODEL)
+        with self.env(OPENROUTER_MODEL="anthropic/claude-3.5-haiku"):
+            self.assertEqual(orch_chat.resolve_vision_model(), orch_chat.DEFAULT_VISION_MODEL)
+
     def test_image_request_uses_resolved_model_and_json_object(self):
         captured = {}
 
@@ -628,6 +653,49 @@ class ProviderFailureLoggingTests(unittest.TestCase):
         self.assertIn("code=connection", message)
         self.assertIn("status=-", message)
         self.assertIn("TimeoutError", message)
+        self.assert_clean(logged)
+
+    def broken_body_urlopen(self, body=None, incomplete=False):
+        test = self
+
+        class Response:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                if incomplete:
+                    import http.client
+                    raise http.client.IncompleteRead(
+                        f"partial {test.PROMPT} {test.KEY}".encode(), 4096)
+                return body
+
+        return lambda request, timeout=None: Response()
+
+    def test_incomplete_read_is_logged_redacted(self):
+        exc, logged = self.ask(self.broken_body_urlopen(incomplete=True))
+        self.assertEqual(exc.code, "bad_response")
+        message = logged.records[0].getMessage()
+        self.assertIn("code=bad_response", message)
+        self.assertIn("status=200", message)
+        self.assertIn("kind=vision", message)
+        self.assertIn("model=mistralai/mistral-medium-3.1", message)
+        self.assertIn("IncompleteRead", message)
+        self.assert_clean(logged)
+
+    def test_non_utf8_body_is_logged_redacted(self):
+        body = b"\xff\xfe" + self.PROMPT.encode() + b"\xc3\x28" + self.KEY.encode()
+        exc, logged = self.ask(self.broken_body_urlopen(body=body), image=False)
+        self.assertEqual(exc.code, "bad_response")
+        message = logged.records[0].getMessage()
+        self.assertIn("code=bad_response", message)
+        self.assertIn("status=200", message)
+        self.assertIn("kind=chat", message)
+        self.assertIn("not valid UTF-8", message)
         self.assert_clean(logged)
 
     def test_serve_configures_orch_logger(self):

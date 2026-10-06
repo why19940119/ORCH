@@ -1,3 +1,4 @@
+import http.client
 import json
 import logging
 import os
@@ -15,24 +16,26 @@ DEFAULT_MODEL = "mistralai/mistral-medium-3.1"
 # "No endpoints found"), which broke every chat with an image. Mistral Medium
 # 3.1 takes images and honours response_format json_object.
 DEFAULT_VISION_MODEL = "mistralai/mistral-medium-3.1"
-# Chat models known to accept image input. When OPENROUTER_VISION_MODEL is
-# unset and the configured chat model is one of these, images go to the chat
-# model. A static list on purpose: deterministic, no /models lookup.
-VISION_CAPABLE_MODEL_PREFIXES = (
-    "mistralai/mistral-medium-3",
-    "mistralai/mistral-small-3.1",
-    "mistralai/mistral-small-3.2",
-    "mistralai/pixtral-",
-    "openai/gpt-4o",
-    "openai/gpt-4.1",
-    "openai/gpt-5",
-    "anthropic/claude-3",
-    "anthropic/claude-sonnet-4",
-    "anthropic/claude-opus-4",
-    "google/gemini-2.5-",
-    "x-ai/grok-4",
-    "meta-llama/llama-4-",
-)
+# Chat models known to accept image input (OpenRouter IDs, matched in full).
+# When OPENROUTER_VISION_MODEL is unset and the configured chat model is one
+# of these, images go to the chat model. Exact IDs / tight patterns on
+# purpose (no prefixes: openai/gpt-4o-audio-preview or
+# anthropic/claude-3.5-haiku take no images); deterministic, no /models
+# lookup. Anything else falls back to DEFAULT_VISION_MODEL.
+VISION_CAPABLE_MODEL_PATTERNS = tuple(re.compile(p) for p in (
+    r"mistralai/mistral-medium-3(\.1)?",
+    r"mistralai/mistral-small-3\.[12]-24b-instruct(:free)?",
+    r"mistralai/pixtral-(12b|large-2411)",
+    r"openai/gpt-4o(-mini)?(-\d{4}-\d{2}-\d{2})?",
+    r"openai/gpt-4\.1(-mini|-nano)?",
+    r"openai/gpt-5(-mini|-nano)?",
+    r"anthropic/claude-3-(haiku|sonnet|opus)",
+    r"anthropic/claude-3\.[57]-sonnet",
+    r"anthropic/claude-(sonnet|opus)-4(\.[0-9])?",
+    r"google/gemini-2\.5-(pro|flash|flash-lite)",
+    r"x-ai/grok-4",
+    r"meta-llama/llama-4-(scout|maverick)",
+))
 
 LOG = logging.getLogger("orch.chat")
 
@@ -62,7 +65,7 @@ def configured_chat_model():
 
 def model_accepts_images(model):
     model = (model or "").strip().lower()
-    return any(model.startswith(prefix) for prefix in VISION_CAPABLE_MODEL_PREFIXES)
+    return any(pattern.fullmatch(model) for pattern in VISION_CAPABLE_MODEL_PATTERNS)
 
 
 def resolve_vision_model():
@@ -710,12 +713,26 @@ def ask_orch(
     )
 
     kind = "vision" if use_vision else "chat"
+    status = None
     try:
         with urllib.request.urlopen(
             request,
             timeout=45,
         ) as response:
-            response_body = response.read().decode("utf-8")
+            status = getattr(response, "status", None)
+            raw_body = response.read()
+    except http.client.IncompleteRead as error:
+        log_provider_failure(kind, config["model"], "bad_response", status=status,
+                             detail="incomplete response body (IncompleteRead)")
+        raise ChatProviderError(
+            "OpenRouter returned an incomplete chat response.", code="bad_response"
+        ) from error
+    except http.client.HTTPException as error:
+        log_provider_failure(kind, config["model"], "connection", status=status,
+                             detail=type(error).__name__)
+        raise ChatProviderError(
+            "OpenRouter chat connection failed.", code="connection"
+        ) from error
     except urllib.error.HTTPError as error:
         log_provider_failure(kind, config["model"], "http", status=error.code,
                              detail=provider_error_message(error))
@@ -732,6 +749,15 @@ def ask_orch(
         ) from error
 
     try:
+        response_body = raw_body.decode("utf-8")
+    except UnicodeDecodeError as error:
+        log_provider_failure(kind, config["model"], "bad_response", status=status,
+                             detail="response body is not valid UTF-8")
+        raise ChatProviderError(
+            "OpenRouter returned an unusable chat response.", code="bad_response"
+        ) from error
+
+    try:
         response_json = json.loads(response_body)
         content = response_json["choices"][0]["message"][
             "content"
@@ -742,14 +768,14 @@ def ask_orch(
         IndexError,
         TypeError,
     ) as error:
-        log_provider_failure(kind, config["model"], "bad_response", status=200,
+        log_provider_failure(kind, config["model"], "bad_response", status=status,
                              detail="unusable response envelope")
         raise ChatProviderError(
             "OpenRouter returned an unusable chat response.", code="bad_response"
         ) from error
 
     if not isinstance(content, str):
-        log_provider_failure(kind, config["model"], "bad_response", status=200,
+        log_provider_failure(kind, config["model"], "bad_response", status=status,
                              detail="non-text content")
         raise ChatProviderError(
             "OpenRouter returned non-text chat content.", code="bad_response"
@@ -758,7 +784,7 @@ def ask_orch(
     try:
         parsed_answer = json.loads(content)
     except json.JSONDecodeError as error:
-        log_provider_failure(kind, config["model"], "bad_response", status=200,
+        log_provider_failure(kind, config["model"], "bad_response", status=status,
                              detail="model reply was not valid JSON")
         raise ChatProviderError(
             "Chat model response was not valid JSON.", code="bad_response"

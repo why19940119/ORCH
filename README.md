@@ -101,12 +101,17 @@ v0.21.1     Hardening: /setup requires a setup token by default (generated
             the real .env, API keys blanked), a refused stray JSON no longer
             takes the DB write lock on reads, json-backup-*/ is 0700 with
             0600 files, restore.sh validates the archive before stopping the
-            service or taking the safety backup, aria-expanded on the menu
+            service or taking the safety backup (regular files and folders
+            only: symlink / hardlink / device / FIFO members refused) and
+            restores via a staging folder + swap with rollback (live data is
+            never deleted before a verified extraction; no link-following
+            chmod), aria-expanded on the menu
             button, clean one-line migrate errors (exit 1); image chat
             fixed: default vision model mistralai/mistral-medium-3.1
             (google/gemini-2.0-flash-001 was retired: HTTP 404), an image-
-            capable chat model is used when OPENROUTER_VISION_MODEL is
-            unset, provider failures logged server-side (code / status /
+            capable chat model (exact IDs) is used when
+            OPENROUTER_VISION_MODEL is unset, provider failures logged
+            server-side incl. incomplete / non-UTF-8 bodies (code / status /
             model / kind; never the key, prompt or image data)
 ```
 
@@ -1107,10 +1112,10 @@ open http://127.0.0.1:5050/setup    # create the first admin (only while no acco
 - Session key: `ORCH_UI_SECRET_KEY` if set, otherwise generated on first
   start and kept in `state/secret_key` (0600).
 - First admin: `/setup` wizard (CSRF, only while no account exists). Since
-  v0.21.1 a setup token is ALWAYS required: `ORCH_SETUP_TOKEN` if set,
-  otherwise a one-time token is generated at startup and printed to the log
-  (`docker compose logs orch | grep "one-time token"`; a restart makes a new
-  one), and /setup refuses without it. `ORCH_SETUP_LOCAL_NO_TOKEN=1` opens
+  v0.21.1 /setup always requires a setup token - either set
+  `ORCH_SETUP_TOKEN`, or leave it empty and use the one-time token printed in
+  the startup log (`docker compose logs orch | grep "one-time token"`; a
+  restart makes a new one); /setup refuses without one. `ORCH_SETUP_LOCAL_NO_TOKEN=1` opens
   the wizard without a token for local development only (startup warning;
   ignored when `ORCH_TRUSTED_HOSTS` / `ORCH_PROXY_FIX` is set). Or use
   `docker compose exec orch python orch_auth.py create-admin`.
