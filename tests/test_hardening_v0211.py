@@ -167,6 +167,11 @@ class RestoreFixture(unittest.TestCase):
         import tarfile
         path = self.app / name
         with tarfile.open(path, "w:gz") as tar:
+            for top in ("./state", "./uploads", "./data", "./artifacts"):   # complete archive
+                info = tarfile.TarInfo(top)
+                info.type = tarfile.DIRTYPE
+                info.mode = 0o700
+                tar.addfile(info)
             for arcname, data in members.items():
                 info = tarfile.TarInfo(arcname)
                 info.size = len(data)
@@ -783,6 +788,7 @@ class RestoreLinkAndSwapTests(RestoreFixture):
         return [self.folder("./state"), self.folder("./state/.snapshot"),
                 self.regular("./state/.snapshot/orch.db", self.good_db_bytes()),
                 self.regular("./state/secret_key", b"restored-secret-" + b"r" * 30),
+                self.folder("./data"), self.folder("./artifacts"),
                 self.folder("./uploads"), self.regular("./uploads/a.txt", uploads_text)]
 
     def link_archives(self):
@@ -790,11 +796,10 @@ class RestoreLinkAndSwapTests(RestoreFixture):
         rel_escape = os.path.relpath(self.victim, self.app / "uploads")
         return {
             "symlink to outside file": self.build("l1.tar.gz", [
-                self.folder("./state"), self.folder("./state/.snapshot"),
-                self.regular("./state/.snapshot/orch.db", self.good_db_bytes()),
+                m for m in self.base_members() if m[0]["name"] != "./state/secret_key"] + [
                 ({"name": "./state/secret_key", "type": tarfile.SYMTYPE,
                   "linkname": str(self.victim)}, None)]),
-            "symlinked directory": self.build("l2.tar.gz", self.base_members()[:4] + [
+            "symlinked directory": self.build("l2.tar.gz", self.base_members()[:6] + [
                 ({"name": "./uploads", "type": tarfile.SYMTYPE,
                   "linkname": str(self.outside)}, None),
                 self.regular("./uploads/victim", b"overwritten through the dir link")]),
@@ -812,12 +817,17 @@ class RestoreLinkAndSwapTests(RestoreFixture):
         text = (ROOT / "scripts" / "restore.sh").read_text(encoding="utf-8")
         return re.search(r"<<'PYINNER'\n(.*?)\nPYINNER\n", text, re.S).group(1)
 
-    def run_inner(self, archive, prelude=""):
+    def run_inner(self, archive, prelude="", sha=None):
         """The extractor alone (as `docker compose run ... python -c "$INNER"`
-        runs it), bypassing the host-side validation."""
+        runs it), bypassing the host-side validation. ``sha`` defaults to the
+        archive's real sha256 (what restore.sh passes in)."""
+        import hashlib
         code = prelude + "\nexec(compile(INNER, 'inner', 'exec'))\n"
         env = {k: v for k, v in os.environ.items() if not k.startswith("ORCH_")}
-        env.update({"DIRS": "state uploads data artifacts", "INNER": self.inner_code()})
+        if sha is None:
+            sha = hashlib.sha256(Path(archive).read_bytes()).hexdigest()
+        env.update({"DIRS": "state uploads data artifacts", "INNER": self.inner_code(),
+                    "EXPECTED_SHA256": sha})
         code = "import os\nINNER = os.environ['INNER']\n" + code
         with open(archive, "rb") as stdin:
             return subprocess.run([sys.executable, "-c", code], cwd=self.app, env=env,
@@ -863,7 +873,7 @@ class RestoreLinkAndSwapTests(RestoreFixture):
                 before, victim = self.live_snapshot(), self.victim_state()
                 result = self.run_inner(archive)
                 self.assertEqual(result.returncode, 1, result.stderr)
-                self.assertIn("RESTORE FAILED", result.stderr)
+                self.assertIn("RESTORE ABORTED", result.stderr)          # refused pre-swap
                 self.assertIn("left unchanged", result.stderr)
                 self.assertEqual(self.live_snapshot(), before)
                 self.assertEqual(self.victim_state(), victim)
@@ -908,11 +918,18 @@ class RestoreLinkAndSwapTests(RestoreFixture):
     def test_failed_db_check_after_swap_rolls_back(self):
         archive = self.build("ok.tar.gz", self.base_members())
         before = self.live_snapshot()
+        trace = ("Traceback (most recent call last):\\n  File orch_db.py, line 1\\n"
+                 "sqlite3.DatabaseError: file is not a database\\n")
         prelude = ("import subprocess, types\n"
-                   "subprocess.run = lambda *a, **k: types.SimpleNamespace(returncode=1)\n")
+                   "subprocess.run = lambda *a, **k: types.SimpleNamespace("
+                   f"returncode=1, stdout='', stderr=\"{trace}\")\n")
         result = self.run_inner(archive, prelude)
         self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn("orch_db.py check failed", result.stderr)
+        self.assertIn("RESTORE FAILED", result.stderr)                     # post-swap
+        self.assertIn("orch_db.py check failed on the restored database "
+                      "(sqlite3.DatabaseError: file is not a database)", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)                       # one clean line
+        self.assertEqual(len(result.stderr.strip().splitlines()), 2, result.stderr)
         self.assertEqual(self.live_snapshot(), before)
         self.assert_no_leftovers()
 
@@ -930,6 +947,258 @@ class RestoreLinkAndSwapTests(RestoreFixture):
         self.assertFalse((self.state / ".snapshot").exists())
         self.assert_no_leftovers()
 
+    # -- truncated / partial / altered archives (re-review round 2) ----------
+    def real_backup(self):
+        """A real scripts/backup.sh --local archive of the fixture app."""
+        (self.state / "tasks.json").write_text('{"t": 1}')
+        (self.app / "data").mkdir(exist_ok=True)
+        (self.app / "data" / "orders.csv").write_text("id,total\n1,10\n")
+        (self.app / "artifacts").mkdir(exist_ok=True)
+        (self.app / "artifacts" / "draft.md").write_text("draft " * 300)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ORCH_")}
+        env.update({"PYTHON": sys.executable, "BACKUP_DIR": str(self.app / "bk")})
+        result = subprocess.run(["bash", "scripts/backup.sh", "--local"], cwd=self.app, env=env,
+                                capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        archive = Path(result.stdout.strip().splitlines()[-1])
+        moved = self.app / "real-backup.tar.gz"
+        moved.write_bytes(archive.read_bytes())
+        import shutil
+        shutil.rmtree(self.app / "bk")
+        return moved
+
+    def gzip_stream_end(self, data):
+        import zlib
+        d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        d.decompress(data)
+        return len(data) - len(d.unused_data)
+
+    def member_boundaries(self, raw_tar):
+        import tarfile
+        offsets = []
+        with tarfile.open(fileobj=io.BytesIO(raw_tar), mode="r:") as tar:
+            for member in tar:
+                offsets.append(member.offset)
+                end = member.offset_data + ((member.size + 511) // 512) * 512
+        offsets.append(end)
+        return offsets
+
+    def test_backup_manifest_lists_every_member_in_archive_order(self):
+        import tarfile
+        (self.app / "uploads" / "._a.txt").write_bytes(b"macOS metadata")
+        (self.app / "uploads" / ".restore-old-left").mkdir()
+        (self.app / "uploads" / ".restore-old-left" / "x").write_text("leftover")
+        archive = self.real_backup()
+        with tarfile.open(archive) as tar:
+            names = [m.name.rstrip("/") for m in tar]
+            required = tar.extractfile("./state/.snapshot/required.txt").read().decode()
+        lines = [l.rstrip("/") for l in required.splitlines() if l and not l.startswith("#")]
+        self.assertEqual(lines, names)                    # every member, same order
+        self.assertEqual(names[:4], ["./state", "./state/.snapshot",
+                                     "./state/.snapshot/required.txt", "./state/.snapshot/orch.db"])
+        for needed in ("./uploads", "./data", "./artifacts", "./state/.snapshot/status.json",
+                       "./state/secret_key", "./state/tasks.json", "./uploads/a.txt",
+                       "./uploads/nested/b.bin", "./data/orders.csv", "./artifacts/draft.md"):
+            self.assertIn(needed, lines)
+        for skipped in ("./state/orch.db", "./uploads/._a.txt", "./uploads/.restore-old-left",
+                        "./uploads/.restore-old-left/x"):
+            self.assertNotIn(skipped, names)
+        text = (ROOT / "scripts" / "backup.sh").read_text(encoding="utf-8")
+        self.assertIn("tar -czf - --no-recursion -T -", text)
+
+    def test_backup_refuses_a_backslash_file_name(self):
+        (self.app / "uploads" / "bad\\name.txt").write_text("x")
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ORCH_")}
+        env.update({"PYTHON": sys.executable, "BACKUP_DIR": str(self.app / "bk")})
+        result = subprocess.run(["bash", "scripts/backup.sh", "--local"], cwd=self.app, env=env,
+                                capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("contains a backslash", result.stderr)
+        self.assertEqual(list((self.app / "bk").iterdir()), [])   # no .partial / .list left
+        self.assertFalse((self.state / ".snapshot").exists())
+
+    def test_non_ascii_names_back_up_and_restore_in_the_c_locale(self):
+        """tar -t escapes non-ASCII bytes as \\ooo in the C locale: the host
+        backslash rule must not mistake that for a backslash in the name."""
+        (self.app / "uploads" / "你好 报告.txt").write_text("zh upload", encoding="utf-8")
+        archive = self.real_backup()
+        (self.app / "uploads" / "你好 报告.txt").write_text("changed", encoding="utf-8")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("ORCH_", "LC_", "LANG"))}
+        env.update({"PYTHON": sys.executable, "LC_ALL": "C"})
+        result = subprocess.run(["bash", "scripts/restore.sh", "--local", str(archive)],
+                                cwd=self.app, env=env, capture_output=True, text=True,
+                                timeout=120)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.app / "uploads" / "你好 报告.txt").read_text(encoding="utf-8"),
+                         "zh upload")
+        self.assert_no_leftovers()
+
+    def test_every_compressed_cut_aborts(self):
+        """Every byte offset inside the gzip stream, with the checksum of the
+        cut bytes passed in (so the gzip CRC / end-of-archive / required
+        member checks must catch it), in one process for speed."""
+        import hashlib
+        archive = self.real_backup()
+        data = archive.read_bytes()
+        gz_end = self.gzip_stream_end(data)
+        before = self.live_snapshot()
+        driver = (
+            "import hashlib, io, json, os, sys\n"
+            "INNER = os.environ['INNER']\n"
+            "data = open(sys.argv[1], 'rb').read()\n"
+            "results = {}\n"
+            "real_stderr = sys.stderr\n"
+            "for cut in range(1, int(sys.argv[2])):\n"
+            "    chunk = data[:cut]\n"
+            "    os.environ['EXPECTED_SHA256'] = hashlib.sha256(chunk).hexdigest()\n"
+            "    sys.stdin = io.TextIOWrapper(io.BytesIO(chunk))\n"
+            "    sys.stderr = io.StringIO()\n"
+            "    try:\n"
+            "        exec(compile(INNER, 'inner', 'exec'), {'__name__': 'inner'})\n"
+            "        code = 0\n"
+            "    except SystemExit as exc:\n"
+            "        code = exc.code\n"
+            "    results[cut] = [code, sys.stderr.getvalue().splitlines()[:1]]\n"
+            "sys.stderr = real_stderr\n"
+            "print(json.dumps(results))\n")
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ORCH_")}
+        env.update({"DIRS": "state uploads data artifacts", "INNER": self.inner_code()})
+        result = subprocess.run([sys.executable, "-c", driver, str(archive), str(gz_end)],
+                                cwd=self.app, env=env, capture_output=True, text=True,
+                                timeout=600)
+        self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+        results = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(len(results), gz_end - 1)
+        passed = {cut: r for cut, r in results.items() if r[0] != 1}
+        self.assertEqual(passed, {}, "cuts that did not abort")
+        self.assertTrue(all(r[1] and r[1][0].startswith("RESTORE ABORTED")
+                            for r in results.values()))
+        self.assertEqual(self.live_snapshot(), before)            # byte-identical
+        self.assert_no_leftovers()
+        # sanity: the complete archive restores with the same driver logic
+        full = self.run_inner(archive)
+        self.assertEqual(full.returncode, 0, full.stderr)
+
+    def test_every_member_boundary_cut_aborts(self):
+        """A tar cut at every member boundary, re-gzipped into a well-formed
+        stream - with and without an end-of-archive marker appended - is
+        refused by the host check (full script, stubbed docker) and by the
+        extractor alone."""
+        import gzip
+        archive = self.real_backup()
+        raw = gzip.decompress(archive.read_bytes())
+        boundaries = self.member_boundaries(raw)
+        self.assertGreater(len(boundaries), 10)
+        before, victim_free = self.live_snapshot(), True
+        checked = 0
+        for i, cut in enumerate(boundaries[:-1]):
+            for suffix, label in ((b"", "no EOF marker"), (b"\0" * 1024, "EOF marker added")):
+                partial = self.app / f"cut-{i}-{len(suffix)}.tar.gz"
+                partial.write_bytes(gzip.compress(raw[:cut] + suffix))
+                with self.subTest(cut=cut, variant=label):
+                    inner = self.run_inner(partial)
+                    self.assertEqual(inner.returncode, 1, inner.stderr)
+                    self.assertIn("RESTORE ABORTED", inner.stderr)
+                    if suffix:      # full script for the well-formed partial archives
+                        script = self.run_restore(partial)
+                        self.assertEqual(script.returncode, 1, script.stderr)
+                        self.assertIn("RESTORE ABORTED", script.stderr)
+                        self.assertFalse(self.docker_log.exists())
+                        self.assertFalse((self.app / "backups").exists())
+                    self.assertEqual(self.live_snapshot(), before)
+                    checked += 1
+                partial.unlink()
+        self.assertEqual(checked, 2 * (len(boundaries) - 1))
+        self.assert_no_leftovers()
+
+    def test_checksum_mismatch_aborts(self):
+        archive = self.real_backup()
+        before = self.live_snapshot()
+        for label, sha in (("wrong", "0" * 64), ("missing", "")):
+            with self.subTest(label):
+                result = self.run_inner(archive, sha=sha)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("RESTORE ABORTED", result.stderr)
+                self.assertIn("checksum", result.stderr)
+                self.assertEqual(self.live_snapshot(), before)
+        # a stream cut in transit: the host's sha256 of the whole file vs a short read
+        import hashlib
+        cut = self.app / "cut-in-transit.tar.gz"
+        data = archive.read_bytes()
+        cut.write_bytes(data[: len(data) * 2 // 3])
+        result = self.run_inner(cut, sha=hashlib.sha256(data).hexdigest())
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("checksum mismatch", result.stderr)
+        self.assertEqual(self.live_snapshot(), before)
+        self.assert_no_leftovers()
+        text = (ROOT / "scripts" / "restore.sh").read_text(encoding="utf-8")
+        self.assertIn('-e EXPECTED_SHA256="$SHA"', text)                    # docker
+        self.assertIn('EXPECTED_SHA256="$SHA" DIRS="$DIRS" "$PY" -c "$INNER"', text)  # local
+
+    def test_missing_required_member_aborts(self):
+        import gzip
+        import tarfile
+        archive = self.real_backup()
+        before = self.live_snapshot()
+        for drop in ("./state/secret_key", "./state/tasks.json", "./data", "./uploads/a.txt",
+                     "./state/.snapshot/required.txt+./artifacts"):
+            dropped = set(drop.split("+"))
+            partial = self.app / "partial.tar.gz"
+            with tarfile.open(archive) as src, tarfile.open(partial, "w:gz") as dst:
+                for member in src:
+                    if member.name.rstrip("/") in dropped or any(
+                            member.name.startswith(d + "/") and d in ("./data", "./artifacts")
+                            for d in dropped):
+                        continue
+                    dst.addfile(member, src.extractfile(member) if member.isfile() else None)
+            with self.subTest(drop):
+                script = self.run_restore(partial)
+                self.assertEqual(script.returncode, 1, script.stderr)
+                self.assertIn("the archive is incomplete", script.stderr)
+                self.assertFalse(self.docker_log.exists())
+                self.assertFalse((self.app / "backups").exists())
+                inner = self.run_inner(partial)
+                self.assertEqual(inner.returncode, 1, inner.stderr)
+                self.assertIn("the archive is incomplete", inner.stderr)
+                self.assertEqual(self.live_snapshot(), before)
+        self.assert_no_leftovers()
+
+    def test_reserved_restore_names_are_refused(self):
+        archive = self.build("reserved.tar.gz", self.base_members() + [
+            self.regular("./uploads/.restore-evil.txt", b"survives a rollback?"),
+            self.regular("./uploads/zzz-late.txt", b"x")])
+        before = self.live_snapshot()
+        script = self.run_restore(archive)
+        self.assertEqual(script.returncode, 1, script.stderr)
+        self.assertIn("RESTORE ABORTED", script.stderr)
+        self.assertFalse(self.docker_log.exists())
+        for prelude in ("", "real_rename = os.rename\ncalls = [0]\n"
+                            "def rename(a, b):\n    calls[0] += 1\n"
+                            "    if calls[0] == 5:\n        raise OSError('injected')\n"
+                            "    return real_rename(a, b)\nos.rename = rename\n"):
+            inner = self.run_inner(archive, prelude)
+            self.assertEqual(inner.returncode, 1, inner.stderr)
+            self.assertIn("reserved name in the archive: ./uploads/.restore-evil.txt",
+                          inner.stderr)
+            self.assertFalse((self.app / "uploads" / ".restore-evil.txt").exists())
+            self.assertEqual(self.live_snapshot(), before)
+        self.assert_no_leftovers()
+
+    def test_host_check_rejects_backslashes_before_backup_and_stop(self):
+        archive = self.build("backslash.tar.gz", self.base_members() + [
+            self.regular("./state/..\\..\\x", b"windows-style traversal")])
+        before = self.live_snapshot()
+        for flags in ((), ("--local",)):
+            with self.subTest(mode=flags or "docker"):
+                result = self.run_restore(archive, *flags)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("RESTORE ABORTED: unexpected or unsafe path", result.stderr)
+                self.assertRegex(result.stderr, r"\.\.\\+\.\.\\+x")   # tar escapes "\\" in listings
+                self.assertNotIn("Taking a safety backup", result.stdout)
+                self.assertFalse(self.docker_log.exists())
+                self.assertFalse((self.app / "backups").exists())
+                self.assertEqual(self.live_snapshot(), before)
+
     def test_no_link_following_chmod_and_no_delete_before_extract(self):
         text = (ROOT / "scripts" / "restore.sh").read_text(encoding="utf-8")
         self.assertNotIn("find \"$d\" -mindepth 1 -delete", text)
@@ -938,8 +1207,10 @@ class RestoreLinkAndSwapTests(RestoreFixture):
         self.assertIn("O_NOFOLLOW", text)
         self.assertIn("not os.path.islink(path)", text)
         inner = self.inner_code()
-        self.assertLess(inner.index("extract(sys.stdin.buffer)"), inner.index("swap()\n    check"))
-        self.assertLess(inner.index("verify_staged_db()\n"), inner.index("swap()\n    check"))
+        order = [inner.index("archive = receive()"), inner.index("extract(archive)"),
+                 inner.index("check_required()\n    verify"), inner.index("verify_staged_db()\n"),
+                 inner.index("swap()\n    check")]
+        self.assertEqual(order, sorted(order))      # all verification before any swap
         self.assertIn('-c "$INNER" < "$ARCHIVE"', text)                 # both modes
         self.assertEqual(text.count('-c "$INNER" < "$ARCHIVE"'), 2)
 

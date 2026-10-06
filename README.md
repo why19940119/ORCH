@@ -105,7 +105,13 @@ v0.21.1     Hardening: /setup requires a setup token by default (generated
             only: symlink / hardlink / device / FIFO members refused) and
             restores via a staging folder + swap with rollback (live data is
             never deleted before a verified extraction; no link-following
-            chmod), aria-expanded on the menu
+            chmod; the archive is copied in full and must match the host's
+            sha256, pass the gzip CRC, end with the tar end-of-archive marker
+            and hold every member of the manifest backup.sh now writes
+            (state/.snapshot/required.txt), else RESTORE ABORTED with the
+            live data untouched; .restore-* names and backslashes refused
+            on the host too; one-line error if the post-swap check fails;
+            backup.sh removes its temp files on failure), aria-expanded on the menu
             button, clean one-line migrate errors (exit 1); image chat
             fixed: default vision model mistralai/mistral-medium-3.1
             (google/gemini-2.0-flash-001 was retired: HTTP 404), an image-
@@ -1136,7 +1142,10 @@ open http://127.0.0.1:5050/setup    # create the first admin (only while no acco
   uid 10001 container never writes or reads host files, so it works on Linux
   hosts), created 0600 under umask 077 (it holds secret_key and password
   hashes), the snapshot folder is removed on every exit path, and restore
-  deletes nothing unless the archive is a valid ORCH backup.
+  deletes nothing unless the archive is a valid ORCH backup. Each archive
+  carries a manifest of all its members (`state/.snapshot/required.txt`);
+  restore refuses a cut, partial or altered archive (sha256, gzip CRC,
+  end-of-archive marker, every listed member) before touching live data.
 - Upgrade: `git pull` (or pull the new image), `scripts/backup.sh`,
   `docker compose up -d --build`; schema migrations run on start.
 - Smoke test: `scripts/smoke.sh` (Docker) or `scripts/smoke.sh --local`.
