@@ -621,7 +621,8 @@ def _backup_dir(directory):
     while candidate.exists():
         n += 1
         candidate = Path(f"{base}-{n}")
-    candidate.mkdir(parents=True)
+    candidate.mkdir(parents=True, mode=0o700)
+    os.chmod(candidate, 0o700)          # owner-only, whatever the umask
     return candidate
 
 
@@ -671,6 +672,7 @@ def _migrate_locked(conn, directory, force=False):
             target = backup / path.name
             os.replace(path, target)
             moved.append((target, path))
+            os.chmod(target, 0o600)     # raw logs / audit trail: owner-only
         for target, original in moved:
             kind, name = MANAGED[original.name]
             digest = _sha256(target)

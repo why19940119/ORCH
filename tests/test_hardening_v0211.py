@@ -70,5 +70,31 @@ class StrayJsonReadTests(TempState):
         self.assertFalse(self.status.exists())
 
 
+class JsonBackupModeTests(TempState):
+    """Item 3: json-backup-*/ is 0700 and the moved files are 0600."""
+
+    def test_backup_dir_and_moved_files_are_owner_only(self):
+        old = os.umask(0o022)
+        try:
+            self.status.write_text(json.dumps({"t": {"status": "todo"}}), encoding="utf-8")
+            self.events.write_text(json.dumps({"event": "e"}) + "\n", encoding="utf-8")
+            audit = self.state / "auth_audit.jsonl"
+            audit.write_text(json.dumps({"event": "login"}) + "\n", encoding="utf-8")
+            for path in (self.status, self.events, audit):
+                os.chmod(path, 0o644)
+            report = orch_db.migrate(self.state)
+        finally:
+            os.umask(old)
+        self.assertEqual({row["file"] for row in report},
+                         {"task_status.json", "events.jsonl", "auth_audit.jsonl"})
+        backups = list(self.state.glob("json-backup-*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(stat.S_IMODE(backups[0].stat().st_mode), 0o700)
+        moved = sorted(p.name for p in backups[0].iterdir())
+        self.assertEqual(moved, ["auth_audit.jsonl", "events.jsonl", "task_status.json"])
+        for path in backups[0].iterdir():
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600, path.name)
+
+
 if __name__ == "__main__":
     unittest.main()
