@@ -56,6 +56,10 @@ LOCK_FILE = PROJECT_ROOT / "state" / ".ecom_demo.lock"
 TASK_PREFIX = "task_ecom_"
 DRAFT_LOGICAL_PREFIX = "ecom_draft_"
 AUDIT_LOGICAL_NAME = "ecom_audit"
+# Review fix (v0.21.0): every decision writes this event, carrying the audit
+# artifact id, in the same DB transaction as the status change; /audit lists
+# only audit artifacts confirmed by it (a rolled-back decision never shows).
+AUDIT_COMMIT_EVENT = "ecom_audit_recorded"
 AUDIT_SCHEMA_VERSION = "1.0"
 DEMO_VERSION = "v0.21.0"
 
@@ -1811,6 +1815,69 @@ def _publish_json(logical_name, payload, producer_task_id, parent=None):
     )
 
 
+def _latest_pointer_bytes(logical_name):
+    path = Path(artifact_store.LATEST_DIR) / f"{logical_name}.json"
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+def _discard_audit_artifact(artifact_id, latest_before):
+    """Best-effort removal of an audit artifact whose decision did not
+    commit (manifest, unshared object, latest pointer restored)."""
+    try:
+        manifests = Path(artifact_store.MANIFESTS_DIR)
+        manifest_path = manifests / f"{artifact_id}.json"
+        object_path = None
+        if manifest_path.is_file():
+            object_path = json.loads(manifest_path.read_text(encoding="utf-8")).get("object_path")
+            manifest_path.unlink()
+        if object_path:
+            still_used = False
+            for other in manifests.glob("*.json"):
+                try:
+                    if json.loads(other.read_text(encoding="utf-8")).get("object_path") == object_path:
+                        still_used = True
+                        break
+                except (OSError, ValueError):
+                    continue
+            objects_root = Path(artifact_store.OBJECTS_DIR).resolve()
+            resolved = Path(object_path).resolve()
+            resolved.relative_to(objects_root)
+            if not still_used and resolved.is_file():
+                resolved.unlink()
+        latest = Path(artifact_store.LATEST_DIR) / f"{AUDIT_LOGICAL_NAME}.json"
+        if latest_before is None:
+            if latest.is_file():
+                latest.unlink()
+        else:
+            latest.write_bytes(latest_before)
+    except (OSError, ValueError):
+        pass            # audit_records() still hides it (no committed event)
+
+
+def committed_audit_ids():
+    """Audit artifact ids confirmed by committed DB state: the
+    AUDIT_COMMIT_EVENT rows, older ``ecom_publish_recorded`` events and
+    the decisions still recorded in task status."""
+    ids = set()
+    for event in orch_db.read_log(Path(EVENTS_FILE), where_task_prefix=TASK_PREFIX):
+        if event.get("event") == AUDIT_COMMIT_EVENT and event.get("audit_artifact_id"):
+            ids.add(event["audit_artifact_id"])
+        elif event.get("event") == "ecom_publish_recorded":
+            if event.get("audit_artifact_id"):
+                ids.add(event["audit_artifact_id"])
+            match = re.search(r"audit=(artifact_[A-Za-z0-9_-]+)", event.get("message") or "")
+            if match:
+                ids.add(match.group(1))
+    for state in (_load(STATUS_FILE, {}) or {}).values():
+        decision = ((state or {}).get("ecom") or {}).get("decision") or {}
+        if decision.get("audit_artifact_id"):
+            ids.add(decision["audit_artifact_id"])
+    return ids
+
+
 def read_artifact(artifact_id):
     if not isinstance(artifact_id, str) or not re.fullmatch(
         r"[A-Za-z0-9_-]+", artifact_id
@@ -2099,6 +2166,8 @@ def decide(task_id, decision, operator, expected_version, channel=None, note="")
             "draft_identity": task["ecom_draft"].get("identity", "typed"),
             "due_at_utc": task["ecom_draft"].get("due_at_utc"),
             "overdue_at_decision": is_overdue(task, state),
+            # listed in /audit only once this event is committed
+            "commit_event": AUDIT_COMMIT_EVENT,
         }
         # v0.18.2: the gate decides first; the immutable audit record is
         # published only after decide_approval succeeded.
@@ -2128,31 +2197,51 @@ def decide(task_id, decision, operator, expected_version, channel=None, note="")
         )
         _require(result.get("ok"), result.get("reason", "decision_failed"))
 
+        # Everything above and below runs in one DB transaction (demo_lock);
+        # the audit artifact is a file, so if anything after it fails the
+        # file is removed again and the transaction rolls back - and /audit
+        # only lists artifacts confirmed by the committed AUDIT_COMMIT_EVENT.
+        latest_before = _latest_pointer_bytes(AUDIT_LOGICAL_NAME)
         audit_publication = _publish_json(
             AUDIT_LOGICAL_NAME, audit, task_id, parent=version["artifact_id"]
         )
-        statuses = _load(STATUS_FILE, {})
-        recorded = statuses.get(task_id) or {}
-        recorded_ecom = recorded.get("ecom") or ecom
-        recorded_ecom.setdefault("decision", dict(ecom["decision"]))
-        recorded_ecom["decision"]["audit_artifact_id"] = (
-            audit_publication["artifact_id"]
-        )
-        recorded["ecom"] = recorded_ecom
-        statuses[task_id] = recorded
-        _save(STATUS_FILE, statuses)
-
-        if decision == "approved":
-            mini_orch.write_event(
-                "ecom_publish_recorded",
-                task,
-                f"Simulated publish recorded: channel={channel}, "
-                f"version=v{version['version']}, approver={operator}, "
-                f"audit={audit_publication['artifact_id']}. "
-                "No external call was made.",
-                events_file=EVENTS_FILE,
-                extra={"operator": operator, "channel": channel},
+        try:
+            statuses = _load(STATUS_FILE, {})
+            recorded = statuses.get(task_id) or {}
+            recorded_ecom = recorded.get("ecom") or ecom
+            recorded_ecom.setdefault("decision", dict(ecom["decision"]))
+            recorded_ecom["decision"]["audit_artifact_id"] = (
+                audit_publication["artifact_id"]
             )
+            recorded["ecom"] = recorded_ecom
+            statuses[task_id] = recorded
+            _save(STATUS_FILE, statuses)
+
+            mini_orch.write_event(
+                AUDIT_COMMIT_EVENT,
+                task,
+                f"Audit record {audit_publication['artifact_id']} committed: "
+                f"decision={decision}, version=v{version['version']}, "
+                f"approver={operator}.",
+                events_file=EVENTS_FILE,
+                extra={"operator": operator, "decision": decision,
+                       "audit_artifact_id": audit_publication["artifact_id"]},
+            )
+            if decision == "approved":
+                mini_orch.write_event(
+                    "ecom_publish_recorded",
+                    task,
+                    f"Simulated publish recorded: channel={channel}, "
+                    f"version=v{version['version']}, approver={operator}, "
+                    f"audit={audit_publication['artifact_id']}. "
+                    "No external call was made.",
+                    events_file=EVENTS_FILE,
+                    extra={"operator": operator, "channel": channel,
+                           "audit_artifact_id": audit_publication["artifact_id"]},
+                )
+        except BaseException:
+            _discard_audit_artifact(audit_publication["artifact_id"], latest_before)
+            raise
 
     return {
         "task_id": task_id,
@@ -2229,9 +2318,13 @@ def draft_views(data=None, locale=DEFAULT_LOCALE):
 
 
 def audit_records(limit=200):
+    """Committed audit records only (review fix v0.21.0): an artifact left
+    behind by a decision that rolled back is never listed."""
     manifests_dir = Path(artifact_store.MANIFESTS_DIR)
     if not manifests_dir.is_dir():
         return []
+    committed = committed_audit_ids()
+    statuses = _load(STATUS_FILE, {}) or {}
     records = []
     for manifest_path in manifests_dir.glob(f"artifact_{AUDIT_LOGICAL_NAME}_*.json"):
         try:
@@ -2243,6 +2336,11 @@ def audit_records(limit=200):
             )
         except (OSError, ValueError, KeyError):
             continue
+        if manifest.get("artifact_id") not in committed:
+            if payload.get("commit_event"):
+                continue        # v0.21.0+ record without its committed event
+            if payload.get("task_id") in statuses:
+                continue        # older record its (still present) task never committed
         records.append(
             {
                 **payload,
