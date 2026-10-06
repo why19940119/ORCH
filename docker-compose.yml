@@ -10,8 +10,10 @@ services:
     # a real deployment on the same host. ORCH_IMAGE lets smoke use its own tag.
     image: ${ORCH_IMAGE:-orch:0.21.1}
     restart: unless-stopped
+    # ORCH_ENV_FILE: scripts/smoke.sh points this at its own generated file so
+    # a smoke run never loads the deployment's real .env.
     env_file:
-      - path: .env
+      - path: ${ORCH_ENV_FILE:-.env}
         required: false
     environment:
       ORCH_HOST: 0.0.0.0

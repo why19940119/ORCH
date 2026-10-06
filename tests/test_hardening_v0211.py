@@ -14,7 +14,11 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+import deploy_config
+import orch_auth
 import orch_db
+import orch_ui
+from auth_testing import use_temp_auth
 from test_orch_db_v0210 import TempState
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -241,6 +245,209 @@ class RestoreValidatesFirstTests(unittest.TestCase):
         for check in ("gzip -t", "tar -tzf", './state/.snapshot/orch.db',
                       "SQLite format 3", "PRAGMA integrity_check"):
             self.assertIn(check, text)
+
+
+PASSWORD = "Sup3r-secret-pass"
+
+
+class SetupTokenByDefaultTests(unittest.TestCase):
+    """Item 5: /setup requires a token by default (generated + logged when
+    ORCH_SETUP_TOKEN is unset); ORCH_SETUP_LOCAL_NO_TOKEN=1 is the only way
+    to open it, and only when set."""
+
+    def setUp(self):
+        orch_ui.app.config["TESTING"] = True
+        self.client = orch_ui.app.test_client()
+        use_temp_auth(self, users=())
+        p = patch.object(deploy_config, "_generated_setup_token", None)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def env(self, **values):
+        base = {"ORCH_SETUP_TOKEN": "", "ORCH_TRUSTED_HOSTS": "", "ORCH_PROXY_FIX": "",
+                "ORCH_SETUP_LOCAL_NO_TOKEN": ""}
+        base.update(values)
+        return patch.dict(os.environ, base)
+
+    def post(self, **fields):
+        html = self.client.get("/setup").get_data(as_text=True)
+        csrf = re.search(r'name="csrf_token" value="([^"]+)"', html).group(1)
+        data = {"csrf_token": csrf, "username": "First Admin", "password": PASSWORD,
+                "password_confirm": PASSWORD}
+        data.update(fields)
+        return self.client.post("/setup", data=data)
+
+    def startup_log(self):
+        err = io.StringIO()
+        with redirect_stderr(err):
+            orch_ui.setup_warnings()
+        return err.getvalue()
+
+    def test_default_localhost_install_requires_a_token(self):
+        with self.env():                          # nothing exposed, nothing set
+            self.assertFalse(deploy_config.exposed_install())
+            log = self.startup_log()
+            token = re.search(r"one-time token: (\S+)", log).group(1)
+            self.assertGreaterEqual(len(token), 20)
+            self.assertIn('name="setup_token"', self.client.get("/setup").get_data(as_text=True))
+            self.assertEqual(self.post().status_code, 403)                  # no token
+            self.assertEqual(self.post(setup_token="guess").status_code, 403)
+            self.assertFalse(orch_auth.has_users())
+            # the logged token works
+            self.assertEqual(self.post(setup_token=token).status_code, 302)
+        self.assertTrue(orch_auth.has_users())
+
+    def test_token_is_printed_once_and_stable(self):
+        with self.env():
+            first = self.startup_log()
+            second = self.startup_log()
+            self.assertEqual(first.count("one-time token:"), 1)
+            self.assertNotIn("one-time token:", second)           # printed once per process
+            token = re.search(r"one-time token: (\S+)", first).group(1)
+            self.assertEqual(deploy_config.effective_setup_token(), (token, "generated"))
+
+    def test_opt_out_works_only_when_set(self):
+        for value in ("", "0", "no", "false", "off", "2"):
+            with self.subTest(value=value), self.env(ORCH_SETUP_LOCAL_NO_TOKEN=value):
+                self.assertEqual(deploy_config.effective_setup_token()[1], "generated")
+                self.assertEqual(self.post().status_code, 403)
+        for value in ("1", "true", "YES", "on"):
+            with self.subTest(value=value), self.env(ORCH_SETUP_LOCAL_NO_TOKEN=value):
+                self.assertEqual(deploy_config.effective_setup_token(), ("", "opt-out"))
+        with self.env(ORCH_SETUP_LOCAL_NO_TOKEN="1"):
+            log = self.startup_log()
+            self.assertIn("ORCH WARNING: ORCH_SETUP_LOCAL_NO_TOKEN=1", log)
+            self.assertNotIn("one-time token", log)
+            self.assertNotIn('name="setup_token"', self.client.get("/setup").get_data(as_text=True))
+            self.assertEqual(self.post().status_code, 302)
+        self.assertTrue(orch_auth.has_users())
+
+    def test_opt_out_ignored_on_exposed_install(self):
+        for exposed in ({"ORCH_TRUSTED_HOSTS": "orch.example.com"}, {"ORCH_PROXY_FIX": "1"}):
+            with self.subTest(exposed), self.env(ORCH_SETUP_LOCAL_NO_TOKEN="1", **exposed):
+                deploy_config._generated_setup_token = None
+                log = self.startup_log()
+                self.assertIn("ORCH_SETUP_LOCAL_NO_TOKEN is IGNORED", log)
+                self.assertIn("one-time token:", log)
+                self.assertEqual(self.post().status_code, 403)
+
+    def test_configured_token_wins_over_opt_out(self):
+        with self.env(ORCH_SETUP_TOKEN="tok-abcdef-123", ORCH_SETUP_LOCAL_NO_TOKEN="1"):
+            self.assertEqual(deploy_config.effective_setup_token(), ("tok-abcdef-123", "env"))
+            self.assertEqual(self.post().status_code, 403)
+            self.assertEqual(self.post(setup_token="tok-abcdef-123").status_code, 302)
+        self.assertIsNone(deploy_config._generated_setup_token)
+
+    def test_docs_describe_default_token_and_opt_out(self):
+        guide = (ROOT / "docs" / "安裝指南.md").read_text(encoding="utf-8")
+        row = next(l for l in guide.splitlines() if l.startswith("| `ORCH_SETUP_TOKEN`"))
+        self.assertIn("一律必填", row)
+        self.assertIn("one-time token", row)
+        self.assertIn("| `ORCH_SETUP_LOCAL_NO_TOKEN` |", guide)
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("ORCH_SETUP_LOCAL_NO_TOKEN=1", readme)
+        self.assertIn("a setup token is ALWAYS required", readme)
+        self.assertIn("ORCH_SETUP_LOCAL_NO_TOKEN=1", (ROOT / ".env.example").read_text())
+
+
+class SmokeEnvIsolationTests(unittest.TestCase):
+    """Item 1: smoke.sh never loads the deployment's real .env (nor inherits
+    deployment settings / API keys from the shell). The script is run in
+    Docker mode against a fake ``docker`` that records its arguments, its
+    environment and the env file it was given; a sentinel .env next to the
+    compose file must never reach it."""
+
+    SENTINEL = "SENTINEL-must-not-leak-7f3a"
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        self.tmp = Path(tempfile.mkdtemp(prefix="orch_smoke_v0211_"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.root = self.tmp / "app"
+        (self.root / "scripts").mkdir(parents=True)
+        shutil.copy2(ROOT / "scripts" / "smoke.sh", self.root / "scripts" / "smoke.sh")
+        shutil.copy2(ROOT / "docker-compose.yml", self.root / "docker-compose.yml")
+        # a stand-in for a real deployment's .env (written by this test only)
+        (self.root / ".env").write_text(
+            f"OPENROUTER_API_KEY=sk-or-v1-{self.SENTINEL}\n"
+            f"ORCH_TRUSTED_HOSTS={self.SENTINEL}.example\nORCH_PROXY_FIX=1\n"
+            f"ORCH_SETUP_TOKEN={self.SENTINEL}\n", encoding="utf-8")
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.log = self.tmp / "docker.log"
+        self.copy = self.tmp / "envfile.copy"
+        fake = self.bin / "docker"
+        fake.write_text(f"""#!/bin/sh
+echo "ARGS $*" >> '{self.log}'
+env | grep -E '^(OPENROUTER_|ORCH_|COMPOSE_)' | sed 's/^/ENV /' >> '{self.log}'
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--env-file" ]; then cp "$a" '{self.copy}'; fi
+  prev="$a"
+done
+case " $* " in *" up "*) exit 1;; esac
+exit 0
+""")
+        os.chmod(fake, 0o755)
+        (self.tmp / "work").mkdir()
+
+    def run_smoke(self):
+        env = dict(os.environ)
+        env.update({"PATH": f"{self.bin}{os.pathsep}{env.get('PATH', '')}",
+                    "TMPDIR": str(self.tmp / "work"), "SMOKE_PORT": "5999",
+                    # deployment settings exported in the caller's shell
+                    "OPENROUTER_API_KEY": f"sk-shell-{self.SENTINEL}",
+                    "ORCH_TRUSTED_HOSTS": f"shell-{self.SENTINEL}",
+                    "ORCH_PROXY_FIX": "1", "ORCH_SETUP_TOKEN": f"shell-{self.SENTINEL}",
+                    "ORCH_SETUP_LOCAL_NO_TOKEN": "1"})
+        return subprocess.run(["bash", str(self.root / "scripts" / "smoke.sh")],
+                              cwd=self.root, env=env, capture_output=True, text=True,
+                              timeout=60)
+
+    def test_docker_mode_uses_generated_env_file_only(self):
+        result = self.run_smoke()
+        self.assertNotEqual(result.returncode, 0)          # fake `up` fails on purpose
+        log = self.log.read_text()
+        calls = [l[5:] for l in log.splitlines() if l.startswith("ARGS ")]
+        self.assertTrue(calls[0].startswith("compose -p orch-smoke-"), calls)
+        self.assertIn(" up -d --build", calls[0])
+        self.assertTrue(any(c.startswith("compose -p orch-smoke-") and " down -v" in c
+                            for c in calls))                 # teardown still runs
+        env_file = re.search(r"--env-file (\S+)", calls[0]).group(1)
+        self.assertTrue(env_file.endswith("/smoke.env"))
+        self.assertNotEqual(Path(env_file).resolve(), (self.root / ".env").resolve())
+        self.assertIn(f"ENV ORCH_ENV_FILE={env_file}", log)   # compose env_file target
+        self.assertIn("ENV ORCH_IMAGE=orch-smoke:", log)
+        self.assertNotIn(self.SENTINEL, log)                   # nothing from .env / shell
+        self.assertNotIn("ENV OPENROUTER_API_KEY", log)
+        self.assertNotIn("ENV ORCH_TRUSTED_HOSTS", log)
+        generated = self.copy.read_text()
+        self.assertNotIn(self.SENTINEL, generated)
+        for line in ("OPENROUTER_API_KEY=", "OPENROUTER_VISION_MODEL=", "ORCH_TRUSTED_HOSTS=",
+                     "ORCH_TRUSTED_PROXY=", "ORCH_PROXY_FIX=0", "ORCH_SETUP_LOCAL_NO_TOKEN=",
+                     "ORCH_DEMO_FORCE_MOCK=1", "ORCH_UI_SECRET_KEY="):
+            self.assertIn(line, generated.splitlines())
+        self.assertRegex(generated, r"(?m)^ORCH_SETUP_TOKEN=smoke-[0-9a-f]{32}$")
+        self.assertFalse(Path(env_file).exists())              # temp dir cleaned up
+        self.assertNotIn(self.SENTINEL, result.stdout + result.stderr)
+
+    def test_static_isolation(self):
+        text = (ROOT / "scripts" / "smoke.sh").read_text(encoding="utf-8")
+        self.assertNotRegex(text, r'ROOT[^\n]*/\.env\b')   # never references the real .env
+        self.assertIn('docker compose -p "$PROJECT" --env-file "$SMOKE_ENV"', text)
+        self.assertIn('ORCH_ENV_FILE="$SMOKE_ENV"', text)
+        local = text[text.index('git -C "$ROOT" archive HEAD'):text.index("serve.py >")]
+        self.assertIn('env "${UNSET_ARGS[@]}" OPENROUTER_API_KEY=', local)
+        self.assertIn('ORCH_SETUP_TOKEN="$SMOKE_SETUP_TOKEN"', local)
+        for var in ("OPENROUTER_API_KEY", "OPENROUTER_VISION_MODEL", "ORCH_TRUSTED_HOSTS",
+                    "ORCH_PROXY_FIX", "ORCH_SETUP_TOKEN", "ORCH_SETUP_LOCAL_NO_TOKEN",
+                    "ORCH_UI_SECRET_KEY", "ORCH_AUTH_DIR"):
+            self.assertIn(var, text[text.index("ISOLATE_VARS="):text.index("UNSET_ARGS=()")])
+        self.assertIn('--data-urlencode "setup_token=$SMOKE_SETUP_TOKEN"', text)
+        self.assertIn("setup POST without token must be 403", text)
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        self.assertIn("- path: ${ORCH_ENV_FILE:-.env}", compose)
 
 
 if __name__ == "__main__":

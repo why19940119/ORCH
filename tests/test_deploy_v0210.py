@@ -71,6 +71,12 @@ class SetupWizardTests(unittest.TestCase):
         app.config["TESTING"] = True
         self.client = app.test_client()
         use_temp_auth(self, users=())
+        # v0.21.1: /setup needs a token by default; these wizard tests use the
+        # explicit local-dev opt-out (token behaviour: test_hardening_v0211).
+        env = patch.dict(os.environ, {"ORCH_SETUP_LOCAL_NO_TOKEN": "1", "ORCH_SETUP_TOKEN": "",
+                                      "ORCH_TRUSTED_HOSTS": "", "ORCH_PROXY_FIX": ""})
+        env.start()
+        self.addCleanup(env.stop)
 
     def token(self):
         page = self.client.get("/setup")

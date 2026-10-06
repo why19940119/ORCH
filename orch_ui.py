@@ -3438,7 +3438,8 @@ def setup_post():
         abort(403)
     username = (request.form.get("username") or "").strip()[:40]
     password = request.form.get("password") or ""
-    # Review fix: REQUIRED on exposed installs (generated + logged if unset).
+    # v0.21.1: REQUIRED by default (generated + logged if ORCH_SETUP_TOKEN is
+    # unset); only ORCH_SETUP_LOCAL_NO_TOKEN=1 (local dev) skips it.
     expected, _source = deploy_config.effective_setup_token()
     if expected:
         given = request.form.get("setup_token") or ""
@@ -4585,12 +4586,16 @@ def setup_warnings():
               file=sys.stderr, flush=True)
     if orch_auth.has_users():
         return
+    if deploy_config.setup_local_no_token() and deploy_config.exposed_install():
+        print("ORCH WARNING: ORCH_SETUP_LOCAL_NO_TOKEN is IGNORED because ORCH_TRUSTED_HOSTS / "
+              "ORCH_PROXY_FIX is set - /setup still requires a setup token.",
+              file=sys.stderr, flush=True)
     token, source = deploy_config.effective_setup_token()   # prints a generated one
-    if source == "none":
-        print("ORCH WARNING: no admin account yet - /setup lets whoever reaches this port "
-              "first create the admin. This install is localhost-only (no "
-              "ORCH_TRUSTED_HOSTS / ORCH_PROXY_FIX); set ORCH_SETUP_TOKEN before exposing it, "
-              "or run `python orch_auth.py create-admin`.", file=sys.stderr, flush=True)
+    if source == "opt-out":
+        print("ORCH WARNING: ORCH_SETUP_LOCAL_NO_TOKEN=1 - /setup is OPEN without a setup "
+              "token: whoever reaches this port first creates the admin. Local development "
+              "only; never use it behind a tunnel or reverse proxy (unset it, or set "
+              "ORCH_SETUP_TOKEN).", file=sys.stderr, flush=True)
     elif source == "env":
         print("ORCH: no admin account yet - /setup requires ORCH_SETUP_TOKEN.",
               file=sys.stderr, flush=True)
