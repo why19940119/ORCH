@@ -293,7 +293,11 @@ class DockerFilesTests(unittest.TestCase):
             self.assertTrue(path.read_text(encoding="utf-8").startswith("#!/usr/bin/env bash"))
         backup = self.read("scripts/backup.sh")
         self.assertIn("orch_db.py --state-dir state backup", backup)   # SQLite backup API
-        self.assertIn('--exclude="./state/orch.db"', backup)
+        # the live DB files are never archived (v0.21.1: tar takes the manifest
+        # list, which skips them; the snapshot is archived instead)
+        self.assertIn("! -path ./state/orch.db ! -path ./state/orch.db-wal", backup)
+        self.assertIn("! -path ./state/orch.db-shm", backup)
+        self.assertIn("--no-recursion -T -", backup)
         self.assertIn("tar -czf - ", backup)       # streamed (review fix 2)
 
     def test_zh_hant_docs(self):
