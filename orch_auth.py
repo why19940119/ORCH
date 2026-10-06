@@ -1,6 +1,6 @@
 """ORCH local accounts, roles and governance (v0.20.0, WP-ORCH-11).
 
-Everything lives in gitignored files under ``state/`` (or ``ORCH_AUTH_DIR``):
+Everything lives in the SQLite state DB ``state/orch.db`` (or ``ORCH_AUTH_DIR/orch.db``; v0.21.0):
 
     state/auth.json          users (password hashes only), module approver
                              assignments, pending account changes, settings
@@ -45,11 +45,12 @@ from pathlib import Path
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import mini_orch
+import orch_db
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 AUTH_DIR = Path(os.getenv("ORCH_AUTH_DIR") or (PROJECT_ROOT / "state"))
 
-AUTH_VERSION = "v0.20.1"
+AUTH_VERSION = "v0.21.0"   # app version recorded in audit rows
 ROLES = ("admin", "editor", "approver")
 USERNAME_PATTERN = re.compile(r"^[\w .@'\-]{2,40}$", re.UNICODE)
 MIN_PASSWORD_CHARS = 10
@@ -198,12 +199,9 @@ def _migrate_bootstrap(data, store):
 
 
 def load_store():
-    path = auth_file()
-    if not path.is_file():
-        return _empty_store()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    # v0.21.0: docs['auth'] in the SQLite state DB (AUTH_DIR/orch.db).
+    data = orch_db.load(auth_file(), None)
+    if not isinstance(data, dict):
         return _empty_store()
     store = _empty_store()
     if isinstance(data, dict):
@@ -216,20 +214,19 @@ def load_store():
 
 
 def _save_store(store):
-    path = auth_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle, temp_name = tempfile.mkstemp(prefix=".auth_", dir=str(path.parent))
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            json.dump(store, stream, ensure_ascii=False, indent=2)
-        os.chmod(temp_name, 0o600)
-        os.replace(temp_name, path)
-    except BaseException:
+    orch_db.save(auth_file(), store)
+    _restrict_db_file()
+
+
+def _restrict_db_file():
+    """The DB holds password hashes: keep it owner-only (0600)."""
+    for suffix in ("", "-wal", "-shm"):
+        path = Path(str(orch_db.db_path_for(auth_file())) + suffix)
         try:
-            os.unlink(temp_name)
+            if path.exists() and (path.stat().st_mode & 0o077):
+                os.chmod(path, 0o600)
         except OSError:
             pass
-        raise
 
 
 class _Locked:
@@ -252,24 +249,14 @@ def audit(event, actor, **details):
         "audit_version": AUTH_VERSION,
         **details,
     }
-    path = audit_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+    # v0.21.0: append-only auth_audit table; inside _Locked() it commits in
+    # the same transaction as the change it records.
+    orch_db.append(audit_file(), record)
     return record
 
 
 def read_audit(limit=200):
-    path = audit_file()
-    if not path.is_file():
-        return []
-    records = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            records.append(json.loads(line))
-        except ValueError:
-            continue
-    return list(reversed(records))[:limit]
+    return orch_db.read_log(audit_file(), limit=limit, newest_first=True)
 
 
 # ---------------------------------------------------------------------------
@@ -752,15 +739,16 @@ def request_change(actor, kind, target, role=None, password=None):
         store["pending_changes"].append(change)
         store["pending_changes"] = store["pending_changes"][-500:]
         _save_store(store)
-    audit("account_change_requested", actor_user["username"], change_id=change["id"],
-          kind=kind, target=target, params=_audit_params(params))
-    if single_admin:
-        audit("account_change_applied", actor_user["username"], change_id=change["id"],
-              kind=kind, target=target, params=_audit_params(params),
-              bootstrap_exception=True)
-    _audit_auto_closed("system", auto_closed)
-    if closed:
-        audit("bootstrap_complete", actor_user["username"], reason="second_admin")
+        # v0.21.0: audit rows in the same transaction as the store write.
+        audit("account_change_requested", actor_user["username"], change_id=change["id"],
+              kind=kind, target=target, params=_audit_params(params))
+        if single_admin:
+            audit("account_change_applied", actor_user["username"], change_id=change["id"],
+                  kind=kind, target=target, params=_audit_params(params),
+                  bootstrap_exception=True)
+        _audit_auto_closed("system", auto_closed)
+        if closed:
+            audit("bootstrap_complete", actor_user["username"], reason="second_admin")
     result = {k: v for k, v in change.items() if k != "params"} | {
         "params": _audit_params(params)
     }
@@ -814,12 +802,14 @@ def decide_change(actor, change_id, decision):
         if decision == "approved" and "params" in change:
             change["params"] = _audit_params(change["params"])
         _save_store(store)
-    audit("account_change_" + ("applied" if decision == "approved" else "rejected"),
-          actor_user["username"], change_id=change_id, kind=change["kind"],
-          target=change["target"], requested_by=change["requested_by"])
-    _audit_auto_closed("system", auto_closed)
-    if closed:
-        audit("bootstrap_complete", actor_user["username"], reason="second_admin")
+        # v0.21.0: the decision and all its audit rows (incl. the v0.20.1
+        # auto-closed requests) commit together in one SQLite transaction.
+        audit("account_change_" + ("applied" if decision == "approved" else "rejected"),
+              actor_user["username"], change_id=change_id, kind=change["kind"],
+              target=change["target"], requested_by=change["requested_by"])
+        _audit_auto_closed("system", auto_closed)
+        if closed:
+            audit("bootstrap_complete", actor_user["username"], reason="second_admin")
     return change
 
 

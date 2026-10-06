@@ -73,6 +73,27 @@ v0.20.1     Chat accuracy: precomputed last 7 / 30 day totals with previous
             partial / uncovered periods flagged (no change vs no data),
             requests of demoted admins auto-closed, stacked phone composer,
             colloquial Cantonese + 營業額, audit / import version v0.20.1
+v0.21.0     SQLite state + Docker: all mutable state in state/orch.db (WAL,
+            one-transaction approve + audit, automatic one-time migration from
+            the JSON files with a timestamped backup), Dockerfile +
+            docker-compose.yml (non-root, /healthz, persisted session key),
+            /setup first-admin wizard, branding (client name, logo, target
+            market), version in the footer, backup / restore / smoke scripts,
+            reverse-proxy (HTTPS) option, zh-Hant docs in docs/;
+            phones (<=720px): compact top bar (ORCH, current page, ☰ 選單)
+            with nav / language / 登出 in a collapsible menu that works
+            without JavaScript (desktop unchanged);
+            review fixes: legacy JSON auto-imported only into an EMPTY DB
+            (stray files refused + logged; `migrate --force` backs up
+            orch.db first, upserts, dedupes logs), orch.db / -wal / -shm /
+            exports / backups 0600 from creation, no audit record for a
+            decision that rolled back (/audit lists committed ones only),
+            /setup token required on exposed installs (generated + logged
+            if unset), X-Forwarded-* only from ORCH_TRUSTED_PROXY peers,
+            Docker backup / restore streamed (works as uid 10001 on Linux,
+            archives 0600, snapshot cleaned up), task_queue.json + output/
+            persisted in volumes, smoke.sh isolated from a real deployment,
+            app code read-only for the runtime user
 ```
 
 ## Core Architecture
@@ -928,13 +949,11 @@ BOM, opens in Excel / Sheets). Each export is recorded in the governance log.
 
 ### Where it is stored (gitignored)
 
-```text
-state/auth.json          accounts (password hashes), module approvers,
-                         pending account changes, settings (file mode 0600)
-state/auth_audit.jsonl   governance log: logins, lockouts, account changes,
-                         approver changes, purges, exports (append-only)
-state/.auth.lock         file lock
-```
+Since v0.21.0 both live in the SQLite state DB `state/orch.db` (mode 0600):
+the `docs` row `auth` (accounts with password hashes, module approvers,
+pending account changes, settings) and the append-only `auth_audit` table
+(logins, lockouts, account changes, approver changes, purges, exports).
+See "SQLite state (v0.21.0)" below.
 
 ### CLI (for recovery)
 
@@ -962,7 +981,7 @@ ORCH_DISPLAY_TZ             time zone for exported times, default Asia/Hong_Kong
 ORCH_LOGIN_MAX_FAILURES     wrong passwords before lockout, default 5
 ORCH_LOGIN_LOCKOUT_MINUTES  lockout length, default 15
 SESSION_COOKIE_SECURE       1 = cookie only over HTTPS (set behind HTTPS)
-ORCH_AUTH_DIR               where auth.json / auth_audit.jsonl live, default state/
+ORCH_AUTH_DIR               directory of the DB holding accounts / audit, default state/
 ```
 
 ### Existing data
@@ -972,3 +991,118 @@ keep their typed names and show a "legacy (typed name)" tag. A pending
 legacy draft can be approved by an approver whose username differs from
 the typed creator.
 
+
+## SQLite state (v0.21.0)
+
+All mutable state now lives in one SQLite database, `state/orch.db`
+(WAL journal, `busy_timeout` 30 s, `PRAGMA user_version` / `meta.schema_version`
+= 1). The code still names state by the old file paths; `orch_db.py` maps them:
+
+```text
+state/task_status.json      -> table task_status (one row per task)
+state/ecom_demo_queue.json  -> docs['ecom_demo_queue']
+state/ecom_import.json      -> docs['ecom_import']
+state/auth.json             -> docs['auth']
+state/events.jsonl          -> table events      (append-only, UPDATE/DELETE blocked)
+state/auth_audit.jsonl      -> table auth_audit  (append-only, UPDATE/DELETE blocked)
+state/chat_usage.jsonl      -> table chat_usage
+```
+
+An approval (Inbox or `mini_orch.py approve`) is one `BEGIN IMMEDIATE`
+transaction: a conditional update (`... WHERE approval_status = <what was
+checked>`) plus its event row, so two concurrent approvals of the same
+draft can never both succeed (tested with two processes).
+
+**Still plain files** (by design): `task_queue.json` (hand-edited task
+definitions, git-tracked; `mini_orch.py add-task` writes it), `state/tasks.json`,
+`policy_contracts.json`, `demo/sample_data.json`, `artifacts/` (immutable
+content-addressed objects + manifests), `uploads/`, `data/import/` CSVs,
+`output/`, `state/secret_key`, `state/branding.json`.
+
+### Migration from v0.20.x
+
+Automatic, **only into an empty DB**: the first time the DB is opened (app
+start, CLI, any read), every legacy JSON file in `state/` is moved into
+`state/json-backup-<UTC>/` and imported in the same transaction (on any
+error the files are moved back, nothing is written and no empty `orch.db` /
+backup folder is left behind). Once `orch.db` holds data, a JSON file that
+appears in `state/` is **refused**: it stays where it is, nothing is
+imported or deleted, and an `ERROR ... REFUSED to import legacy JSON` line
+is logged (once per process). To import such files on purpose:
+`orch_db.py migrate --force` writes `state/orch.db.pre-migrate-<UTC>` (0600)
+first, then upserts task rows (never deletes), replaces documents and appends
+only log records not already present (deduplicated on their canonical JSON,
+so re-importing a log or an export adds nothing). Explicitly:
+
+```bash
+# stop the UI first (Ctrl-C), then
+cp -a state state.pre-v0210-backup          # extra safety copy
+.venv/bin/python orch_db.py migrate         # empty DB only; prints what it imported
+# .venv/bin/python orch_db.py migrate --force   # non-empty DB: backs up orch.db first
+.venv/bin/python orch_db.py status          # schema version, row counts, migrations
+.venv/bin/python orch_db.py check           # PRAGMA integrity_check
+```
+
+### Rollback to v0.20.x
+
+```bash
+# stop the UI, then write the DB back out as the old JSON files
+.venv/bin/python orch_db.py export /tmp/orch-json
+mkdir -p state/v0210-db && mv state/orch.db* state/v0210-db/
+cp /tmp/orch-json/* state/
+git checkout <v0.20.x commit>
+```
+
+(or copy back the files from `state/json-backup-<UTC>/` / `state.pre-v0210-backup`,
+which hold the state exactly as it was at migration time).
+
+`mini_orch_v1..v4_*.py` (historical single-file versions) read the old JSON
+files, so they refuse to run once `state/orch.db` exists.
+
+## Docker deployment (v0.21.0)
+
+```bash
+cp .env.example .env          # add OPENROUTER_API_KEY (optional) - never baked into the image
+docker compose up -d --build
+open http://127.0.0.1:5050/setup    # create the first admin (only while no account exists)
+```
+
+- Image: `python:3.12-slim`, non-root user `orch` (uid 10001), `HEALTHCHECK`
+  on `GET /healthz` (unauthenticated; returns version + DB status only),
+  served by waitress (`serve.py`).
+- Volumes: `state/` (orch.db, secret_key, branding.json, task_queue.json),
+  `uploads/`, `data/`, `artifacts/`, `output/`. In the image
+  `/app/task_queue.json` is a symlink to `state/task_queue.json`, seeded from
+  `defaults/task_queue.json` on first start, so tasks added at runtime survive
+  `docker compose down` / `up` and image rebuilds.
+- Session key: `ORCH_UI_SECRET_KEY` if set, otherwise generated on first
+  start and kept in `state/secret_key` (0600).
+- First admin: `/setup` wizard (CSRF, only while no account exists;
+  `ORCH_SETUP_TOKEN` is REQUIRED for an exposed install - with
+  `ORCH_TRUSTED_HOSTS` or `ORCH_PROXY_FIX` set and no token, a one-time token
+  is generated and printed to the log, and /setup refuses without it), or
+  `docker compose exec orch python orch_auth.py create-admin`.
+- Branding: `ORCH_CLIENT_NAME`, `ORCH_LOGO` (https URL or a path inside
+  `state/`, e.g. `branding/logo.png`), `ORCH_TARGET_MARKET`, or the same keys
+  (`client_name`, `logo`, `target_market`) in `state/branding.json`. The
+  version is shown in the footer.
+- HTTPS / reverse proxy: `SESSION_COOKIE_SECURE=1`, `ORCH_PROXY_FIX=1`,
+  `ORCH_TRUSTED_PROXY=172.16.0.0/12` (Docker; default `127.0.0.1,::1`),
+  `ORCH_TRUSTED_HOSTS=orch.example.com`. X-Forwarded-* are used only from a
+  `ORCH_TRUSTED_PROXY` peer and stripped from every other client (waitress
+  and the dev server alike), so a spoofed X-Forwarded-Host cannot pass the
+  host check; Caddy / nginx examples in
+  `docs/反向代理與HTTPS.md`.
+- Backup / restore: `scripts/backup.sh` (SQLite backup API snapshot + tar of
+  the volumes) and `scripts/restore.sh <archive>`; `--local` for a plain checkout.
+  The archive is streamed through stdout / stdin of the one-off container (the
+  uid 10001 container never writes or reads host files, so it works on Linux
+  hosts), created 0600 under umask 077 (it holds secret_key and password
+  hashes), the snapshot folder is removed on every exit path, and restore
+  deletes nothing unless the archive is a valid ORCH backup.
+- Upgrade: `git pull` (or pull the new image), `scripts/backup.sh`,
+  `docker compose up -d --build`; schema migrations run on start.
+- Smoke test: `scripts/smoke.sh` (Docker) or `scripts/smoke.sh --local`.
+
+zh-Hant guides: `docs/安裝指南.md`, `docs/使用手冊.md`, `docs/SOP.md`,
+`docs/反向代理與HTTPS.md`.

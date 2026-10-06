@@ -40,3 +40,10 @@ state/.ecom_import_*
 state/auth.json
 state/auth_audit.jsonl
 state/.auth*
+
+# v0.21.0 SQLite state + migration backups
+state/orch.db
+state/orch.db-*
+state/json-backup-*/
+state/secret_key
+state/branding.json

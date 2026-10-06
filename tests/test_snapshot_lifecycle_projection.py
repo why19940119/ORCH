@@ -3,6 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+import orch_db
 import snapshot_store
 
 
@@ -79,10 +80,9 @@ class SnapshotLifecycleProjectionTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        snapshot_store.STATUS_FILE.write_text(
-            json.dumps(self.statuses),
-            encoding="utf-8",
-        )
+        # v0.21.0: task state lives in SQLite; a JSON file next to a
+        # non-empty DB is (deliberately) not re-imported.
+        orch_db.save(snapshot_store.STATUS_FILE, self.statuses)
 
         snapshot_store.POLICY_CONTRACTS_FILE.write_text(
             json.dumps(

@@ -23,6 +23,7 @@ import chat_attachments
 import commerce_demo
 import mini_orch
 import orch_auth
+import orch_db
 from auth_testing import TEST_PASSWORD, seed_users, sign_in, use_temp_auth
 from orch_ui import PROJECT_ROOT, app
 from test_commerce_demo import DemoSandbox
@@ -135,11 +136,15 @@ class LoginTests(unittest.TestCase):
     def test_passwords_never_stored_or_logged_in_clear(self):
         self.login("Eve Editor", TEST_PASSWORD)
         self.login("Eve Editor", "Some-Wrong-Pass-9")
-        for path in (orch_auth.auth_file(), orch_auth.audit_file()):
-            text = path.read_text(encoding="utf-8")
-            self.assertNotIn(TEST_PASSWORD, text)
-            self.assertNotIn("Some-Wrong-Pass-9", text)
-        self.assertNotIn("password_hash", orch_auth.audit_file().read_text(encoding="utf-8"))
+        # v0.21.0: accounts + audit live in orch.db; check the rows and the raw DB bytes.
+        audit_text = json.dumps(orch_db.read_log(orch_auth.audit_file()), ensure_ascii=False)
+        store_text = json.dumps(orch_db.load(orch_auth.auth_file(), {}), ensure_ascii=False)
+        raw = b"".join(p.read_bytes() for p in Path(orch_auth.AUTH_DIR).glob("orch.db*"))
+        for secret in (TEST_PASSWORD, "Some-Wrong-Pass-9"):
+            self.assertNotIn(secret, audit_text)
+            self.assertNotIn(secret, store_text)
+            self.assertNotIn(secret.encode("utf-8"), raw)
+        self.assertNotIn("password_hash", audit_text)
 
     def test_secure_cookie_env(self):
         code = "import orch_ui; print(orch_ui.app.config['SESSION_COOKIE_SECURE'], orch_ui.app.config['SESSION_COOKIE_HTTPONLY'])"
@@ -206,7 +211,7 @@ class RoleMatrixTests(DemoSandbox):
         queue = self.queue()
         queue[-1]["ecom_draft"].pop("identity")
         queue[-1]["ecom_draft"].pop("due_at_utc")
-        self.demo_queue_file.write_text(json.dumps(queue), encoding="utf-8")
+        orch_db.save(self.demo_queue_file, queue)
         self.as_user("Ben Lee")
         html = self.client.get("/inbox").get_data(as_text=True)
         self.assertIn(ui_strings("zh-Hant")["gov_legacy_typed"], html)
@@ -284,7 +289,7 @@ class DeadlineTests(DemoSandbox):
         # Make it overdue on disk and check Inbox + dashboard reminders.
         queue = self.queue()
         queue[-1]["ecom_draft"]["due_at_utc"] = (created - timedelta(hours=1)).isoformat()
-        self.demo_queue_file.write_text(json.dumps(queue), encoding="utf-8")
+        orch_db.save(self.demo_queue_file, queue)
         self.as_user("Ben Lee")
         inbox = self.client.get("/inbox").get_data(as_text=True)
         self.assertIn("data-escalation", inbox)
@@ -568,9 +573,10 @@ class I18nTests(unittest.TestCase):
             self.assertIn(t["auth_err_login_invalid"], html)
 
     def test_version(self):
-        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.20.1")
-        self.assertEqual(orch_auth.AUTH_VERSION, "v0.20.1")
-        self.assertIn("v0.20.0", (PROJECT_ROOT / "README.md").read_text(encoding="utf-8"))
+        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.21.0")
+        self.assertEqual(orch_auth.AUTH_VERSION, "v0.21.0")
+        self.assertIn("v0.21.0", (PROJECT_ROOT / "README.md").read_text(encoding="utf-8"))
+        self.assertIn("v0.20.1", (PROJECT_ROOT / "README.md").read_text(encoding="utf-8"))  # changelog kept
 
 
 class RepoHygieneTests(unittest.TestCase):

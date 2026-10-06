@@ -8,6 +8,8 @@ import os
 import re
 import uuid
 
+import orch_db
+
 from artifact_store import (
     publish_staged_artifact,
     stage_json,
@@ -114,6 +116,9 @@ def usage_number(usage, field, default_value=0):
 
 
 def append_usage_record(record):
+    if orch_db.is_managed(USAGE_FILE):     # v0.21.0: chat_usage table
+        orch_db.append(USAGE_FILE, record)
+        return
     USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     with USAGE_FILE.open("a", encoding="utf-8") as file:

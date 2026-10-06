@@ -7,11 +7,7 @@ import json
 import subprocess
 import time
 
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - non-POSIX
-    fcntl = None
-
+import orch_db
 from advisory_dispatch import run_advisory_preflight
 
 STATE_DIR = Path("state")
@@ -27,20 +23,14 @@ DEMO_TASK_PREFIX = "task_ecom_"
 
 @contextmanager
 def state_lock(lock_file=None):
-    """Exclusive flock on the shared state lock file.
-
-    Not re-entrant: never nest two state_lock() blocks in one process.
-    """
-    lock_path = Path(lock_file) if lock_file is not None else LOCK_FILE
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+") as handle:
-        if fcntl is not None:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            if fcntl is not None:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    """v0.21.0: one SQLite write transaction (BEGIN IMMEDIATE) on the state
+    DB next to ``lock_file`` (was an flock). Re-entrant per thread; every
+    load/save/event inside commits or rolls back together."""
+    # Default: the DB that holds STATUS_FILE (read at call time, so a
+    # patched STATUS_FILE never locks the repository's own state/orch.db).
+    lock_path = Path(lock_file) if lock_file is not None else STATUS_FILE
+    with orch_db.transaction(lock_path):
+        yield
 
 
 def load_all_tasks(queue_file=None, demo_queue_file=None):
@@ -48,7 +38,7 @@ def load_all_tasks(queue_file=None, demo_queue_file=None):
     (a demo task copied from a legacy task_queue.json appears once)."""
     main_tasks = load_json(Path(queue_file or QUEUE_FILE), [])
     demo_path = Path(demo_queue_file or DEMO_QUEUE_FILE)
-    demo_tasks = load_json(demo_path, []) if demo_path.exists() else []
+    demo_tasks = load_json(demo_path, [])
     seen = set()
     merged = []
     for task in list(demo_tasks) + list(main_tasks):
@@ -82,6 +72,10 @@ def now():
 
 
 def load_json(file_path, default_value):
+    # v0.21.0: state names (task_status.json, ecom_demo_queue.json, ...)
+    # live in state/orch.db; other paths (task_queue.json) stay files.
+    if orch_db.is_managed(file_path):
+        return orch_db.load(file_path, default_value)
     if not file_path.exists():
         return default_value
 
@@ -89,6 +83,9 @@ def load_json(file_path, default_value):
 
 
 def save_json(file_path, data):
+    if orch_db.is_managed(file_path):
+        orch_db.save(file_path, data)
+        return
     file_path.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -109,10 +106,12 @@ def write_event(event, task, message, events_file=None, extra=None):
             record.setdefault(key, value)
 
     target = Path(events_file) if events_file is not None else EVENTS_FILE
-    target.parent.mkdir(parents=True, exist_ok=True)
-
-    with target.open("a", encoding="utf-8") as file:
-        file.write(json.dumps(record, ensure_ascii=False) + "\n")
+    if orch_db.is_managed(target):
+        orch_db.append(target, record)
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     print(f"[{record['timestamp']}] {event}: {task['id']} - {message}")
 
@@ -639,6 +638,23 @@ def decide_approval(
         Path(status_file) if status_file is not None else STATUS_FILE
     )
 
+    # v0.21.0: the gate check, the conditional status update and the audit
+    # event are one SQLite transaction (BEGIN IMMEDIATE).
+    if not orch_db.is_managed(status_path):     # plain JSON file (old callers)
+        return _decide_in_transaction(
+            task_id, decision, decided_by, note, queue_file, queue_path,
+            status_path, events_file, extra_state, strict, os_user,
+        )
+    with orch_db.transaction(status_path):
+        return _decide_in_transaction(
+            task_id, decision, decided_by, note, queue_file, queue_path,
+            status_path, events_file, extra_state, strict, os_user,
+        )
+
+
+def _decide_in_transaction(task_id, decision, decided_by, note, queue_file,
+                           queue_path, status_path, events_file, extra_state,
+                           strict, os_user):
     if queue_file is not None:
         tasks = load_json(queue_path, [])
     else:
@@ -695,8 +711,13 @@ def decide_approval(
 
     task_state["updated_at"] = timestamp
     statuses[task_id] = task_state
-    status_path.parent.mkdir(parents=True, exist_ok=True)
-    save_json(status_path, statuses)
+    # Conditional update: only succeeds while the stored decision is still
+    # the one checked above (so only one approval can ever win).
+    if not orch_db.is_managed(status_path):
+        status_path.parent.mkdir(parents=True, exist_ok=True)
+        save_json(status_path, statuses)
+    elif not orch_db.put_task_state_if(status_path, task_id, task_state, prior):
+        return {"ok": False, "reason": "already_decided"}
 
     write_event(
         event_name,

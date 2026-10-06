@@ -6,6 +6,7 @@ import json
 import unittest
 
 import chat_security
+import orch_db
 
 
 class ChatRedactionTests(unittest.TestCase):
@@ -139,12 +140,8 @@ class ChatUsageLedgerTests(unittest.TestCase):
             session_id_sha256="sha256:usage-test-session",
         )
 
-        records = [
-            json.loads(line)
-            for line in chat_security.USAGE_FILE.read_text(
-                encoding="utf-8"
-            ).splitlines()
-        ]
+        # v0.21.0: the usage ledger is the chat_usage table in orch.db.
+        records = orch_db.read_log(chat_security.USAGE_FILE)
 
         self.assertEqual(len(records), 1)
         self.assertEqual(

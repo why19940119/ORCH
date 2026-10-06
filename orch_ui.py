@@ -50,6 +50,8 @@ import admin_ui
 import commerce_demo
 import commerce_import
 import commerce_ui
+import deploy_config
+import orch_db
 import orch_auth
 
 
@@ -114,7 +116,9 @@ load_local_dotenv()
 
 app = Flask(__name__)
 
-_secret = os.getenv("ORCH_UI_SECRET_KEY")
+# v0.21.0: env key, else (ORCH_PERSIST_SECRET_KEY=1, the Docker image) a key
+# generated once and kept in state/secret_key, else an ephemeral one.
+_secret, SECRET_KEY_SOURCE = deploy_config.resolve_secret_key()
 if _secret:
     app.secret_key = _secret
 else:
@@ -141,7 +145,15 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_REQUEST_MB * 1024 * 1024
 app.config["TRUSTED_HOSTS"] = [
     "127.0.0.1",
     "localhost",
-]
+] + deploy_config.extra_trusted_hosts()   # v0.21.0: ORCH_TRUSTED_HOSTS
+
+# v0.21.0: behind a reverse proxy (Caddy/nginx) set ORCH_PROXY_FIX=1 (and
+# ORCH_TRUSTED_PROXY when the proxy is not on 127.0.0.1): X-Forwarded-* are
+# honoured only from that proxy's address and stripped from everyone else,
+# so the TRUSTED_HOSTS check cannot be passed with a spoofed X-Forwarded-Host.
+app.wsgi_app = deploy_config.ProxyHeadersMiddleware(app.wsgi_app)
+
+APP_VERSION = commerce_demo.DEMO_VERSION
 
 CHAT_MAX_HISTORY = 8
 CHAT_MIN_INTERVAL_SECONDS = 3
@@ -216,7 +228,7 @@ BASE_TEMPLATE = """
     name="viewport"
     content="width=device-width, initial-scale=1"
   >
-  <title>{{ title }} · ORCH Operator Console</title>
+  <title>{{ title }} · {{ branding.client_name ~ ' · ' if branding.client_name }}ORCH Operator Console</title>
   <style>
     :root {
       --bg: #120c1d;
@@ -1306,6 +1318,26 @@ BASE_TEMPLATE = """
       color: #fff;
     }
 
+    .brand-logo {
+      height: 28px;
+      margin-right: 8px;
+      max-width: 160px;
+      object-fit: contain;
+      vertical-align: middle;
+    }
+
+    .brand-market {
+      color: #a996bd;
+      font-size: 12px;
+      margin: 2px 0 0;
+    }
+
+    .version-chip {
+      color: #8a769d;
+      margin-left: 10px;
+      white-space: nowrap;
+    }
+
     .site-footer {
       border-top: 1px solid rgba(73, 54, 95, .45);
       color: #8a769d;
@@ -1866,11 +1898,227 @@ BASE_TEMPLATE = """
       font-size: 12px;
       margin-top: 6px;
     }
+
+    /* v0.21.0 mobile menu: hidden on desktop; the menu wrapper is
+       transparent to the header's flex layout (display: contents). */
+    .mobile-page-name,
+    .menu-toggle,
+    .menu-toggle-input {
+      display: none;
+    }
+
+    .site-menu {
+      display: contents;
+    }
+
+    /* v0.21.0 mobile layout (phones, 375-430px; must stay the LAST rules).
+       Root causes seen on a real iPhone:
+       - the header is position: sticky with a 92% opaque background and a
+         backdrop blur; on phones the nav wraps to ~6 rows, so a ~300px
+         translucent header stayed pinned over the page and the nav /
+         language / user rows showed through on top of the content;
+       - the chat composer is position: sticky (bottom) with z-index 50 and
+         ~350px tall, covering the chat history behind it;
+       - inputs under 16px make iOS Safari zoom the page on focus.
+       Fix: static opaque header, nav = one horizontally scrolling strip
+       inside itself, static composer, 16px form controls. */
+    @media (max-width: 720px) {
+      /* no viewport-width units anywhere; nothing is clipped to hide overflow - every
+         element fits (wide tables scroll inside .table-wrap). */
+      html,
+      body {
+        max-width: 100%;
+      }
+
+      /* Compact top bar: ORCH title, current page name, Menu button.
+         The nav, language picker and user line live in .site-menu, which
+         stays collapsed until the (visually hidden) checkbox is checked by
+         tapping its label - works without JavaScript. */
+      header {
+        align-items: center;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        background: #171020;
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 6px 10px;
+        padding: 8px 12px;
+        position: static;
+        z-index: auto;
+      }
+
+      header h1 {
+        flex: 0 1 auto;
+        font-size: 14px;
+        margin: 0;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .brand-market {
+        display: none;
+      }
+
+      .mobile-page-name {
+        color: var(--muted);
+        display: block;
+        flex: 1 1 auto;
+        font-size: 13px;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .menu-toggle-input {
+        clip-path: inset(50%);
+        display: block;
+        height: 1px;
+        margin: 0;
+        opacity: 0;
+        overflow: hidden;
+        position: absolute;
+        width: 1px;
+      }
+
+      .menu-toggle {
+        align-items: center;
+        border: 1px solid #59406e;
+        border-radius: 999px;
+        color: #e8d4ff;
+        cursor: pointer;
+        display: inline-flex;
+        font-size: 13px;
+        font-weight: 600;
+        gap: 6px;
+        margin-left: auto;
+        min-height: 36px;
+        padding: 6px 12px;
+        user-select: none;
+      }
+
+      .menu-toggle-input:focus-visible + .menu-toggle {
+        outline: 2px solid var(--blue);
+        outline-offset: 2px;
+      }
+
+      .menu-toggle-input:checked + .menu-toggle {
+        background: #3d2860;
+      }
+
+      .site-menu {
+        display: none;
+        flex: 1 1 100%;
+        width: 100%;
+      }
+
+      .menu-toggle-input:checked ~ .site-menu {
+        border-top: 1px solid rgba(73, 54, 95, .7);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 10px 0 4px;
+      }
+
+      header nav {
+        flex-wrap: wrap;
+        gap: 4px;
+        max-width: 100%;
+        overflow: visible;
+        width: 100%;
+      }
+
+      header nav a {
+        font-size: 14px;
+        padding: 8px 12px;
+      }
+
+      header nav .nav-sep {
+        display: none;
+      }
+
+      header nav .nav-group-label {
+        flex: 1 1 100%;
+        margin-top: 6px;
+      }
+
+      .lang-switch,
+      .user-chip {
+        margin-left: 0;
+      }
+
+      .lang-switch button,
+      .user-chip button {
+        font-size: 13px;
+        padding: 6px 12px;
+      }
+
+      .chat-page .chat-composer,
+      .chat-page .section.chat-composer {
+        background: #1b1329;
+        bottom: auto;
+        box-shadow: none;
+        position: static;
+        z-index: auto;
+      }
+
+      /* Stacked composer: data-source line (above the grid, full width),
+         then the textarea across the full width, then one row of controls
+         (paperclip + mode toggle, wrapping if needed, and Send). */
+      .chat-page .composer-grid {
+        align-items: center;
+        grid-template-columns: minmax(0, 1fr) auto;
+      }
+
+      .chat-page p.chat-data-source {
+        width: 100%;
+      }
+
+      .chat-page .composer-grid textarea {
+        grid-column: 1 / -1;
+        min-height: 120px;
+        order: -1;
+        width: 100%;
+      }
+
+      .chat-page .composer-tools {
+        flex-wrap: wrap;
+        min-width: 0;
+      }
+
+      .chat-page .composer-submit {
+        width: auto;
+      }
+
+      input,
+      select,
+      textarea,
+      .chat-page textarea {
+        font-size: 16px;
+      }
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>{{ t.brand }}</h1>
+    <h1 class="brand-title">
+      {% if branding.logo_src %}<img class="brand-logo" src="{{ branding.logo_src }}" alt="" data-brand-logo>{% endif %}
+      {% if branding.client_name %}<span class="brand-client" data-brand-client>{{ branding.client_name }}</span> · {% endif %}{{ t.brand }}
+    </h1>
+    {% if branding.target_market %}<p class="brand-market" data-brand-market>{{ t.brand_market_label }}: {{ branding.target_market }}</p>{% endif %}
+    {# v0.21.0 mobile menu: CSS-only toggle (checkbox + label). Desktop never
+       sees these three elements and shows .site-menu as display: contents,
+       so the header layout is unchanged there. #}
+    <span class="mobile-page-name" data-mobile-page-name aria-label="{{ t.menu_current_page }}">{{ title }}</span>
+    <input type="checkbox" id="site-menu-toggle" class="menu-toggle-input" data-menu-toggle
+           autocomplete="off" aria-controls="site-menu" aria-expanded="false"
+           aria-label="{{ t.menu_toggle_aria }}">
+    <label for="site-menu-toggle" class="menu-toggle" aria-hidden="true" data-menu-button>
+      <span class="menu-toggle-icon">☰</span> <span>{{ t.menu_label }}</span>
+    </label>
+    <div class="site-menu" id="site-menu" data-site-menu>
     {% if current_user %}
     <nav>
       <a href="/" class="{{ 'active' if active == 'dashboard' }}">
@@ -1943,14 +2191,35 @@ BASE_TEMPLATE = """
       </form>
     </div>
     {% endif %}
+    </div>
   </header>
   <main>
     {{ body|safe }}
   </main>
   <footer class="site-footer">
     <span class="boundary-chip">{{ t.operator_boundary_short }}</span>
+    <span class="version-chip" data-app-version>ORCH · {{ t.footer_version }} {{ app_version }}</span>
   </footer>
   <script>
+    // v0.21.0 mobile menu: keep aria-expanded in sync and close the menu
+    // after a link is chosen (the toggle itself works without JS).
+    (function () {
+      var toggle = document.getElementById("site-menu-toggle");
+      var menu = document.getElementById("site-menu");
+      if (!toggle || !menu) return;
+      function sync() { toggle.setAttribute("aria-expanded", toggle.checked ? "true" : "false"); }
+      function close() { toggle.checked = false; sync(); }
+      toggle.addEventListener("change", sync);
+      menu.addEventListener("click", function (event) {
+        if (event.target.closest("a")) close();
+      });
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && toggle.checked) { close(); toggle.focus(); }
+      });
+      window.addEventListener("pageshow", sync);
+      sync();
+    })();
+
     document.addEventListener("click", async function(event) {
       const messageButton = event.target.closest("[data-copy-message]");
       const textButton = event.target.closest("[data-copy-text]");
@@ -2433,6 +2702,8 @@ BASE_TEMPLATE = """
 
 
 def load_json(path, default_value):
+    if orch_db.is_managed(path):      # v0.21.0: state lives in state/orch.db
+        return orch_db.load(path, default_value)
     if not path.exists():
         return default_value
 
@@ -2544,20 +2815,7 @@ def load_statuses():
 
 
 def load_events(limit=100):
-    if not EVENTS_FILE.exists():
-        return []
-
-    events = deque(maxlen=limit)
-
-    for line in EVENTS_FILE.read_text(
-        encoding="utf-8"
-    ).splitlines():
-        try:
-            events.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-
-    return list(reversed(events))
+    return orch_db.read_log(EVENTS_FILE, limit=limit, newest_first=True)
 
 
 def task_view(task, statuses):
@@ -2971,6 +3229,8 @@ def render_page(title, active, body_template, **context):
         locale_choices=locale_choices,
         next_path=safe_next_path(request.path),
         current_user=g.get("user"),
+        branding=deploy_config.load_branding(),
+        app_version=APP_VERSION,
     )
 
 
@@ -2978,7 +3238,11 @@ def render_page(title, active, body_template, **context):
 # v0.20.0: local accounts (login required once any account exists)
 # ---------------------------------------------------------------------------
 
-AUTH_OPEN_ENDPOINTS = {"static", "login", "login_post", "set_locale", "setup_required"}
+AUTH_OPEN_ENDPOINTS = {"static", "login", "login_post", "set_locale", "setup_required",
+                       "setup_post", "healthz", "branding_logo"}
+# v0.21.0: reachable before the first account exists (setup mode).
+SETUP_OPEN_ENDPOINTS = {"static", "set_locale", "setup_required", "setup_post", "healthz",
+                        "branding_logo"}
 
 
 def _wants_json():
@@ -2995,7 +3259,7 @@ def require_login():
     _ = request.host  # trusted-host validation (400) runs before any redirect
     endpoint = request.endpoint or ""
     if not orch_auth.has_users():
-        if endpoint in {"static", "set_locale", "setup_required"}:
+        if endpoint in SETUP_OPEN_ENDPOINTS:
             return None
         if _wants_json():
             t = ui_strings(_current_locale())
@@ -3004,9 +3268,11 @@ def require_login():
     user = orch_auth.session_user(session)
     if user:
         g.user = user
-        if endpoint in {"login", "setup_required"}:
+        if endpoint in {"login", "setup_required", "setup_post"}:
             return redirect("/")
         return None
+    if endpoint in {"setup_required", "setup_post"}:
+        return redirect("/login")        # the wizard closes for good
     if endpoint in AUTH_OPEN_ENDPOINTS:
         return None
     if _wants_json():
@@ -3117,18 +3383,106 @@ def logout():
     return redirect("/login")
 
 
-@app.get("/setup")
-def setup_required():
-    t = ui_strings(get_locale())
-    body = """
+SETUP_TEMPLATE = """
   <div class="login-card section" data-setup-required>
     <h2>{{ t.auth_setup_title }}</h2>
     <p>{{ t.auth_setup_intro }}</p>
-    <pre class="draft-body">.venv/bin/python orch_auth.py create-admin</pre>
+    {% if error %}<div class="warning" role="alert" data-setup-error="{{ error }}">{{ t.get('auth_err_' ~ error, t.auth_err_generic) }}</div>{% endif %}
+    <form method="post" action="/setup" class="demo-form login-form" data-setup-form>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label class="demo-field"><span>{{ t.auth_username }}</span>
+        <input type="text" name="username" required maxlength="40" autocomplete="username" value="{{ username }}"></label>
+      <label class="demo-field"><span>{{ t.auth_password }}</span>
+        <input type="password" name="password" required maxlength="128" autocomplete="new-password"></label>
+      <label class="demo-field"><span>{{ t.setup_password_confirm }}</span>
+        <input type="password" name="password_confirm" required maxlength="128" autocomplete="new-password"></label>
+      {% if token_required %}
+      <label class="demo-field"><span>{{ t.setup_token_label }}</span>
+        <input type="password" name="setup_token" required maxlength="200" autocomplete="off"></label>
+      {% endif %}
+      <button type="submit">{{ t.setup_button }}</button>
+    </form>
     <p class="composer-help">{{ t.auth_setup_help }}</p>
+    <p class="composer-help">{{ t.setup_cli_alt }}</p>
+    <pre class="draft-body">python orch_auth.py create-admin</pre>
   </div>
 """
-    return render_page(t["auth_setup_title"], "setup", body), 503
+
+
+def _render_setup(error=None, username="", status=503):
+    t = ui_strings(get_locale())
+    return render_page(
+        t["auth_setup_title"], "setup", SETUP_TEMPLATE, error=error,
+        username=username, token_required=bool(deploy_config.effective_setup_token()[0]),
+    ), status
+
+
+@app.get("/setup")
+def setup_required():
+    # v0.21.0: first-admin wizard. Only while no account exists (the
+    # before_request hook redirects to / afterwards); CLI create-admin stays.
+    return _render_setup()
+
+
+@app.post("/setup")
+def setup_post():
+    csrf_token = get_csrf_token()
+    submitted = request.form.get("csrf_token", "")
+    if (
+        not submitted
+        or len(submitted) != len(csrf_token)
+        or not secrets.compare_digest(csrf_token, submitted)
+    ):
+        abort(400)
+    if orch_auth.has_users():
+        abort(403)
+    username = (request.form.get("username") or "").strip()[:40]
+    password = request.form.get("password") or ""
+    # Review fix: REQUIRED on exposed installs (generated + logged if unset).
+    expected, _source = deploy_config.effective_setup_token()
+    if expected:
+        given = request.form.get("setup_token") or ""
+        if not secrets.compare_digest(expected.encode("utf-8"), given.encode("utf-8")):
+            return _render_setup("setup_token", username, 403)
+    if password != (request.form.get("password_confirm") or ""):
+        return _render_setup("password_mismatch", username, 400)
+    try:
+        orch_auth.bootstrap_admin(username, password, actor="web_setup")
+    except orch_auth.AuthError as exc:
+        code = str(exc.args[0]) if exc.args else "generic"
+        if code == "already_bootstrapped":
+            abort(403)
+        return _render_setup(code, username, 400)
+    session["auth_notice"] = "setup_done"
+    return redirect("/login")
+
+
+@app.get("/healthz")
+def healthz():
+    """v0.21.0: unauthenticated liveness + DB check for Docker HEALTHCHECK.
+    Reveals only the version and whether the state DB answers."""
+    try:
+        orch_db.ping(STATUS_FILE)
+        db_ok = True
+    except Exception:
+        db_ok = False
+    body = {"ok": db_ok, "version": APP_VERSION, "db": "ok" if db_ok else "error"}
+    response = jsonify(body)
+    response.headers["Cache-Control"] = "no-store"
+    return response, (200 if db_ok else 503)
+
+
+@app.get("/branding/logo")
+def branding_logo():
+    from flask import send_file
+    path = deploy_config.logo_file(deploy_config.load_branding()["logo"])
+    if path is None:
+        abort(404)
+    response = send_file(path, max_age=300)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    if path.suffix.lower() == ".svg":
+        response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
+    return response
 
 
 @app.post("/locale")
@@ -4207,9 +4561,45 @@ admin_ui.register(
 
 
 
+def startup():
+    """v0.21.0: one-time JSON -> SQLite migration before serving (only into
+    an empty DB; stray JSON next to a DB with data is refused and logged)."""
+    seeded = deploy_config.seed_task_queue()        # Docker: state volume copy
+    if seeded:
+        print(f"seeded {seeded} from defaults/task_queue.json", file=sys.stderr)
+    for directory in {Path(STATUS_FILE).parent, Path(orch_auth.AUTH_DIR)}:
+        for row in orch_db.auto_migrate(directory):
+            print(f"migrated {row['file']}: {row['records']} record(s) "
+                  f"-> {orch_db.db_path_for(directory)} (backup {row['backup']})",
+                  file=sys.stderr)
+    setup_warnings()
+
+
+def setup_warnings():
+    """Startup warnings: proxy trust in Docker, first-admin wizard (/setup)."""
+    if deploy_config.proxy_hops() and not os.getenv("ORCH_TRUSTED_PROXY") \
+            and Path("/.dockerenv").exists():
+        print("ORCH WARNING: ORCH_PROXY_FIX is set inside Docker but ORCH_TRUSTED_PROXY is "
+              "not: the proxy reaches the container from the Docker bridge, so set e.g. "
+              "ORCH_TRUSTED_PROXY=172.16.0.0/12 (docs/反向代理與HTTPS.md).",
+              file=sys.stderr, flush=True)
+    if orch_auth.has_users():
+        return
+    token, source = deploy_config.effective_setup_token()   # prints a generated one
+    if source == "none":
+        print("ORCH WARNING: no admin account yet - /setup lets whoever reaches this port "
+              "first create the admin. This install is localhost-only (no "
+              "ORCH_TRUSTED_HOSTS / ORCH_PROXY_FIX); set ORCH_SETUP_TOKEN before exposing it, "
+              "or run `python orch_auth.py create-admin`.", file=sys.stderr, flush=True)
+    elif source == "env":
+        print("ORCH: no admin account yet - /setup requires ORCH_SETUP_TOKEN.",
+              file=sys.stderr, flush=True)
+
+
 if __name__ == "__main__":
+    startup()
     app.run(
-        host="127.0.0.1",
-        port=5050,
+        host=os.getenv("ORCH_HOST") or "127.0.0.1",
+        port=int(os.getenv("ORCH_PORT") or 5050),
         debug=False,
     )

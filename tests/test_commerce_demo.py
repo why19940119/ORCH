@@ -19,6 +19,7 @@ import commerce_demo
 import commerce_import
 import commerce_ui
 import mini_orch
+import orch_db
 import orch_ui
 from orch_ui import PROJECT_ROOT, app
 from auth_testing import demo_signed_in, sign_in
@@ -97,22 +98,16 @@ class DemoSandbox(unittest.TestCase):
 
     def queue(self):
         """The demo queue (state/ecom_demo_queue.json in the sandbox)."""
-        if not self.demo_queue_file.exists():
-            return []
-        return json.loads(self.demo_queue_file.read_text(encoding="utf-8"))
+        return orch_db.load(self.demo_queue_file, [])   # v0.21.0: state/orch.db
 
     def main_queue(self):
         return json.loads((self.tmp / "task_queue.json").read_text(encoding="utf-8"))
 
     def statuses(self):
-        path = self.tmp / "state" / "task_status.json"
-        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        return orch_db.load(self.tmp / "state" / "task_status.json", {})
 
     def events(self):
-        path = self.tmp / "state" / "events.jsonl"
-        if not path.exists():
-            return []
-        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        return orch_db.read_log(self.tmp / "state" / "events.jsonl")
 
     def demo_task_ids(self):
         return [t["id"] for t in self.queue() if t["id"].startswith("task_ecom_")]

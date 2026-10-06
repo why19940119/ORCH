@@ -82,6 +82,8 @@ class OrchUiTests(unittest.TestCase):
                 "/locale",
                 "/login",
                 "/logout",
+                # v0.21.0: first-admin wizard (CSRF; only while no account exists).
+                "/setup",
             ],
         )
 
@@ -191,9 +193,16 @@ class TaskStatusAndComposerUiTests(unittest.TestCase):
             "grid-template-columns: minmax("
         )
         self.assertGreater(last_grid_1fr, -1)
-        self.assertTrue(
-            last_grid_minmax == -1 or last_grid_1fr > last_grid_minmax
-        )
+        # v0.21.0 mobile layout: the final narrow rule is the stacked
+        # "minmax(0, 1fr) auto" grid in which the textarea spans the full
+        # width (grid-column: 1 / -1) and the controls share one row below.
+        # It must still come after the desktop "auto minmax(0, 1fr) auto".
+        if last_grid_minmax > last_grid_1fr:
+            tail = media_tail[last_grid_minmax:]
+            self.assertTrue(tail.startswith("grid-template-columns: minmax(0, 1fr) auto;"))
+            self.assertIn("grid-column: 1 / -1;", tail)
+            self.assertGreater(desktop_idx + media_idx + last_grid_minmax,
+                               source.rfind(desktop_grid))
 
     def test_chat_keyboard_contract_is_preserved(self):
         source = Path("orch_ui.py").read_text(encoding="utf-8")

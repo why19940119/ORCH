@@ -3,6 +3,7 @@ from pathlib import Path
 import json
 import sys
 
+import orch_db
 from snapshot_store import build_scoped_snapshot, validate_scoped_snapshot
 
 STATUS_FILE = Path("state/task_status.json")
@@ -30,13 +31,12 @@ snapshot = build_scoped_snapshot(
     policy_ids=POLICY_SCOPE,
 )
 
-original_status_content = STATUS_FILE.read_bytes()
+# v0.21.0: task state lives in state/orch.db (orch_db); restore it after.
+original_statuses = orch_db.load(STATUS_FILE, {})
 validation = {}
 
 try:
-    statuses = json.loads(
-        original_status_content.decode("utf-8")
-    )
+    statuses = json.loads(json.dumps(original_statuses))
 
     task_state = statuses.setdefault(
         "task_validate_report_002",
@@ -47,19 +47,17 @@ try:
         "temporary_state_change"
     )
 
-    STATUS_FILE.write_text(
-        json.dumps(
-            statuses,
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    orch_db.put_task_state(STATUS_FILE, "task_validate_report_002", task_state)
 
     validation = validate_scoped_snapshot(snapshot)
 finally:
-    STATUS_FILE.write_bytes(original_status_content)
+    original = original_statuses.get("task_validate_report_002")
+    if original is None:
+        restored = orch_db.load(STATUS_FILE, {})
+        restored.pop("task_validate_report_002", None)
+        orch_db.save(STATUS_FILE, restored)
+    else:
+        orch_db.put_task_state(STATUS_FILE, "task_validate_report_002", original)
 
 if validation.get("status") != "stale":
     errors.append(

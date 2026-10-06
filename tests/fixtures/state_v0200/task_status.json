@@ -1,0 +1,47 @@
+{
+  "task_001": {
+    "status": "done",
+    "attempts": 1,
+    "last_updated": "2026-09-20T10:01:02",
+    "approval_status": null
+  },
+  "task_policy_gate": {
+    "status": "waiting_approval",
+    "approval_status": "approved",
+    "approved_by": "local_terminal_user",
+    "approved_at": "2026-09-21T09:00:00",
+    "decided_os_user": "fat"
+  },
+  "task_ecom_content_ab12cd34ef": {
+    "status": "waiting_approval",
+    "approval_status": "waiting_approval",
+    "ecom": {
+      "current_version": 1,
+      "versions": [
+        {
+          "version": 1,
+          "artifact_id": "artifact_draft_x1",
+          "content_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "created_by": "Amy Chan",
+          "created_at_utc": "2026-09-22T02:00:00+00:00"
+        }
+      ]
+    }
+  },
+  "task_ecom_faq_0011223344": {
+    "status": "done",
+    "approval_status": "approved",
+    "approved_by": "Ben Lee",
+    "ecom": {
+      "current_version": 2,
+      "decision": {
+        "decision": "approved",
+        "version": 2,
+        "approver": "Ben Lee",
+        "publish_channel": "brand_site_faq",
+        "audit_artifact_id": "artifact_audit_y2"
+      },
+      "versions": []
+    }
+  }
+}
