@@ -625,10 +625,6 @@ BASE_TEMPLATE = """
     }
 
     @media (max-width: 720px) {
-      .chat-hero {
-        flex-direction: column;
-      }
-
       .chat-page .chat-message {
         max-width: 94%;
       }
@@ -2084,6 +2080,21 @@ BASE_TEMPLATE = """
        Fix: static opaque header, nav = one horizontally scrolling strip
        inside itself, static composer, 16px form controls. */
     @media (max-width: 720px) {
+      /* Page intro (.chat-hero on /chat, .module-hero on the demo modules):
+         stacked, every child starting at the content's left edge. In a
+         column flexbox align-items is the HORIZONTAL axis, so the desktop's
+         align-items: center (which vertically centres the status pill next
+         to the title) centred the shrink-wrapped title block and the pill
+         instead (~84px indent at 520px, ~184px at 720px). Shared by every intro;
+         no per-page overrides. */
+      .chat-hero,
+      .module-hero {
+        align-items: flex-start;
+        flex-direction: column;
+        justify-content: flex-start;
+        text-align: left;
+      }
+
       /* no viewport-width units anywhere; nothing is clipped to hide overflow - every
          element fits (wide tables scroll inside .table-wrap). */
       html,
