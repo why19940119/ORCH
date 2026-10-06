@@ -248,7 +248,7 @@ class SmokeIsolationTests(unittest.TestCase):
     def test_compose_has_no_fixed_container_name(self):
         text = (self.ROOT / "docker-compose.yml").read_text(encoding="utf-8")
         self.assertNotRegex(text, r"(?m)^\s*container_name:")
-        self.assertIn("image: ${ORCH_IMAGE:-orch:0.21.0}", text)
+        self.assertIn("image: ${ORCH_IMAGE:-orch:0.21.1}", text)
 
     def test_smoke_uses_own_project_and_image(self):
         text = (self.ROOT / "scripts" / "smoke.sh").read_text(encoding="utf-8")

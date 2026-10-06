@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ORCH v0.21.0 backup: one .tar.gz with state/ (consistent SQLite snapshot via
+# ORCH v0.21.1 backup: one .tar.gz with state/ (consistent SQLite snapshot via
 # the SQLite backup API, never a raw copy of a live orch.db), uploads/, data/,
 # artifacts/ (and output/ in Docker).
 #

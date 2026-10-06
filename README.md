@@ -94,6 +94,15 @@ v0.21.0     SQLite state + Docker: all mutable state in state/orch.db (WAL,
             archives 0600, snapshot cleaned up), task_queue.json + output/
             persisted in volumes, smoke.sh isolated from a real deployment,
             app code read-only for the runtime user
+v0.21.1     Hardening: /setup requires a setup token by default (generated
+            one-time token printed to the log when ORCH_SETUP_TOKEN is unset;
+            ORCH_SETUP_LOCAL_NO_TOKEN=1 opts out for local dev, with a
+            warning), smoke.sh runs with its own generated env file (never
+            the real .env, API keys blanked), a refused stray JSON no longer
+            takes the DB write lock on reads, json-backup-*/ is 0700 with
+            0600 files, restore.sh validates the archive before stopping the
+            service or taking the safety backup, aria-expanded on the menu
+            button, clean one-line migrate errors (exit 1)
 ```
 
 ## Core Architecture
