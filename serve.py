@@ -11,8 +11,10 @@ import sys
 
 
 def main():
+    import deploy_config
     import orch_ui
 
+    deploy_config.configure_app_logging()
     orch_ui.startup()
     host = os.getenv("ORCH_HOST") or "127.0.0.1"
     port = int(os.getenv("ORCH_PORT") or 5050)

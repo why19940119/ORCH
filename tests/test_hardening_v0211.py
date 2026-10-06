@@ -10,12 +10,14 @@ import subprocess
 import sys
 import threading
 import unittest
+import urllib.error
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 import deploy_config
 import orch_auth
+import orch_chat
 import orch_db
 import orch_ui
 from auth_testing import use_temp_auth
@@ -448,6 +450,196 @@ exit 0
         self.assertIn("setup POST without token must be 403", text)
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
         self.assertIn("- path: ${ORCH_ENV_FILE:-.env}", compose)
+
+
+class VisionModelTests(unittest.TestCase):
+    """Image chat: the retired default is gone, the env override wins, the
+    chat model is used for images when it is known to accept them. No
+    network: nothing here reaches OpenRouter."""
+
+    def env(self, **values):
+        base = {"OPENROUTER_API_KEY": "sk-or-v1-test-key-0123456789abcdef",
+                "OPENROUTER_VISION_MODEL": "", "OPENROUTER_CHAT_MODEL": "",
+                "OPENROUTER_MODEL": ""}
+        base.update(values)
+        return patch.dict(os.environ, base)
+
+    def test_default_is_no_longer_the_retired_gemini_model(self):
+        self.assertNotEqual(orch_chat.DEFAULT_VISION_MODEL, "google/gemini-2.0-flash-001")
+        self.assertNotIn("gemini-2.0-flash-001", orch_chat.DEFAULT_VISION_MODEL)
+        self.assertEqual(orch_chat.DEFAULT_VISION_MODEL, "mistralai/mistral-medium-3.1")
+        self.assertTrue(orch_chat.model_accepts_images(orch_chat.DEFAULT_VISION_MODEL))
+
+    def test_env_override_wins(self):
+        with self.env(OPENROUTER_VISION_MODEL="  openai/gpt-4o-mini ",
+                      OPENROUTER_MODEL="anthropic/claude-sonnet-4"):
+            self.assertEqual(orch_chat.get_chat_config(use_vision=True)["model"],
+                             "openai/gpt-4o-mini")
+        with self.env(OPENROUTER_VISION_MODEL="some/text-only-model"):
+            self.assertEqual(orch_chat.resolve_vision_model(), "some/text-only-model")
+
+    def test_unset_or_empty_uses_default(self):
+        with self.env():                                   # empty = unset
+            self.assertEqual(orch_chat.get_chat_config(use_vision=True)["model"],
+                             orch_chat.DEFAULT_VISION_MODEL)
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("OPENROUTER_VISION_MODEL", "OPENROUTER_CHAT_MODEL",
+                            "OPENROUTER_MODEL")}
+        env["OPENROUTER_API_KEY"] = "sk-or-v1-test-key-0123456789abcdef"
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(orch_chat.resolve_vision_model(), orch_chat.DEFAULT_VISION_MODEL)
+
+    def test_falls_back_to_image_capable_chat_model(self):
+        with self.env(OPENROUTER_MODEL="openai/gpt-4o"):
+            self.assertEqual(orch_chat.resolve_vision_model(), "openai/gpt-4o")
+        with self.env(OPENROUTER_MODEL="mistralai/mistral-large",
+                      OPENROUTER_CHAT_MODEL="anthropic/claude-sonnet-4.5"):
+            self.assertEqual(orch_chat.resolve_vision_model(), "anthropic/claude-sonnet-4.5")
+        # a chat model not known to take images -> the default vision model
+        with self.env(OPENROUTER_MODEL="deepseek/deepseek-chat"):
+            self.assertEqual(orch_chat.resolve_vision_model(), orch_chat.DEFAULT_VISION_MODEL)
+            self.assertEqual(orch_chat.get_chat_config()["model"], "deepseek/deepseek-chat")
+
+    def test_image_request_uses_resolved_model_and_json_object(self):
+        captured = {}
+
+        class FakeResponse(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            captured.update(json.loads(request.data.decode("utf-8")))
+            reply = {"answer": "紅色", "referenced_task_ids": [], "referenced_artifact_ids": [],
+                     "limitations": [], "execution_authority": "none"}
+            return FakeResponse(json.dumps({"id": "x", "model": captured["model"], "choices": [
+                {"message": {"content": json.dumps(reply, ensure_ascii=False)}}]}).encode())
+
+        with self.env(), patch.object(orch_chat.urllib.request, "urlopen", fake_urlopen):
+            result = orch_chat.ask_orch("What colour?", "general", {}, [], attachments=[
+                {"name": "red.png", "kind": "image", "mime": "image/png",
+                 "data_base64": "iVBORw0KGgo="}])
+        self.assertEqual(captured["model"], "mistralai/mistral-medium-3.1")
+        self.assertEqual(captured["response_format"], {"type": "json_object"})
+        self.assertTrue(result["used_vision"])
+        self.assertEqual(result["chat"]["answer"], "紅色")
+
+    def test_env_example_and_docs(self):
+        example = (ROOT / ".env.example").read_text(encoding="utf-8")
+        self.assertIn("OPENROUTER_VISION_MODEL=", example)
+        self.assertNotIn("gemini-2.0-flash-001\n", example.split("OPENROUTER_VISION_MODEL=")[1][:80])
+        self.assertIn("No endpoints found", example)
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("OPENROUTER_VISION_MODEL", readme)
+        self.assertIn("No endpoints found", readme)
+        guide = (ROOT / "docs" / "安裝指南.md").read_text(encoding="utf-8")
+        row = next(l for l in guide.splitlines() if l.startswith("| `OPENROUTER_VISION_MODEL`"))
+        self.assertIn("mistralai/mistral-medium-3.1", row)
+        self.assertIn("No endpoints found", row)
+
+
+class ProviderFailureLoggingTests(unittest.TestCase):
+    """Provider failures are logged server-side with code, HTTP status,
+    model and request kind - never the key, Authorization header, prompt,
+    image data or raw response body."""
+
+    KEY = "sk-or-v1-SECRETKEY0123456789abcdefSECRET"
+    PROMPT = "PROMPT-TEXT-what-is-in-my-private-photo"
+    IMAGE = "iVBORw0KGgoIMAGEDATA" + "A" * 64
+
+    def failing_urlopen(self, status, body):
+        from email.message import Message
+
+        def fake(request, timeout=None):
+            raise urllib.error.HTTPError(request.full_url, status, "error", Message(),
+                                         io.BytesIO(body))
+        return fake
+
+    def ask(self, urlopen, image=True):
+        env = {"OPENROUTER_API_KEY": self.KEY, "OPENROUTER_VISION_MODEL": "",
+               "OPENROUTER_CHAT_MODEL": "", "OPENROUTER_MODEL": ""}
+        attachments = ([{"name": "p.png", "kind": "image", "mime": "image/png",
+                         "data_base64": self.IMAGE}] if image else None)
+        with patch.dict(os.environ, env), \
+                patch.object(orch_chat.urllib.request, "urlopen", urlopen), \
+                self.assertLogs("orch.chat", "WARNING") as logged, \
+                self.assertRaises(orch_chat.ChatProviderError) as ctx:
+            orch_chat.ask_orch(self.PROMPT, "general", {}, [], attachments=attachments)
+        return ctx.exception, logged
+
+    def assert_clean(self, logged):
+        text = "\n".join(logged.output)
+        for secret in (self.KEY, "SECRETKEY", self.PROMPT, self.IMAGE[:24], "Authorization",
+                       "Bearer"):
+            self.assertNotIn(secret, text)
+
+    def test_mocked_404_logs_status_model_kind_without_secrets(self):
+        body = json.dumps({"error": {"code": 404, "message":
+                                     "No endpoints found for google/gemini-2.0-flash-001."},
+                           "echo": {"prompt": self.PROMPT, "auth": f"Bearer {self.KEY}"}}).encode()
+        exc, logged = self.ask(self.failing_urlopen(404, body))
+        self.assertEqual((exc.code, exc.params.get("status")), ("http", 404))
+        self.assertEqual(len(logged.records), 1)
+        record = logged.records[0]
+        self.assertEqual(record.levelname, "WARNING")
+        message = record.getMessage()
+        self.assertIn("status=404", message)
+        self.assertIn("model=mistralai/mistral-medium-3.1", message)
+        self.assertIn("kind=vision", message)
+        self.assertIn("code=http", message)
+        self.assertIn("No endpoints found for google/gemini-2.0-flash-001.", message)
+        self.assertIn("retired", message)                    # actionable hint
+        self.assertIn("OPENROUTER_VISION_MODEL", message)
+        self.assert_clean(logged)
+
+    def test_key_echoed_in_provider_message_is_redacted_and_short(self):
+        body = json.dumps({"error": {"message": f"bad key {self.KEY} for {self.PROMPT} "
+                                                + "x" * 500}}).encode()
+        exc, logged = self.ask(self.failing_urlopen(401, body), image=False)
+        message = logged.records[0].getMessage()
+        self.assertIn("status=401", message)
+        self.assertIn("kind=chat", message)
+        self.assertIn("[redacted]", message)
+        self.assertNotIn(self.KEY, message)
+        self.assertLess(len(message), 400)
+        self.assertNotIn(self.IMAGE[:24], message)
+
+    def test_non_json_body_is_not_logged(self):
+        exc, logged = self.ask(self.failing_urlopen(502, f"<html>{self.PROMPT}</html>".encode()))
+        message = logged.records[0].getMessage()
+        self.assertIn("status=502", message)
+        self.assertIn("error=''", message)
+        self.assert_clean(logged)
+
+    def test_connection_failure_logged(self):
+        def fake(request, timeout=None):
+            raise urllib.error.URLError(TimeoutError("timed out"))
+        exc, logged = self.ask(fake)
+        self.assertEqual(exc.code, "connection")
+        message = logged.records[0].getMessage()
+        self.assertIn("code=connection", message)
+        self.assertIn("status=-", message)
+        self.assertIn("TimeoutError", message)
+        self.assert_clean(logged)
+
+    def test_serve_configures_orch_logger(self):
+        import logging
+        log = logging.getLogger("orch")
+        saved = (list(log.handlers), log.level, log.propagate)
+        try:
+            log.handlers.clear()
+            deploy_config.configure_app_logging()
+            self.assertEqual(len(log.handlers), 1)
+            deploy_config.configure_app_logging()             # idempotent
+            self.assertEqual(len(log.handlers), 1)
+        finally:
+            log.handlers[:] = saved[0]
+            log.setLevel(saved[1])
+            log.propagate = saved[2]
+        self.assertIn("deploy_config.configure_app_logging()",
+                      (ROOT / "serve.py").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

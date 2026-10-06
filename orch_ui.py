@@ -4614,6 +4614,7 @@ def setup_warnings():
 
 
 if __name__ == "__main__":
+    deploy_config.configure_app_logging()
     startup()
     app.run(
         host=os.getenv("ORCH_HOST") or "127.0.0.1",

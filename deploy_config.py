@@ -254,6 +254,20 @@ def exposed_install():
 _TRUTHY = {"1", "true", "yes", "on"}
 
 
+def configure_app_logging():
+    """v0.21.1: send the app's own loggers (orch.*: chat provider failures,
+    DB refusals, proxy warnings) to stderr = console / docker logs, with
+    time and level. No-op when a handler is already configured."""
+    log = logging.getLogger("orch")
+    if log.handlers:
+        return
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+    log.propagate = False
+
+
 def setup_local_no_token():
     """ORCH_SETUP_LOCAL_NO_TOKEN=1: explicit local-dev opt-out of the token."""
     return (os.getenv("ORCH_SETUP_LOCAL_NO_TOKEN") or "").strip().lower() in _TRUTHY

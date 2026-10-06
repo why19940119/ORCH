@@ -79,7 +79,7 @@ class ChatAttachmentUnitTests(unittest.TestCase):
     def test_vision_default_model_constant(self):
         self.assertEqual(
             DEFAULT_VISION_MODEL,
-            "google/gemini-2.0-flash-001",
+            "mistralai/mistral-medium-3.1",   # v0.21.1: gemini-2.0-flash-001 retired
         )
 
     def test_image_path_clear_error_without_api_key(self):

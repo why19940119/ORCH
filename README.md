@@ -102,7 +102,12 @@ v0.21.1     Hardening: /setup requires a setup token by default (generated
             takes the DB write lock on reads, json-backup-*/ is 0700 with
             0600 files, restore.sh validates the archive before stopping the
             service or taking the safety backup, aria-expanded on the menu
-            button, clean one-line migrate errors (exit 1)
+            button, clean one-line migrate errors (exit 1); image chat
+            fixed: default vision model mistralai/mistral-medium-3.1
+            (google/gemini-2.0-flash-001 was retired: HTTP 404), an image-
+            capable chat model is used when OPENROUTER_VISION_MODEL is
+            unset, provider failures logged server-side (code / status /
+            model / kind; never the key, prompt or image data)
 ```
 
 ## Core Architecture
@@ -334,7 +339,22 @@ Do not commit API keys.
 ```bash
 export OPENROUTER_API_KEY='your-key'
 export OPENROUTER_MODEL='mistralai/mistral-medium-3.1'
+export OPENROUTER_VISION_MODEL='mistralai/mistral-medium-3.1'   # optional
 ```
+
+`OPENROUTER_VISION_MODEL` is the model for chats with an image. Since
+v0.21.1 the default is `mistralai/mistral-medium-3.1` (the old default
+`google/gemini-2.0-flash-001` was retired by OpenRouter). When it is unset
+(or empty) and the chat model (`OPENROUTER_CHAT_MODEL` / `OPENROUTER_MODEL`)
+is on the built-in list of image-capable models, images go to the chat model.
+The model must accept images and `response_format: json_object`.
+
+Provider failures are logged server-side (logger `orch.chat`, on the console /
+`docker compose logs orch`) as `chat provider failure: kind=chat|vision
+code=... status=... model=... error='...'` - never the key, the prompt, image
+data or the raw response. An HTTP 404 `No endpoints found for <model>` means
+the model has been retired on OpenRouter: set `OPENROUTER_VISION_MODEL` (or
+`OPENROUTER_MODEL`) to a current model and restart.
 
 Check configuration without printing the secret:
 
