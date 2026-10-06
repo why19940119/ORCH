@@ -1999,6 +1999,7 @@ BASE_TEMPLATE = """
         user-select: none;
       }
 
+      .menu-toggle:focus-visible,
       .menu-toggle-input:focus-visible + .menu-toggle {
         outline: 2px solid var(--blue);
         outline-offset: 2px;
@@ -2112,10 +2113,12 @@ BASE_TEMPLATE = """
        sees these three elements and shows .site-menu as display: contents,
        so the header layout is unchanged there. #}
     <span class="mobile-page-name" data-mobile-page-name aria-label="{{ t.menu_current_page }}">{{ title }}</span>
+    {# v0.21.1: the label is the control (role=button, aria-expanded); the
+       checkbox only holds the open/closed state for the CSS. #}
     <input type="checkbox" id="site-menu-toggle" class="menu-toggle-input" data-menu-toggle
-           autocomplete="off" aria-controls="site-menu" aria-expanded="false"
-           aria-label="{{ t.menu_toggle_aria }}">
-    <label for="site-menu-toggle" class="menu-toggle" aria-hidden="true" data-menu-button>
+           autocomplete="off" tabindex="-1" aria-hidden="true">
+    <label for="site-menu-toggle" class="menu-toggle" data-menu-button role="button" tabindex="0"
+           aria-controls="site-menu" aria-expanded="false" aria-label="{{ t.menu_toggle_aria }}">
       <span class="menu-toggle-icon">☰</span> <span>{{ t.menu_label }}</span>
     </label>
     <div class="site-menu" id="site-menu" data-site-menu>
@@ -2201,20 +2204,29 @@ BASE_TEMPLATE = """
     <span class="version-chip" data-app-version>ORCH · {{ t.footer_version }} {{ app_version }}</span>
   </footer>
   <script>
-    // v0.21.0 mobile menu: keep aria-expanded in sync and close the menu
-    // after a link is chosen (the toggle itself works without JS).
+    // v0.21.0 mobile menu: keep aria-expanded (on the label/button that acts
+    // as the control, v0.21.1) in sync and close the menu after a link is
+    // chosen (tapping the label works without JS).
     (function () {
       var toggle = document.getElementById("site-menu-toggle");
+      var button = document.querySelector("[data-menu-button]");
       var menu = document.getElementById("site-menu");
-      if (!toggle || !menu) return;
-      function sync() { toggle.setAttribute("aria-expanded", toggle.checked ? "true" : "false"); }
+      if (!toggle || !button || !menu) return;
+      function sync() { button.setAttribute("aria-expanded", toggle.checked ? "true" : "false"); }
       function close() { toggle.checked = false; sync(); }
       toggle.addEventListener("change", sync);
+      button.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          toggle.checked = !toggle.checked;
+          sync();
+        }
+      });
       menu.addEventListener("click", function (event) {
         if (event.target.closest("a")) close();
       });
       document.addEventListener("keydown", function (event) {
-        if (event.key === "Escape" && toggle.checked) { close(); toggle.focus(); }
+        if (event.key === "Escape" && toggle.checked) { close(); button.focus(); }
       });
       window.addEventListener("pageshow", sync);
       sync();

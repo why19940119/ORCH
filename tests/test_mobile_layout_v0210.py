@@ -120,11 +120,19 @@ class MobileMenuTests(unittest.TestCase):
     def test_toggle_markup_and_aria(self):
         html = self.page()
         toggle = re.search(r"<input[^>]*data-menu-toggle[^>]*>", html, re.S).group(0)
-        for attr in ('type="checkbox"', 'id="site-menu-toggle"', 'aria-controls="site-menu"',
-                     'aria-expanded="false"', 'aria-label="', 'autocomplete="off"'):
+        for attr in ('type="checkbox"', 'id="site-menu-toggle"', 'autocomplete="off"',
+                     'tabindex="-1"', 'aria-hidden="true"'):
             self.assertIn(attr, toggle)
-        self.assertNotIn("checked", toggle.replace('aria-expanded', ''))  # collapsed by default
-        self.assertRegex(html, r'<label for="site-menu-toggle" class="menu-toggle"')
+        self.assertNotIn("checked", toggle)                       # collapsed by default
+        # v0.21.1: aria-expanded / aria-controls live on the label acting as the control
+        self.assertNotIn("aria-expanded", toggle)
+        self.assertNotIn("aria-controls", toggle)
+        button = re.search(r"<label[^>]*data-menu-button[^>]*>", html, re.S).group(0)
+        for attr in ('for="site-menu-toggle"', 'class="menu-toggle"', 'role="button"',
+                     'tabindex="0"', 'aria-controls="site-menu"', 'aria-expanded="false"',
+                     'aria-label="'):
+            self.assertIn(attr, button)
+        self.assertNotIn("aria-hidden", button)
         self.assertIn('id="site-menu" data-site-menu', html)
         # input -> label -> menu are siblings in that order (CSS uses + and ~)
         header = html.split("<header", 1)[1].split("</header>", 1)[0]
@@ -167,6 +175,7 @@ class MobileMenuTests(unittest.TestCase):
         # visually hidden but still focusable (no display: none)
         for decl in ("position: absolute;", "opacity: 0;", "display: block;"):
             self.assertIn(decl, hidden_input)
+        self.assertIn("outline:", rule(block, ".menu-toggle:focus-visible"))   # the control
         self.assertIn("outline:", rule(block, ".menu-toggle-input:focus-visible + .menu-toggle"))
 
     def test_desktop_keeps_nav_visible_and_hides_toggle(self):
@@ -183,6 +192,11 @@ class MobileMenuTests(unittest.TestCase):
         for needle in ('getElementById("site-menu-toggle")', 'setAttribute("aria-expanded"',
                        'closest("a")', '"Escape"', '"pageshow"'):
             self.assertIn(needle, script)
+        # v0.21.1: the sync targets the label/button, which is also keyboard operable
+        self.assertIn('querySelector("[data-menu-button]")', script)
+        self.assertIn('button.setAttribute("aria-expanded"', script)
+        self.assertNotIn('toggle.setAttribute("aria-expanded"', script)
+        self.assertIn('event.key === "Enter" || event.key === " "', script)
 
     def test_logged_out_pages_keep_language_menu(self):
         client = app.test_client()
