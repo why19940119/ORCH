@@ -157,14 +157,45 @@ def _active():
     return _local.tx
 
 
+def _create_private(path):
+    """Create ``path`` as an empty 0600 file unless it exists (an empty file
+    is a valid empty SQLite DB; SQLite gives -wal / -shm the DB's mode)."""
+    try:
+        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except FileExistsError:
+        pass
+
+
+def restrict_db_files(db_file):
+    """orch.db (password hashes, approvals) and its -wal / -shm: owner only."""
+    for suffix in ("", "-wal", "-shm"):
+        path = f"{db_file}{suffix}"
+        try:
+            if os.stat(path).st_mode & 0o077:
+                os.chmod(path, 0o600)
+        except FileNotFoundError:
+            pass
+        except PermissionError:
+            pass            # not our file (e.g. read-only mount); leave it
+
+
+def _write_private(path, text):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write(text)
+    os.chmod(path, 0o600)
+
+
 def _connect(db_file):
     db_file.parent.mkdir(parents=True, exist_ok=True)
+    _create_private(db_file)
     conn = sqlite3.connect(str(db_file), timeout=BUSY_TIMEOUT_MS / 1000,
                            isolation_level=None)
     conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     _enable_wal(conn)
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    restrict_db_files(db_file)
     return conn
 
 
@@ -733,6 +764,7 @@ def backup(path, target):
     target.parent.mkdir(parents=True, exist_ok=True)
     source = _open(db_path_for(path))
     try:
+        _create_private(target)
         dest = sqlite3.connect(str(target))
         try:
             source.backup(dest)
@@ -740,13 +772,15 @@ def backup(path, target):
             dest.close()
     finally:
         source.close()
+    restrict_db_files(target)
     return target
 
 
 def export_json(path, out_dir):
-    """Write the DB back out as the v0.20 JSON files (for a rollback)."""
+    """Write the DB back out as the v0.20 JSON files (for a rollback);
+    the files are created 0600 in a 0700 directory."""
     out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     base = db_path_for(path).parent
     written = []
     for file_name, (kind, name) in MANAGED.items():
@@ -756,14 +790,13 @@ def export_json(path, out_dir):
             rows = read_log(source)
             if not rows:
                 continue
-            target.write_text("".join(_dumps(r) + "\n" for r in rows), encoding="utf-8")
+            _write_private(target, "".join(_dumps(r) + "\n" for r in rows))
         else:
             if not exists(source):
                 continue
-            target.write_text(json.dumps(load(source), ensure_ascii=False, indent=2),
-                              encoding="utf-8")
-        if file_name == "auth.json":
-            os.chmod(target, 0o600)
+            _write_private(target, json.dumps(load(source), ensure_ascii=False, indent=2))
+        # every exported file is owner-only (auth hashes, customer / order
+        # data in ecom_import.json, approvals and audit logs)
         written.append(file_name)
     return written
 

@@ -225,6 +225,47 @@ class MigrationTests(TempState):
         self.assertEqual(len(orch_db.migrate(self.state)), 7)
 
 
+class FilePermissionTests(TempState):
+    """Review fix 4: orch.db / -wal / -shm and exports are 0600 from the start."""
+
+    def setUp(self):
+        super().setUp()
+        self.old_umask = os.umask(0o022)       # a typical permissive umask
+        self.addCleanup(os.umask, self.old_umask)
+
+    def mode(self, path):
+        return stat.S_IMODE(Path(path).stat().st_mode)
+
+    def test_new_db_wal_and_shm_are_owner_only(self):
+        orch_db.append(self.events, {"event": "e", "task_id": "t"})
+        conn = orch_db._open(self.state / "orch.db")      # keeps -wal / -shm alive
+        try:
+            for name in ("orch.db", "orch.db-wal", "orch.db-shm"):
+                self.assertTrue((self.state / name).exists(), name)
+                self.assertEqual(self.mode(self.state / name), 0o600, name)
+        finally:
+            conn.close()
+
+    def test_existing_world_readable_db_is_tightened_on_open(self):
+        orch_db.save(self.status, {"t": {}})
+        os.chmod(self.state / "orch.db", 0o644)
+        orch_db.load(self.status)
+        self.assertEqual(self.mode(self.state / "orch.db"), 0o600)
+
+    def test_exports_and_backups_are_owner_only(self):
+        orch_db.save(self.state / "ecom_import.json", {"orders": [{"customer": "x"}]})
+        orch_db.save(self.state / "auth.json", {"users": {}})
+        orch_db.append(self.events, {"event": "e", "task_id": "t"})
+        out = self.tmp / "export"
+        written = orch_db.export_json(self.state, out)
+        self.assertIn("ecom_import.json", written)
+        for name in written:
+            self.assertEqual(self.mode(out / name), 0o600, name)
+        self.assertEqual(self.mode(out), 0o700)
+        target = orch_db.backup(self.state, self.tmp / "bk" / "orch.db")
+        self.assertEqual(self.mode(target), 0o600)
+
+
 class MigrationSafetyTests(TempState):
     """Review fix 1: auto-migration only into an EMPTY DB; --force backs up
     first; log re-imports are idempotent."""
