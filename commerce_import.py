@@ -1088,7 +1088,9 @@ def main(argv=None):
         return 1
     print_report(report, locale)
     if report["accepted"]:
-        print(t["imp_cli_saved"].format(path=IMPORT_STATE_FILE,
+        saved_to = (orch_db.db_path_for(IMPORT_STATE_FILE)     # v0.21.0: stored in orch.db
+                    if orch_db.is_managed(IMPORT_STATE_FILE) else IMPORT_STATE_FILE)
+        print(t["imp_cli_saved"].format(path=saved_to,
                                         time=local_time_text(report["imported_at_utc"])))
         return 0
     print(t["imp_msg_nothing_valid"])
