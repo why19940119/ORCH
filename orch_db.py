@@ -680,7 +680,10 @@ def _migrate_locked(conn, directory, force=False):
                                 (original.name, digest)).fetchone()
             count = duplicates = 0
             if not seen:
-                data = _parse_legacy(target)
+                try:
+                    data = _parse_legacy(target)
+                except ValueError as exc:   # name the file in the error
+                    raise ValueError(f"{original.name} is not valid JSON ({exc})") from exc
                 if kind == "status":
                     data = data if isinstance(data, dict) else {}
                     _upsert_statuses(conn, data)
@@ -884,6 +887,14 @@ def main(argv=None):
                 report = migrate(directory, force=args.force)
             except MigrationRefused as exc:
                 print(f"ERROR: {exc}", file=sys.stderr)
+                status = 1
+                continue
+            except (ValueError, OSError, sqlite3.Error) as exc:
+                # v0.21.1: one clean line instead of a traceback. The import
+                # rolled back and the files were moved back into place.
+                detail = " ".join(str(exc).split()) or type(exc).__name__
+                print(f"ERROR: migrate failed for {directory}: {detail} "
+                      "(nothing imported; legacy files left in place)", file=sys.stderr)
                 status = 1
                 continue
             if db_path_for(directory).exists():

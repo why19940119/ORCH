@@ -96,5 +96,33 @@ class JsonBackupModeTests(TempState):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600, path.name)
 
 
+class MigrateCliErrorTests(TempState):
+    """Nit (b): a failed migrate prints one clean line and exits 1."""
+
+    def test_bad_json_gives_one_line_error_and_exit_1(self):
+        self.status.write_text("{not json", encoding="utf-8")
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err), \
+                patch.dict(os.environ, {"ORCH_AUTH_DIR": str(self.state)}):
+            code = orch_db.main(["--state-dir", str(self.state), "migrate"])
+        self.assertEqual(code, 1)
+        lines = err.getvalue().strip().splitlines()
+        self.assertEqual(len(lines), 1, err.getvalue())
+        self.assertTrue(lines[0].startswith("ERROR: migrate failed for "))
+        self.assertIn("task_status.json is not valid JSON", lines[0])
+        self.assertNotIn("Traceback", err.getvalue())
+        self.assertTrue(self.status.is_file())          # moved back, untouched
+
+    def test_cli_subprocess_exit_code(self):
+        self.status.write_text("{not json", encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "orch_db.py"), "--state-dir", str(self.state), "migrate"],
+            capture_output=True, text=True, cwd=str(ROOT), timeout=60,
+            env={**os.environ, "ORCH_AUTH_DIR": str(self.state)})
+        self.assertEqual(proc.returncode, 1)
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertEqual(len(proc.stderr.strip().splitlines()), 1, proc.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
