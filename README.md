@@ -79,7 +79,10 @@ v0.21.0     SQLite state + Docker: all mutable state in state/orch.db (WAL,
             docker-compose.yml (non-root, /healthz, persisted session key),
             /setup first-admin wizard, branding (client name, logo, target
             market), version in the footer, backup / restore / smoke scripts,
-            reverse-proxy (HTTPS) option, zh-Hant docs in docs/
+            reverse-proxy (HTTPS) option, zh-Hant docs in docs/;
+            phones (<=720px): compact top bar (ORCH, current page, ☰ 選單)
+            with nav / language / 登出 in a collapsible menu that works
+            without JavaScript (desktop unchanged)
 ```
 
 ## Core Architecture

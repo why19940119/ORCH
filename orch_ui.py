@@ -1901,6 +1901,18 @@ BASE_TEMPLATE = """
       margin-top: 6px;
     }
 
+    /* v0.21.0 mobile menu: hidden on desktop; the menu wrapper is
+       transparent to the header's flex layout (display: contents). */
+    .mobile-page-name,
+    .menu-toggle,
+    .menu-toggle-input {
+      display: none;
+    }
+
+    .site-menu {
+      display: contents;
+    }
+
     /* v0.21.0 mobile layout (phones, 375-430px; must stay the LAST rules).
        Root causes seen on a real iPhone:
        - the header is position: sticky with a 92% opaque background and a
@@ -1920,38 +1932,129 @@ BASE_TEMPLATE = """
         max-width: 100%;
       }
 
+      /* Compact top bar: ORCH title, current page name, Menu button.
+         The nav, language picker and user line live in .site-menu, which
+         stays collapsed until the (visually hidden) checkbox is checked by
+         tapping its label - works without JavaScript. */
       header {
+        align-items: center;
         backdrop-filter: none;
         -webkit-backdrop-filter: none;
         background: #171020;
+        flex-direction: row;
         flex-wrap: wrap;
+        gap: 6px 10px;
+        padding: 8px 12px;
         position: static;
         z-index: auto;
       }
 
-      header nav {
-        -webkit-overflow-scrolling: touch;
-        flex-wrap: nowrap;
-        max-width: 100%;
-        overflow-x: auto;
-        overscroll-behavior-x: contain;
-        padding-bottom: 2px;
-        scrollbar-width: none;
+      header h1 {
+        flex: 0 1 auto;
+        font-size: 14px;
+        margin: 0;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .brand-market {
+        display: none;
+      }
+
+      .mobile-page-name {
+        color: var(--muted);
+        display: block;
+        flex: 1 1 auto;
+        font-size: 13px;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .menu-toggle-input {
+        clip-path: inset(50%);
+        display: block;
+        height: 1px;
+        margin: 0;
+        opacity: 0;
+        overflow: hidden;
+        position: absolute;
+        width: 1px;
+      }
+
+      .menu-toggle {
+        align-items: center;
+        border: 1px solid #59406e;
+        border-radius: 999px;
+        color: #e8d4ff;
+        cursor: pointer;
+        display: inline-flex;
+        font-size: 13px;
+        font-weight: 600;
+        gap: 6px;
+        margin-left: auto;
+        min-height: 36px;
+        padding: 6px 12px;
+        user-select: none;
+      }
+
+      .menu-toggle-input:focus-visible + .menu-toggle {
+        outline: 2px solid var(--blue);
+        outline-offset: 2px;
+      }
+
+      .menu-toggle-input:checked + .menu-toggle {
+        background: #3d2860;
+      }
+
+      .site-menu {
+        display: none;
+        flex: 1 1 100%;
         width: 100%;
       }
 
-      header nav::-webkit-scrollbar { display: none; }
+      .menu-toggle-input:checked ~ .site-menu {
+        border-top: 1px solid rgba(73, 54, 95, .7);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 10px 0 4px;
+      }
 
-      header nav a,
-      header nav .nav-sep,
+      header nav {
+        flex-wrap: wrap;
+        gap: 4px;
+        max-width: 100%;
+        overflow: visible;
+        width: 100%;
+      }
+
+      header nav a {
+        font-size: 14px;
+        padding: 8px 12px;
+      }
+
+      header nav .nav-sep {
+        display: none;
+      }
+
       header nav .nav-group-label {
-        flex: 0 0 auto;
-        white-space: nowrap;
+        flex: 1 1 100%;
+        margin-top: 6px;
       }
 
       .lang-switch,
       .user-chip {
         margin-left: 0;
+      }
+
+      .lang-switch button,
+      .user-chip button {
+        font-size: 13px;
+        padding: 6px 12px;
       }
 
       .chat-page .chat-composer,
@@ -2007,6 +2110,17 @@ BASE_TEMPLATE = """
       {% if branding.client_name %}<span class="brand-client" data-brand-client>{{ branding.client_name }}</span> · {% endif %}{{ t.brand }}
     </h1>
     {% if branding.target_market %}<p class="brand-market" data-brand-market>{{ t.brand_market_label }}: {{ branding.target_market }}</p>{% endif %}
+    {# v0.21.0 mobile menu: CSS-only toggle (checkbox + label). Desktop never
+       sees these three elements and shows .site-menu as display: contents,
+       so the header layout is unchanged there. #}
+    <span class="mobile-page-name" data-mobile-page-name aria-label="{{ t.menu_current_page }}">{{ title }}</span>
+    <input type="checkbox" id="site-menu-toggle" class="menu-toggle-input" data-menu-toggle
+           autocomplete="off" aria-controls="site-menu" aria-expanded="false"
+           aria-label="{{ t.menu_toggle_aria }}">
+    <label for="site-menu-toggle" class="menu-toggle" aria-hidden="true" data-menu-button>
+      <span class="menu-toggle-icon">☰</span> <span>{{ t.menu_label }}</span>
+    </label>
+    <div class="site-menu" id="site-menu" data-site-menu>
     {% if current_user %}
     <nav>
       <a href="/" class="{{ 'active' if active == 'dashboard' }}">
@@ -2079,6 +2193,7 @@ BASE_TEMPLATE = """
       </form>
     </div>
     {% endif %}
+    </div>
   </header>
   <main>
     {{ body|safe }}
@@ -2088,6 +2203,25 @@ BASE_TEMPLATE = """
     <span class="version-chip" data-app-version>ORCH · {{ t.footer_version }} {{ app_version }}</span>
   </footer>
   <script>
+    // v0.21.0 mobile menu: keep aria-expanded in sync and close the menu
+    // after a link is chosen (the toggle itself works without JS).
+    (function () {
+      var toggle = document.getElementById("site-menu-toggle");
+      var menu = document.getElementById("site-menu");
+      if (!toggle || !menu) return;
+      function sync() { toggle.setAttribute("aria-expanded", toggle.checked ? "true" : "false"); }
+      function close() { toggle.checked = false; sync(); }
+      toggle.addEventListener("change", sync);
+      menu.addEventListener("click", function (event) {
+        if (event.target.closest("a")) close();
+      });
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && toggle.checked) { close(); toggle.focus(); }
+      });
+      window.addEventListener("pageshow", sync);
+      sync();
+    })();
+
     document.addEventListener("click", async function(event) {
       const messageButton = event.target.closest("[data-copy-message]");
       const textButton = event.target.closest("[data-copy-text]");
