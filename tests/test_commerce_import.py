@@ -505,8 +505,8 @@ class RepoHygieneTests(unittest.TestCase):
 
     def test_version(self):
         # v0.20.0 (WP-ORCH-11) builds on the v0.19.1 import module.
-        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.21.0")
-        self.assertEqual(commerce_import.IMPORT_VERSION, "v0.21.0")
+        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.21.1")
+        self.assertEqual(commerce_import.IMPORT_VERSION, "v0.21.1")
         self.assertIn("v0.19.1", (PROJECT_ROOT / "README.md").read_text(encoding="utf-8"))
 
 

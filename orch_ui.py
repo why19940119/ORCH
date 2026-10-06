@@ -1999,6 +1999,7 @@ BASE_TEMPLATE = """
         user-select: none;
       }
 
+      .menu-toggle:focus-visible,
       .menu-toggle-input:focus-visible + .menu-toggle {
         outline: 2px solid var(--blue);
         outline-offset: 2px;
@@ -2112,10 +2113,12 @@ BASE_TEMPLATE = """
        sees these three elements and shows .site-menu as display: contents,
        so the header layout is unchanged there. #}
     <span class="mobile-page-name" data-mobile-page-name aria-label="{{ t.menu_current_page }}">{{ title }}</span>
+    {# v0.21.1: the label is the control (role=button, aria-expanded); the
+       checkbox only holds the open/closed state for the CSS. #}
     <input type="checkbox" id="site-menu-toggle" class="menu-toggle-input" data-menu-toggle
-           autocomplete="off" aria-controls="site-menu" aria-expanded="false"
-           aria-label="{{ t.menu_toggle_aria }}">
-    <label for="site-menu-toggle" class="menu-toggle" aria-hidden="true" data-menu-button>
+           autocomplete="off" tabindex="-1" aria-hidden="true">
+    <label for="site-menu-toggle" class="menu-toggle" data-menu-button role="button" tabindex="0"
+           aria-controls="site-menu" aria-expanded="false" aria-label="{{ t.menu_toggle_aria }}">
       <span class="menu-toggle-icon">☰</span> <span>{{ t.menu_label }}</span>
     </label>
     <div class="site-menu" id="site-menu" data-site-menu>
@@ -2201,20 +2204,29 @@ BASE_TEMPLATE = """
     <span class="version-chip" data-app-version>ORCH · {{ t.footer_version }} {{ app_version }}</span>
   </footer>
   <script>
-    // v0.21.0 mobile menu: keep aria-expanded in sync and close the menu
-    // after a link is chosen (the toggle itself works without JS).
+    // v0.21.0 mobile menu: keep aria-expanded (on the label/button that acts
+    // as the control, v0.21.1) in sync and close the menu after a link is
+    // chosen (tapping the label works without JS).
     (function () {
       var toggle = document.getElementById("site-menu-toggle");
+      var button = document.querySelector("[data-menu-button]");
       var menu = document.getElementById("site-menu");
-      if (!toggle || !menu) return;
-      function sync() { toggle.setAttribute("aria-expanded", toggle.checked ? "true" : "false"); }
+      if (!toggle || !button || !menu) return;
+      function sync() { button.setAttribute("aria-expanded", toggle.checked ? "true" : "false"); }
       function close() { toggle.checked = false; sync(); }
       toggle.addEventListener("change", sync);
+      button.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          toggle.checked = !toggle.checked;
+          sync();
+        }
+      });
       menu.addEventListener("click", function (event) {
         if (event.target.closest("a")) close();
       });
       document.addEventListener("keydown", function (event) {
-        if (event.key === "Escape" && toggle.checked) { close(); toggle.focus(); }
+        if (event.key === "Escape" && toggle.checked) { close(); button.focus(); }
       });
       window.addEventListener("pageshow", sync);
       sync();
@@ -3438,7 +3450,8 @@ def setup_post():
         abort(403)
     username = (request.form.get("username") or "").strip()[:40]
     password = request.form.get("password") or ""
-    # Review fix: REQUIRED on exposed installs (generated + logged if unset).
+    # v0.21.1: REQUIRED by default (generated + logged if ORCH_SETUP_TOKEN is
+    # unset); only ORCH_SETUP_LOCAL_NO_TOKEN=1 (local dev) skips it.
     expected, _source = deploy_config.effective_setup_token()
     if expected:
         given = request.form.get("setup_token") or ""
@@ -4585,18 +4598,23 @@ def setup_warnings():
               file=sys.stderr, flush=True)
     if orch_auth.has_users():
         return
+    if deploy_config.setup_local_no_token() and deploy_config.exposed_install():
+        print("ORCH WARNING: ORCH_SETUP_LOCAL_NO_TOKEN is IGNORED because ORCH_TRUSTED_HOSTS / "
+              "ORCH_PROXY_FIX is set - /setup still requires a setup token.",
+              file=sys.stderr, flush=True)
     token, source = deploy_config.effective_setup_token()   # prints a generated one
-    if source == "none":
-        print("ORCH WARNING: no admin account yet - /setup lets whoever reaches this port "
-              "first create the admin. This install is localhost-only (no "
-              "ORCH_TRUSTED_HOSTS / ORCH_PROXY_FIX); set ORCH_SETUP_TOKEN before exposing it, "
-              "or run `python orch_auth.py create-admin`.", file=sys.stderr, flush=True)
+    if source == "opt-out":
+        print("ORCH WARNING: ORCH_SETUP_LOCAL_NO_TOKEN=1 - /setup is OPEN without a setup "
+              "token: whoever reaches this port first creates the admin. Local development "
+              "only; never use it behind a tunnel or reverse proxy (unset it, or set "
+              "ORCH_SETUP_TOKEN).", file=sys.stderr, flush=True)
     elif source == "env":
         print("ORCH: no admin account yet - /setup requires ORCH_SETUP_TOKEN.",
               file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":
+    deploy_config.configure_app_logging()
     startup()
     app.run(
         host=os.getenv("ORCH_HOST") or "127.0.0.1",

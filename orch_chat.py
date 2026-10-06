@@ -1,4 +1,6 @@
+import http.client
 import json
+import logging
 import os
 import re
 import urllib.error
@@ -10,7 +12,32 @@ OPENROUTER_URL = (
 )
 
 DEFAULT_MODEL = "mistralai/mistral-medium-3.1"
-DEFAULT_VISION_MODEL = "google/gemini-2.0-flash-001"
+# v0.21.1: google/gemini-2.0-flash-001 was retired on OpenRouter (HTTP 404
+# "No endpoints found"), which broke every chat with an image. Mistral Medium
+# 3.1 takes images and honours response_format json_object.
+DEFAULT_VISION_MODEL = "mistralai/mistral-medium-3.1"
+# Chat models known to accept image input (OpenRouter IDs, matched in full).
+# When OPENROUTER_VISION_MODEL is unset and the configured chat model is one
+# of these, images go to the chat model. Exact IDs / tight patterns on
+# purpose (no prefixes: openai/gpt-4o-audio-preview or
+# anthropic/claude-3.5-haiku take no images); deterministic, no /models
+# lookup. Anything else falls back to DEFAULT_VISION_MODEL.
+VISION_CAPABLE_MODEL_PATTERNS = tuple(re.compile(p) for p in (
+    r"mistralai/mistral-medium-3(\.1)?",
+    r"mistralai/mistral-small-3\.[12]-24b-instruct(:free)?",
+    r"mistralai/pixtral-(12b|large-2411)",
+    r"openai/gpt-4o(-mini)?(-\d{4}-\d{2}-\d{2})?",
+    r"openai/gpt-4\.1(-mini|-nano)?",
+    r"openai/gpt-5(-mini|-nano)?",
+    r"anthropic/claude-3-(haiku|sonnet|opus)",
+    r"anthropic/claude-3\.[57]-sonnet",
+    r"anthropic/claude-(sonnet|opus)-4(\.[0-9])?",
+    r"google/gemini-2\.5-(pro|flash|flash-lite)",
+    r"x-ai/grok-4",
+    r"meta-llama/llama-4-(scout|maverick)",
+))
+
+LOG = logging.getLogger("orch.chat")
 
 ALLOWED_MODES = {
     "general",
@@ -28,22 +55,39 @@ class ChatProviderError(RuntimeError):
         self.params = params
 
 
+def _env(name):
+    return (os.getenv(name) or "").strip()
+
+
+def configured_chat_model():
+    return _env("OPENROUTER_CHAT_MODEL") or _env("OPENROUTER_MODEL") or DEFAULT_MODEL
+
+
+def model_accepts_images(model):
+    model = (model or "").strip().lower()
+    return any(pattern.fullmatch(model) for pattern in VISION_CAPABLE_MODEL_PATTERNS)
+
+
+def resolve_vision_model():
+    """Model for a request with images: OPENROUTER_VISION_MODEL if set (an
+    empty value counts as unset); else the chat model if it is known to take
+    images; else DEFAULT_VISION_MODEL."""
+    explicit = _env("OPENROUTER_VISION_MODEL")
+    if explicit:
+        return explicit
+    chat_model = configured_chat_model()
+    if model_accepts_images(chat_model):
+        return chat_model
+    return DEFAULT_VISION_MODEL
+
+
 def get_chat_config(use_vision=False):
     api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
 
     if use_vision:
-        model = os.getenv(
-            "OPENROUTER_VISION_MODEL",
-            DEFAULT_VISION_MODEL,
-        ).strip()
+        model = resolve_vision_model()
     else:
-        model = os.getenv(
-            "OPENROUTER_CHAT_MODEL",
-            os.getenv(
-                "OPENROUTER_MODEL",
-                DEFAULT_MODEL,
-            ),
-        ).strip()
+        model = configured_chat_model()
 
     if not api_key:
         raise ChatProviderError(
@@ -554,6 +598,59 @@ MAX_QUESTION_CHARS = 800
 MAX_QUESTION_CHARS_HARD_CAP = 4000
 
 
+# v0.21.1: provider failures are logged server-side (logger "orch.chat") with
+# the error code, HTTP status, model and request kind. Never logged: the API
+# key, the Authorization header, the prompt, image data, or the response body
+# beyond a short sanitised provider error message.
+_SECRET_PATTERNS = (
+    re.compile(r"sk-[A-Za-z0-9_\-]{8,}"),
+    re.compile(r"(?i)bearer\s+\S+"),
+    re.compile(r"data:[^\s;,]+;base64,\S*"),
+    re.compile(r"[A-Za-z0-9+/=_\-]{40,}"),
+)
+MAX_PROVIDER_DETAIL = 160
+
+
+def sanitize_provider_detail(text, secrets_to_hide=()):
+    text = " ".join(str(text or "").split())
+    for secret in secrets_to_hide:
+        if secret:
+            text = text.replace(secret, "[redacted]")
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub("[redacted]", text)
+    if len(text) > MAX_PROVIDER_DETAIL:
+        text = text[:MAX_PROVIDER_DETAIL - 1] + "…"
+    return text
+
+
+def provider_error_message(error):
+    """Only ``error.message`` from an OpenRouter JSON error body (at most a
+    few KB read), sanitised and shortened; never the raw body."""
+    try:
+        raw = error.read(4096)
+    except Exception:
+        return ""
+    try:
+        body = json.loads(raw.decode("utf-8", errors="replace"))
+        message = body.get("error", {}).get("message", "") if isinstance(body, dict) else ""
+    except (ValueError, AttributeError):
+        return ""
+    if not isinstance(message, str):
+        return ""
+    return sanitize_provider_detail(message, (_env("OPENROUTER_API_KEY"),))
+
+
+def log_provider_failure(kind, model, code, status=None, detail=""):
+    hint = ""
+    if status == 404 and "no endpoints found" in (detail or "").lower():
+        hint = (" - the model is retired/unavailable on OpenRouter; set "
+                + ("OPENROUTER_VISION_MODEL" if kind == "vision" else "OPENROUTER_MODEL")
+                + " to a current model")
+    LOG.warning("chat provider failure: kind=%s code=%s status=%s model=%s error=%r%s",
+                kind, code, status if status is not None else "-", model,
+                sanitize_provider_detail(detail, (_env("OPENROUTER_API_KEY"),)), hint)
+
+
 def ask_orch(
     question, mode, context, history, attachments=None, locale=None,
     max_question_chars=MAX_QUESTION_CHARS,
@@ -615,20 +712,49 @@ def ask_orch(
         method="POST",
     )
 
+    kind = "vision" if use_vision else "chat"
+    status = None
     try:
         with urllib.request.urlopen(
             request,
             timeout=45,
         ) as response:
-            response_body = response.read().decode("utf-8")
+            status = getattr(response, "status", None)
+            raw_body = response.read()
+    except http.client.IncompleteRead as error:
+        log_provider_failure(kind, config["model"], "bad_response", status=status,
+                             detail="incomplete response body (IncompleteRead)")
+        raise ChatProviderError(
+            "OpenRouter returned an incomplete chat response.", code="bad_response"
+        ) from error
+    except http.client.HTTPException as error:
+        log_provider_failure(kind, config["model"], "connection", status=status,
+                             detail=type(error).__name__)
+        raise ChatProviderError(
+            "OpenRouter chat connection failed.", code="connection"
+        ) from error
     except urllib.error.HTTPError as error:
+        log_provider_failure(kind, config["model"], "http", status=error.code,
+                             detail=provider_error_message(error))
         raise ChatProviderError(
             f"OpenRouter rejected the chat request: HTTP {error.code}.",
             code="http", status=error.code,
         ) from error
-    except urllib.error.URLError as error:
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        reason = getattr(error, "reason", error)
+        log_provider_failure(kind, config["model"], "connection",
+                             detail=type(reason).__name__)
         raise ChatProviderError(
             "OpenRouter chat connection failed.", code="connection"
+        ) from error
+
+    try:
+        response_body = raw_body.decode("utf-8")
+    except UnicodeDecodeError as error:
+        log_provider_failure(kind, config["model"], "bad_response", status=status,
+                             detail="response body is not valid UTF-8")
+        raise ChatProviderError(
+            "OpenRouter returned an unusable chat response.", code="bad_response"
         ) from error
 
     try:
@@ -642,11 +768,15 @@ def ask_orch(
         IndexError,
         TypeError,
     ) as error:
+        log_provider_failure(kind, config["model"], "bad_response", status=status,
+                             detail="unusable response envelope")
         raise ChatProviderError(
             "OpenRouter returned an unusable chat response.", code="bad_response"
         ) from error
 
     if not isinstance(content, str):
+        log_provider_failure(kind, config["model"], "bad_response", status=status,
+                             detail="non-text content")
         raise ChatProviderError(
             "OpenRouter returned non-text chat content.", code="bad_response"
         )
@@ -654,6 +784,8 @@ def ask_orch(
     try:
         parsed_answer = json.loads(content)
     except json.JSONDecodeError as error:
+        log_provider_failure(kind, config["model"], "bad_response", status=status,
+                             detail="model reply was not valid JSON")
         raise ChatProviderError(
             "Chat model response was not valid JSON.", code="bad_response"
         ) from error

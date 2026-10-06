@@ -25,11 +25,14 @@ Environment (all optional):
                               127.0.0.1,::1; "*" trusts every peer (only if
                               nothing but the proxy can reach the port)
     ORCH_TRUSTED_HOSTS        extra host names, comma separated
-    ORCH_SETUP_TOKEN          the /setup wizard asks for it. REQUIRED for an
-                              exposed install (ORCH_TRUSTED_HOSTS or
-                              ORCH_PROXY_FIX set): if missing there, a
-                              one-time token is generated and printed to the
-                              log; localhost-only installs need none
+    ORCH_SETUP_TOKEN          the /setup (first admin) wizard asks for it.
+                              v0.21.1: /setup always needs a token - this one,
+                              or (if unset) a one-time token generated per
+                              process and printed to the log / console
+                              (docker logs) at startup
+    ORCH_SETUP_LOCAL_NO_TOKEN=1  local development only: /setup without a
+                              token (startup warning; ignored when
+                              ORCH_TRUSTED_HOSTS / ORCH_PROXY_FIX is set)
     ORCH_HOST / ORCH_PORT     bind address for serve.py (default 127.0.0.1:5050)
 """
 
@@ -40,6 +43,7 @@ import os
 import re
 import secrets
 import sys
+import threading
 from pathlib import Path
 
 LOG = logging.getLogger("orch.deploy")
@@ -243,28 +247,56 @@ def setup_token():
 
 def exposed_install():
     """Configured to be reached from other machines (a public host name or a
-    reverse proxy in front)."""
+    reverse proxy in front). v0.21.1: informational only - a tunnel that
+    rewrites Host to 127.0.0.1 looks local, so /setup needs a token anyway."""
     return bool(extra_trusted_hosts()) or proxy_hops() > 0
 
 
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def configure_app_logging():
+    """v0.21.1: send the app's own loggers (orch.*: chat provider failures,
+    DB refusals, proxy warnings) to stderr = console / docker logs, with
+    time and level. No-op when a handler is already configured."""
+    log = logging.getLogger("orch")
+    if log.handlers:
+        return
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+    log.propagate = False
+
+
+def setup_local_no_token():
+    """ORCH_SETUP_LOCAL_NO_TOKEN=1: explicit local-dev opt-out of the token."""
+    return (os.getenv("ORCH_SETUP_LOCAL_NO_TOKEN") or "").strip().lower() in _TRUTHY
+
+
 _generated_setup_token = None
+_generated_lock = threading.Lock()
 
 
 def effective_setup_token():
-    """(token, source) for the /setup wizard: ORCH_SETUP_TOKEN ('env'); for
-    an exposed install without one, a one-time token generated per process
-    and printed to the log ('generated'); else ('', 'none') - localhost-only
-    installs keep the open wizard."""
+    """(token, source) for the /setup wizard.
+
+    v0.21.1: a token is required BY DEFAULT. ORCH_SETUP_TOKEN wins ('env');
+    otherwise ORCH_SETUP_LOCAL_NO_TOKEN=1 opens the wizard without one
+    ('opt-out', local dev only, ignored on an install configured as exposed);
+    otherwise a one-time token is generated per process and printed to the
+    log / console once ('generated')."""
     global _generated_setup_token
     token = setup_token()
     if token:
         return token, "env"
-    if not exposed_install():
-        return "", "none"
-    if _generated_setup_token is None:
-        _generated_setup_token = secrets.token_urlsafe(18)
-        print("ORCH WARNING: exposed install (ORCH_TRUSTED_HOSTS / ORCH_PROXY_FIX) without "
-              "ORCH_SETUP_TOKEN - the first-admin page /setup requires this one-time token: "
-              f"{_generated_setup_token}  (valid until the first admin exists or a restart; "
-              "set ORCH_SETUP_TOKEN to choose your own)", file=sys.stderr, flush=True)
-    return _generated_setup_token, "generated"
+    if setup_local_no_token() and not exposed_install():
+        return "", "opt-out"
+    with _generated_lock:
+        if _generated_setup_token is None:
+            _generated_setup_token = secrets.token_urlsafe(18)
+            print("ORCH: no ORCH_SETUP_TOKEN set - the first-admin page /setup requires this "
+                  f"one-time token: {_generated_setup_token}  (valid until the first "
+                  "admin exists or the server restarts; set ORCH_SETUP_TOKEN to choose your "
+                  "own)", file=sys.stderr, flush=True)
+        return _generated_setup_token, "generated"

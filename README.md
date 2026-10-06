@@ -94,6 +94,31 @@ v0.21.0     SQLite state + Docker: all mutable state in state/orch.db (WAL,
             archives 0600, snapshot cleaned up), task_queue.json + output/
             persisted in volumes, smoke.sh isolated from a real deployment,
             app code read-only for the runtime user
+v0.21.1     Hardening: /setup requires a setup token by default (generated
+            one-time token printed to the log when ORCH_SETUP_TOKEN is unset;
+            ORCH_SETUP_LOCAL_NO_TOKEN=1 opts out for local dev, with a
+            warning), smoke.sh runs with its own generated env file (never
+            the real .env, API keys blanked), a refused stray JSON no longer
+            takes the DB write lock on reads, json-backup-*/ is 0700 with
+            0600 files, restore.sh validates the archive before stopping the
+            service or taking the safety backup (regular files and folders
+            only: symlink / hardlink / device / FIFO members refused) and
+            restores via a staging folder + swap with rollback (live data is
+            never deleted before a verified extraction; no link-following
+            chmod; the archive is copied in full and must match the host's
+            sha256, pass the gzip CRC, end with the tar end-of-archive marker
+            and hold every member of the manifest backup.sh now writes
+            (state/.snapshot/required.txt), else RESTORE ABORTED with the
+            live data untouched; .restore-* names and backslashes refused
+            on the host too; one-line error if the post-swap check fails;
+            backup.sh removes its temp files on failure), aria-expanded on the menu
+            button, clean one-line migrate errors (exit 1); image chat
+            fixed: default vision model mistralai/mistral-medium-3.1
+            (google/gemini-2.0-flash-001 was retired: HTTP 404), an image-
+            capable chat model (exact IDs) is used when
+            OPENROUTER_VISION_MODEL is unset, provider failures logged
+            server-side incl. incomplete / non-UTF-8 bodies (code / status /
+            model / kind; never the key, prompt or image data)
 ```
 
 ## Core Architecture
@@ -325,7 +350,22 @@ Do not commit API keys.
 ```bash
 export OPENROUTER_API_KEY='your-key'
 export OPENROUTER_MODEL='mistralai/mistral-medium-3.1'
+export OPENROUTER_VISION_MODEL='mistralai/mistral-medium-3.1'   # optional
 ```
+
+`OPENROUTER_VISION_MODEL` is the model for chats with an image. Since
+v0.21.1 the default is `mistralai/mistral-medium-3.1` (the old default
+`google/gemini-2.0-flash-001` was retired by OpenRouter). When it is unset
+(or empty) and the chat model (`OPENROUTER_CHAT_MODEL` / `OPENROUTER_MODEL`)
+is on the built-in list of image-capable models, images go to the chat model.
+The model must accept images and `response_format: json_object`.
+
+Provider failures are logged server-side (logger `orch.chat`, on the console /
+`docker compose logs orch`) as `chat provider failure: kind=chat|vision
+code=... status=... model=... error='...'` - never the key, the prompt, image
+data or the raw response. An HTTP 404 `No endpoints found for <model>` means
+the model has been retired on OpenRouter: set `OPENROUTER_VISION_MODEL` (or
+`OPENROUTER_MODEL`) to a current model and restart.
 
 Check configuration without printing the secret:
 
@@ -1077,10 +1117,13 @@ open http://127.0.0.1:5050/setup    # create the first admin (only while no acco
   `docker compose down` / `up` and image rebuilds.
 - Session key: `ORCH_UI_SECRET_KEY` if set, otherwise generated on first
   start and kept in `state/secret_key` (0600).
-- First admin: `/setup` wizard (CSRF, only while no account exists;
-  `ORCH_SETUP_TOKEN` is REQUIRED for an exposed install - with
-  `ORCH_TRUSTED_HOSTS` or `ORCH_PROXY_FIX` set and no token, a one-time token
-  is generated and printed to the log, and /setup refuses without it), or
+- First admin: `/setup` wizard (CSRF, only while no account exists). Since
+  v0.21.1 /setup always requires a setup token - either set
+  `ORCH_SETUP_TOKEN`, or leave it empty and use the one-time token printed in
+  the startup log (`docker compose logs orch | grep "one-time token"`; a
+  restart makes a new one); /setup refuses without one. `ORCH_SETUP_LOCAL_NO_TOKEN=1` opens
+  the wizard without a token for local development only (startup warning;
+  ignored when `ORCH_TRUSTED_HOSTS` / `ORCH_PROXY_FIX` is set). Or use
   `docker compose exec orch python orch_auth.py create-admin`.
 - Branding: `ORCH_CLIENT_NAME`, `ORCH_LOGO` (https URL or a path inside
   `state/`, e.g. `branding/logo.png`), `ORCH_TARGET_MARKET`, or the same keys
@@ -1099,7 +1142,10 @@ open http://127.0.0.1:5050/setup    # create the first admin (only while no acco
   uid 10001 container never writes or reads host files, so it works on Linux
   hosts), created 0600 under umask 077 (it holds secret_key and password
   hashes), the snapshot folder is removed on every exit path, and restore
-  deletes nothing unless the archive is a valid ORCH backup.
+  deletes nothing unless the archive is a valid ORCH backup. Each archive
+  carries a manifest of all its members (`state/.snapshot/required.txt`);
+  restore refuses a cut, partial or altered archive (sha256, gzip CRC,
+  end-of-archive marker, every listed member) before touching live data.
 - Upgrade: `git pull` (or pull the new image), `scripts/backup.sh`,
   `docker compose up -d --build`; schema migrations run on start.
 - Smoke test: `scripts/smoke.sh` (Docker) or `scripts/smoke.sh --local`.

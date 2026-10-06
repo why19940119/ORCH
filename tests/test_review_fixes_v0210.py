@@ -129,7 +129,8 @@ class SetupTokenTests(unittest.TestCase):
         return self.client.post("/setup", data=data)
 
     def env(self, **values):
-        base = {"ORCH_SETUP_TOKEN": "", "ORCH_TRUSTED_HOSTS": "", "ORCH_PROXY_FIX": ""}
+        base = {"ORCH_SETUP_TOKEN": "", "ORCH_TRUSTED_HOSTS": "", "ORCH_PROXY_FIX": "",
+                "ORCH_SETUP_LOCAL_NO_TOKEN": ""}
         base.update(values)
         return patch.dict(os.environ, base)
 
@@ -158,12 +159,15 @@ class SetupTokenTests(unittest.TestCase):
             self.assertEqual(self.post(setup_token="tok-abcdef-123").status_code, 302)
         self.assertIsNone(deploy_config._generated_setup_token)   # nothing generated
 
-    def test_localhost_only_keeps_open_wizard_with_warning(self):
-        with self.env():
+    def test_local_opt_out_keeps_open_wizard_with_warning(self):
+        # v0.21.1: localhost-only no longer means open; only the explicit
+        # ORCH_SETUP_LOCAL_NO_TOKEN=1 opt-out does (with a warning).
+        with self.env(ORCH_SETUP_LOCAL_NO_TOKEN="1"):
             err = io.StringIO()
             with redirect_stderr(err):
                 orch_ui.setup_warnings()
-            self.assertIn("localhost-only", err.getvalue())
+            self.assertIn("ORCH_SETUP_LOCAL_NO_TOKEN=1", err.getvalue())
+            self.assertIn("OPEN without a setup token", err.getvalue())
             self.assertNotIn('name="setup_token"', self.client.get("/setup").get_data(as_text=True))
             self.assertEqual(self.post().status_code, 302)
         self.assertTrue(orch_auth.has_users())
@@ -248,7 +252,7 @@ class SmokeIsolationTests(unittest.TestCase):
     def test_compose_has_no_fixed_container_name(self):
         text = (self.ROOT / "docker-compose.yml").read_text(encoding="utf-8")
         self.assertNotRegex(text, r"(?m)^\s*container_name:")
-        self.assertIn("image: ${ORCH_IMAGE:-orch:0.21.0}", text)
+        self.assertIn("image: ${ORCH_IMAGE:-orch:0.21.1}", text)
 
     def test_smoke_uses_own_project_and_image(self):
         text = (self.ROOT / "scripts" / "smoke.sh").read_text(encoding="utf-8")
@@ -316,7 +320,8 @@ class BackupScriptTests(unittest.TestCase):
         self.assertIn('-c "$INNER" < "$ARCHIVE"', restore)          # streamed in on stdin
         self.assertNotIn(":/restore", restore)
         self.assertIn("umask 077", restore)
-        self.assertIn('trap "rm -rf', restore)
+        self.assertIn("""trap 'rm -rf "$CHECK_DIR"' EXIT""", restore)   # host-side check dir
+        self.assertIn('--entrypoint python orch -c "$INNER" < "$ARCHIVE"', restore)
 
     def test_backup_is_0600_complete_and_leaves_no_snapshot(self):
         result = self.run_script("scripts/backup.sh", "--local")

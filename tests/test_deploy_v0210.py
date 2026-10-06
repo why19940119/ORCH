@@ -51,7 +51,7 @@ class HealthzTests(TempStateMixin, unittest.TestCase):
         response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(),
-                         {"ok": True, "version": "v0.21.0", "db": "ok"})
+                         {"ok": True, "version": "v0.21.1", "db": "ok"})
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         self.assertTrue((self.state / "orch.db").is_file())
         orch_auth.bootstrap_admin("First Admin", PASSWORD)
@@ -71,6 +71,12 @@ class SetupWizardTests(unittest.TestCase):
         app.config["TESTING"] = True
         self.client = app.test_client()
         use_temp_auth(self, users=())
+        # v0.21.1: /setup needs a token by default; these wizard tests use the
+        # explicit local-dev opt-out (token behaviour: test_hardening_v0211).
+        env = patch.dict(os.environ, {"ORCH_SETUP_LOCAL_NO_TOKEN": "1", "ORCH_SETUP_TOKEN": "",
+                                      "ORCH_TRUSTED_HOSTS": "", "ORCH_PROXY_FIX": ""})
+        env.start()
+        self.addCleanup(env.stop)
 
     def token(self):
         page = self.client.get("/setup")
@@ -205,7 +211,7 @@ class BrandingTests(unittest.TestCase):
         t = ui_strings("zh-Hant")
         self.assertIn(f'data-brand-market>{t["brand_market_label"]}: Hong Kong', html)
         self.assertIn('src="/branding/logo"', html)
-        self.assertIn(f"data-app-version>ORCH · {t['footer_version']} v0.21.0", html)
+        self.assertIn(f"data-app-version>ORCH · {t['footer_version']} v0.21.1", html)
         self.assertEqual(logo.status_code, 200)
         self.assertEqual(logo.headers["X-Content-Type-Options"], "nosniff")
         with patch.object(deploy_config, "STATE_DIR", self.tmp):
@@ -268,7 +274,9 @@ class DockerFilesTests(unittest.TestCase):
         self.assertIn("/healthz", " ".join(service["healthcheck"]["test"]))
         self.assertEqual(service["environment"]["ORCH_PERSIST_SECRET_KEY"], "1")
         self.assertTrue(all(str(p).startswith("127.0.0.1:") for p in service["ports"]))
-        self.assertEqual(service["env_file"][0]["path"], ".env")
+        # v0.21.1: .env by default; scripts/smoke.sh points ORCH_ENV_FILE elsewhere
+        self.assertEqual(service["env_file"][0]["path"], "${ORCH_ENV_FILE:-.env}")
+        self.assertIs(service["env_file"][0]["required"], False)
         self.assertNotIn("OPENROUTER_API_KEY", service["environment"])
 
     def test_compose_text_without_yaml(self):
@@ -285,7 +293,11 @@ class DockerFilesTests(unittest.TestCase):
             self.assertTrue(path.read_text(encoding="utf-8").startswith("#!/usr/bin/env bash"))
         backup = self.read("scripts/backup.sh")
         self.assertIn("orch_db.py --state-dir state backup", backup)   # SQLite backup API
-        self.assertIn('--exclude="./state/orch.db"', backup)
+        # the live DB files are never archived (v0.21.1: tar takes the manifest
+        # list, which skips them; the snapshot is archived instead)
+        self.assertIn("! -path ./state/orch.db ! -path ./state/orch.db-wal", backup)
+        self.assertIn("! -path ./state/orch.db-shm", backup)
+        self.assertIn("--no-recursion -T -", backup)
         self.assertIn("tar -czf - ", backup)       # streamed (review fix 2)
 
     def test_zh_hant_docs(self):
@@ -302,9 +314,9 @@ class DockerFilesTests(unittest.TestCase):
 
 class VersionAndI18nTests(unittest.TestCase):
     def test_version(self):
-        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.21.0")
-        self.assertEqual(orch_ui.APP_VERSION, "v0.21.0")
-        self.assertIn("v0.21.0", (PROJECT_ROOT / "README.md").read_text(encoding="utf-8"))
+        self.assertEqual(commerce_demo.DEMO_VERSION, "v0.21.1")
+        self.assertEqual(orch_ui.APP_VERSION, "v0.21.1")
+        self.assertIn("v0.21.1", (PROJECT_ROOT / "README.md").read_text(encoding="utf-8"))
 
     def test_i18n_parity(self):
         keys = {loc: set(ui_strings(loc)) for loc in SUPPORTED_LOCALES}
