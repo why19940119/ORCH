@@ -576,6 +576,7 @@ class I18nTests(unittest.TestCase):
         self.assertEqual(commerce_demo.DEMO_VERSION, "v0.21.0")
         self.assertEqual(orch_auth.AUTH_VERSION, "v0.21.0")
         self.assertIn("v0.21.0", (PROJECT_ROOT / "README.md").read_text(encoding="utf-8"))
+        self.assertIn("v0.20.1", (PROJECT_ROOT / "README.md").read_text(encoding="utf-8"))  # changelog kept
 
 
 class RepoHygieneTests(unittest.TestCase):
