@@ -1070,7 +1070,11 @@ open http://127.0.0.1:5050/setup    # create the first admin (only while no acco
   (`client_name`, `logo`, `target_market`) in `state/branding.json`. The
   version is shown in the footer.
 - HTTPS / reverse proxy: `SESSION_COOKIE_SECURE=1`, `ORCH_PROXY_FIX=1`,
-  `ORCH_TRUSTED_HOSTS=orch.example.com`; Caddy / nginx examples in
+  `ORCH_TRUSTED_PROXY=172.16.0.0/12` (Docker; default `127.0.0.1,::1`),
+  `ORCH_TRUSTED_HOSTS=orch.example.com`. X-Forwarded-* are used only from a
+  `ORCH_TRUSTED_PROXY` peer and stripped from every other client (waitress
+  and the dev server alike), so a spoofed X-Forwarded-Host cannot pass the
+  host check; Caddy / nginx examples in
   `docs/反向代理與HTTPS.md`.
 - Backup / restore: `scripts/backup.sh` (SQLite backup API snapshot + tar of
   the volumes) and `scripts/restore.sh <archive>`; `--local` for a plain checkout.

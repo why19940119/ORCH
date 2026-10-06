@@ -20,10 +20,13 @@ services:
       ORCH_LOGO: ${ORCH_LOGO:-}
       ORCH_TARGET_MARKET: ${ORCH_TARGET_MARKET:-}
       # Behind Caddy/nginx with HTTPS: SESSION_COOKIE_SECURE=1, ORCH_PROXY_FIX=1,
-      # ORCH_TRUSTED_HOSTS=orch.example.com (see docs/反向代理與HTTPS.md)
+      # ORCH_TRUSTED_PROXY=172.16.0.0/12 (the proxy reaches the container from the
+      # Docker bridge), ORCH_TRUSTED_HOSTS=orch.example.com, ORCH_SETUP_TOKEN=...
+      # (see docs/反向代理與HTTPS.md)
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-0}
       ORCH_PROXY_FIX: ${ORCH_PROXY_FIX:-0}
       ORCH_TRUSTED_HOSTS: ${ORCH_TRUSTED_HOSTS:-}
+      ORCH_TRUSTED_PROXY: ${ORCH_TRUSTED_PROXY:-}
       ORCH_SETUP_TOKEN: ${ORCH_SETUP_TOKEN:-}
     ports:
       # Local only by default; put a reverse proxy in front for other machines.

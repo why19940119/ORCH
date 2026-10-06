@@ -147,13 +147,11 @@ app.config["TRUSTED_HOSTS"] = [
     "localhost",
 ] + deploy_config.extra_trusted_hosts()   # v0.21.0: ORCH_TRUSTED_HOSTS
 
-# v0.21.0: behind a reverse proxy (Caddy/nginx) set ORCH_PROXY_FIX=1 so the
-# client IP / scheme / host come from X-Forwarded-* of that one proxy only.
-if deploy_config.proxy_hops():
-    from werkzeug.middleware.proxy_fix import ProxyFix
-    _hops = deploy_config.proxy_hops()
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_hops, x_proto=_hops,
-                            x_host=_hops, x_prefix=0)
+# v0.21.0: behind a reverse proxy (Caddy/nginx) set ORCH_PROXY_FIX=1 (and
+# ORCH_TRUSTED_PROXY when the proxy is not on 127.0.0.1): X-Forwarded-* are
+# honoured only from that proxy's address and stripped from everyone else,
+# so the TRUSTED_HOSTS check cannot be passed with a spoofed X-Forwarded-Host.
+app.wsgi_app = deploy_config.ProxyHeadersMiddleware(app.wsgi_app)
 
 APP_VERSION = commerce_demo.DEMO_VERSION
 

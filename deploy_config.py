@@ -16,17 +16,28 @@ Environment (all optional):
     ORCH_BRANDING_FILE        JSON file with the same keys (client_name, logo,
                               target_market); default state/branding.json.
                               Environment values win over the file.
-    ORCH_PROXY_FIX=N          behind N reverse proxies: trust X-Forwarded-*
+    ORCH_PROXY_FIX=N          behind N reverse proxies: use X-Forwarded-For /
+                              -Proto / -Host, but ONLY on requests whose TCP
+                              peer is in ORCH_TRUSTED_PROXY; from any other
+                              peer those headers are removed (all servers)
+    ORCH_TRUSTED_PROXY        proxy addresses / networks, comma separated
+                              (e.g. 127.0.0.1 or 172.16.0.0/12); default
+                              127.0.0.1,::1; "*" trusts every peer (only if
+                              nothing but the proxy can reach the port)
     ORCH_TRUSTED_HOSTS        extra host names, comma separated
     ORCH_SETUP_TOKEN          if set, the /setup wizard asks for it
     ORCH_HOST / ORCH_PORT     bind address for serve.py (default 127.0.0.1:5050)
 """
 
+import ipaddress
 import json
+import logging
 import os
 import re
 import secrets
 from pathlib import Path
+
+LOG = logging.getLogger("orch.deploy")
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 STATE_DIR = PROJECT_ROOT / "state"
@@ -135,6 +146,65 @@ def proxy_hops():
         return max(0, min(int(value), 5))
     except ValueError:
         return 0
+
+
+DEFAULT_TRUSTED_PROXIES = ("127.0.0.1", "::1")
+
+
+def trusted_proxies():
+    items = [p.strip() for p in (os.getenv("ORCH_TRUSTED_PROXY") or "").split(",") if p.strip()]
+    return items or list(DEFAULT_TRUSTED_PROXIES)
+
+
+def peer_is_trusted_proxy(peer, trusted=None):
+    trusted = trusted_proxies() if trusted is None else trusted
+    if "*" in trusted:
+        return True
+    try:
+        addr = ipaddress.ip_address((peer or "").split("%", 1)[0])
+    except ValueError:
+        return False
+    if getattr(addr, "ipv4_mapped", None):
+        addr = addr.ipv4_mapped
+    for item in trusted:
+        try:
+            if addr in ipaddress.ip_network(item, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+class ProxyHeadersMiddleware:
+    """v0.21.0 review fix: X-Forwarded-* / Forwarded are honoured only when
+    ORCH_PROXY_FIX is set AND the TCP peer is a trusted proxy; otherwise
+    they are removed before Flask sees them, so a client that reaches the
+    port directly cannot spoof its IP, scheme or Host (the TRUSTED_HOSTS
+    check uses the real Host header). Same behaviour under waitress and the
+    dev server (serve.py tells waitress to pass the headers through)."""
+
+    def __init__(self, app, hops=None, trusted=None):
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        self.app = app
+        self.hops = proxy_hops() if hops is None else hops
+        self.trusted = trusted_proxies() if trusted is None else list(trusted)
+        self.proxied = (ProxyFix(app, x_for=self.hops, x_proto=self.hops,
+                                 x_host=self.hops, x_prefix=0) if self.hops else None)
+        self._warned = False
+
+    def __call__(self, environ, start_response):
+        peer = environ.get("REMOTE_ADDR", "")
+        if self.proxied is not None and peer_is_trusted_proxy(peer, self.trusted):
+            return self.proxied(environ, start_response)
+        stripped = [key for key in environ
+                    if key.startswith("HTTP_X_FORWARDED_") or key == "HTTP_FORWARDED"]
+        if stripped and self.hops and not self._warned:
+            self._warned = True
+            LOG.warning("ignored X-Forwarded-* headers from untrusted peer %s "
+                        "(ORCH_TRUSTED_PROXY=%s)", peer, ",".join(self.trusted))
+        for key in stripped:
+            del environ[key]
+        return self.app(environ, start_response)
 
 
 def extra_trusted_hosts():

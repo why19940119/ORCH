@@ -23,8 +23,12 @@ def main():
     except ImportError:
         orch_ui.app.run(host=host, port=port, debug=False)
         return 0
+    # X-Forwarded-* trust is decided in the app (deploy_config.
+    # ProxyHeadersMiddleware: ORCH_PROXY_FIX + ORCH_TRUSTED_PROXY, untrusted
+    # peers' headers stripped), so waitress passes them through unchanged.
     serve(orch_ui.app, host=host, port=port,
-          threads=int(os.getenv("ORCH_THREADS") or 8), ident="ORCH")
+          threads=int(os.getenv("ORCH_THREADS") or 8), ident="ORCH",
+          clear_untrusted_proxy_headers=False)
     return 0
 
 
