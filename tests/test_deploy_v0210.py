@@ -274,7 +274,9 @@ class DockerFilesTests(unittest.TestCase):
         self.assertIn("/healthz", " ".join(service["healthcheck"]["test"]))
         self.assertEqual(service["environment"]["ORCH_PERSIST_SECRET_KEY"], "1")
         self.assertTrue(all(str(p).startswith("127.0.0.1:") for p in service["ports"]))
-        self.assertEqual(service["env_file"][0]["path"], ".env")
+        # v0.21.1: .env by default; scripts/smoke.sh points ORCH_ENV_FILE elsewhere
+        self.assertEqual(service["env_file"][0]["path"], "${ORCH_ENV_FILE:-.env}")
+        self.assertIs(service["env_file"][0]["required"], False)
         self.assertNotIn("OPENROUTER_API_KEY", service["environment"])
 
     def test_compose_text_without_yaml(self):
