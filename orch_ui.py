@@ -1900,6 +1900,104 @@ BASE_TEMPLATE = """
       font-size: 12px;
       margin-top: 6px;
     }
+
+    /* v0.21.0 mobile layout (phones, 375-430px; must stay the LAST rules).
+       Root causes seen on a real iPhone:
+       - the header is position: sticky with a 92% opaque background and a
+         backdrop blur; on phones the nav wraps to ~6 rows, so a ~300px
+         translucent header stayed pinned over the page and the nav /
+         language / user rows showed through on top of the content;
+       - the chat composer is position: sticky (bottom) with z-index 50 and
+         ~350px tall, covering the chat history behind it;
+       - inputs under 16px make iOS Safari zoom the page on focus.
+       Fix: static opaque header, nav = one horizontally scrolling strip
+       inside itself, static composer, 16px form controls. */
+    @media (max-width: 720px) {
+      /* no viewport-width units anywhere; nothing is clipped to hide overflow - every
+         element fits (wide tables scroll inside .table-wrap). */
+      html,
+      body {
+        max-width: 100%;
+      }
+
+      header {
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        background: #171020;
+        flex-wrap: wrap;
+        position: static;
+        z-index: auto;
+      }
+
+      header nav {
+        -webkit-overflow-scrolling: touch;
+        flex-wrap: nowrap;
+        max-width: 100%;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        padding-bottom: 2px;
+        scrollbar-width: none;
+        width: 100%;
+      }
+
+      header nav::-webkit-scrollbar { display: none; }
+
+      header nav a,
+      header nav .nav-sep,
+      header nav .nav-group-label {
+        flex: 0 0 auto;
+        white-space: nowrap;
+      }
+
+      .lang-switch,
+      .user-chip {
+        margin-left: 0;
+      }
+
+      .chat-page .chat-composer,
+      .chat-page .section.chat-composer {
+        background: #1b1329;
+        bottom: auto;
+        box-shadow: none;
+        position: static;
+        z-index: auto;
+      }
+
+      /* Stacked composer: data-source line (above the grid, full width),
+         then the textarea across the full width, then one row of controls
+         (paperclip + mode toggle, wrapping if needed, and Send). */
+      .chat-page .composer-grid {
+        align-items: center;
+        grid-template-columns: minmax(0, 1fr) auto;
+      }
+
+      .chat-page p.chat-data-source {
+        width: 100%;
+      }
+
+      .chat-page .composer-grid textarea {
+        grid-column: 1 / -1;
+        min-height: 120px;
+        order: -1;
+        width: 100%;
+      }
+
+      .chat-page .composer-tools {
+        flex-wrap: wrap;
+        min-width: 0;
+      }
+
+      .chat-page .composer-submit {
+        width: auto;
+      }
+
+      input,
+      select,
+      textarea,
+      .chat-page textarea {
+        font-size: 16px;
+      }
+    }
   </style>
 </head>
 <body>
