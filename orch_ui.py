@@ -1703,6 +1703,42 @@ BASE_TEMPLATE = """
 
     main ul.composer-help { padding-left: 18px; }
 
+    /* v0.20.1: the chat data-source line is small help text with its own
+       breathing room between the mode buttons and the input. */
+    .chat-page p.chat-data-source {
+      color: #9a86b0;
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 1.5;
+      margin: 2px 4px 12px;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      white-space: normal;
+    }
+
+    /* v0.20.1 review fix: a later desktop rule (auto 1fr auto) overrode the
+       older 720px query, squeezing the textarea on phones. Stack the
+       composer controls on narrow screens so the textarea keeps its height. */
+    @media (max-width: 720px) {
+      .chat-page .composer-grid {
+        grid-template-columns: 1fr;
+        align-items: stretch;
+      }
+
+      .chat-page .composer-tools {
+        flex-wrap: wrap;
+      }
+
+      .chat-page .composer-grid textarea {
+        min-height: 120px;
+        width: 100%;
+      }
+
+      .chat-page .composer-submit {
+        width: 100%;
+      }
+    }
+
     .import-notices { list-style: none; margin: 10px 0 0; padding: 0; }
     .import-warning { font-size: 12px; }
 
@@ -2788,7 +2824,7 @@ def build_chat_context(question=""):
         "store_data": build_demo_chat_context(question),
         "limitations": [
             "Task lookup uses exact task_id matches only.",
-            "store_data is read-only: the store's imported data when the import is switched on, otherwise fictional sample data.",
+            "Store figures come from the store's imported data (匯入數據) when the import is switched on, otherwise from fictional sample data (示範數據); money is in HK$.",
             "There is no real-time data; figures run to the latest date in the data.",
             "No raw artifact payloads are included.",
             "No environment variables are included.",
@@ -4052,6 +4088,11 @@ def chat_page():
             accept="{{ attachment_accept }}"
           >
 
+          {# v0.20.1: full-width help line above the controls (it used to be
+             a grid item and squeezed the textarea / send button). #}
+          <p class="composer-help chat-data-source" role="note" data-chat-data-source="{{ chat_data_source.kind }}">
+            {% if chat_data_source.kind == 'imported' %}{{ t.chat_data_imported.format(date=chat_data_source.as_of or '—') }}{% else %}{{ t.chat_data_sample }}{% endif %}
+          </p>
           <div class="composer-grid">
             <div class="composer-tools">
             <button
@@ -4087,9 +4128,6 @@ def chat_page():
             </div>
             </div>
 
-            <p class="composer-help" data-chat-data-source="{{ chat_data_source.kind }}">
-              {% if chat_data_source.kind == 'imported' %}{{ t.chat_data_imported.format(date=chat_data_source.as_of or '—') }}{% else %}{{ t.chat_data_sample }}{% endif %}
-            </p>
             <textarea
               id="question"
               name="question"

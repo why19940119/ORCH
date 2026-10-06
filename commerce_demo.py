@@ -56,7 +56,7 @@ TASK_PREFIX = "task_ecom_"
 DRAFT_LOGICAL_PREFIX = "ecom_draft_"
 AUDIT_LOGICAL_NAME = "ecom_audit"
 AUDIT_SCHEMA_VERSION = "1.0"
-DEMO_VERSION = "v0.20.0"
+DEMO_VERSION = "v0.20.1"
 
 MAX_DRAFT_CHARS = 4000
 MAX_NOTE_CHARS = 300
@@ -299,23 +299,21 @@ def sample_sales_ranking(data=None):
         item["won_leads"] += 1
         item["qty"] += int(lead.get("qty") or 0)
         item["est_value_hkd"] += int(lead.get("est_value_hkd") or 0)
-    ranking = [
+    won_leads = [
         {
-            "rank": index + 1,
             "sku": sku,
             "name_zh": (skus.get(sku) or {}).get("name_zh"),
             "name_en": (skus.get(sku) or {}).get("name_en"),
             **item,
         }
-        for index, (sku, item) in enumerate(
-            sorted(won.items(), key=lambda pair: (-pair[1]["est_value_hkd"], pair[0]))
-        )
+        for sku, item in sorted(won.items(), key=lambda pair: (-pair[1]["est_value_hkd"], pair[0]))
     ]
     kpi = data.get("kpi") or {}
     return {
         "per_product_sales_available": False,
         "note": SAMPLE_NO_SALES_NOTE,
-        "won_order_leads_by_sku": ranking,
+        # v0.20.1: not a ranking (no rank field) so it is not read as best-sellers.
+        "won_order_leads_not_sales_ranking": won_leads,
         "weekly_order_counts_all_products": [
             {"week": week, "orders": orders}
             for week, orders in zip(kpi.get("weeks") or [], kpi.get("orders") or [])
@@ -402,7 +400,9 @@ def chat_context(question="", data=None):
         "scope": "read_only_sample_data",
         # v0.20.0: neutral labels only (no file names) - the model may echo them.
         "data_source": "sample_data",
-        "data_label": "SAMPLE data (fictional demo store)",
+        "data_label": "示範數據 / 示范数据 / SAMPLE data (fictional demo store)",
+        "data_label_by_language": dict(SAMPLE_LABELS),
+        "currency": "HK$",
         "as_of_date": None,
         "dates_note": (
             "The sample data has no calendar dates: weekly figures are "
@@ -570,34 +570,176 @@ def _imported_product_matches(question, state, metrics):
     return found
 
 
-def _chat_extra_lines(metrics, as_of, top_n=10):
+IMPORTED_LABELS = {
+    "zh-Hant": "匯入數據",
+    "zh-Hans": "导入数据",
+    "en": "imported data",
+}
+SAMPLE_LABELS = {"zh-Hant": "示範數據", "zh-Hans": "示范数据", "en": "sample data"}
+
+# v0.20.1: the chat summary has its own budget; sections shrink level by
+# level, but the period totals and all-time totals are never dropped.
+CHAT_SUMMARY_BUDGET_CHARS = 6000
+CHAT_SUMMARY_LEVELS = (
+    {"top": 10, "low": 10, "sources": 8, "pages": 8, "weeks": 26, "days": 7, "best": 3},
+    {"top": 5, "low": 5, "sources": 5, "pages": 5, "weeks": 13, "days": 7, "best": 3},
+    {"top": 3, "low": 3, "sources": 3, "pages": 3, "weeks": 8, "days": 3, "best": 2},
+    {"top": 1, "low": 1, "sources": 1, "pages": 1, "weeks": 4, "days": 1, "best": 1},
+)
+
+
+def hkd(value):
+    return f"HK${float(value or 0):,.2f}"
+
+
+def _signed_hkd(value):
+    value = float(value or 0)
+    return ("+" if value >= 0 else "-") + hkd(abs(value))
+
+
+def _pct_text(pct):
+    return "% n/a: previous is 0" if pct is None else f"{pct:+.1f}%"
+
+
+def _period_lines(metrics):
+    lines = []
+    for key in ("7", "30"):
+        item = (metrics.get("period_totals") or {}).get(key)
+        if not item:
+            continue
+        cur, prev, chg = item["current"], item["previous"], item.get("change")
+        starts = item.get("data_starts") or "-"
+        cur_note = "" if cur.get("fully_covered", True) else (
+            f", PARTIAL: data covers only {cur.get('covered_days')} of {key} days "
+            f"(data starts {starts})")
+        lines.append(
+            f"last_{key}_days ({cur['start']} to {cur['end']}{cur_note}): revenue "
+            f"{hkd(cur['revenue'])}, orders {cur['orders']}, units {cur['units']}"
+        )
+        if not prev.get("covered", True):
+            lines.append(
+                f"previous_{key}_days ({prev['start']} to {prev['end']}): NOT COVERED by the "
+                f"data (data starts {starts}); no figures for this period"
+            )
+        else:
+            prev_note = "" if prev.get("fully_covered", True) else (
+                f", PARTIAL: data covers only {prev.get('covered_days')} of {key} days "
+                f"(data starts {starts})")
+            lines.append(
+                f"previous_{key}_days ({prev['start']} to {prev['end']}{prev_note}): revenue "
+                f"{hkd(prev['revenue'])}, orders {prev['orders']}, units {prev['units']}"
+            )
+        if chg:
+            lines.append(
+                f"change_{key}_days vs previous: revenue {_signed_hkd(chg['revenue']['abs'])} "
+                f"({_pct_text(chg['revenue']['pct'])}), orders {chg['orders']['abs']:+d} "
+                f"({_pct_text(chg['orders']['pct'])}), units {chg['units']['abs']:+d} "
+                f"({_pct_text(chg['units']['pct'])})"
+            )
+        else:
+            lines.append(
+                f"change_{key}_days vs previous: NOT AVAILABLE (both periods must be fully "
+                "covered by the data; do not compute one)"
+            )
+    return lines
+
+
+def _chat_summary_lines(metrics, as_of, level):
     q = prompt_text
-    lines = [f"as_of_date (latest order date in the data): {as_of or '-'}"]
-    traffic_period = metrics.get("traffic_period")
-    if traffic_period:
-        lines.append(f"traffic_period: {traffic_period[0]} to {traffic_period[1]}")
-    by_units = sorted(metrics.get("sales_by_sku") or [],
-                      key=lambda row: (-row["units"], -row["revenue"], row["sku"]))
-    lines.append(f"top_skus_by_units (sku|name|units|revenue_hkd), "
-                 f"{min(top_n, len(by_units))} of {len(by_units)}:")
-    for row in by_units[:top_n]:
-        lines.append("- {}|{}|{}|{}".format(q(row["sku"]), q(row["name"], PROMPT_NAME_CHARS),
-                                            row["units"], _money(row["revenue"])))
-    if not by_units:
-        lines.append("- none")
-    latest = metrics.get("latest_day_skus") or []
-    lines.append(f"latest_day {as_of or '-'} skus_by_revenue (sku|name|units|revenue_hkd), "
-                 f"{min(top_n, len(latest))} of {len(latest)}:")
-    for row in latest[:top_n]:
-        lines.append("- {}|{}|{}|{}".format(q(row["sku"]), q(row["name"], PROMPT_NAME_CHARS),
-                                            row["units"], _money(row["revenue"])))
-    if not latest:
-        lines.append("- none")
-    days = (metrics.get("revenue_by_day") or [])[-CHAT_RECENT_DAYS:]
+    totals = metrics.get("totals") or {}
+    period = metrics.get("order_period")
+    lines = [
+        f"數據來源 / data source: 匯入數據 (imported data), as of {as_of or '-'} "
+        "(latest order date; not real-time); revenue = 營業額, money in HK$",
+    ]
+    lines += _period_lines(metrics)
+    lines.append(
+        "all_time_totals{}: revenue {}, orders {}, order_lines {}, units {}, "
+        "average order value {}, pageviews {}, products {}".format(
+            f" ({period[0]} to {period[1]})" if period else "",
+            hkd(totals.get("revenue")), totals.get("orders", 0), totals.get("order_lines", 0),
+            totals.get("units", 0), hkd(totals.get("aov")), totals.get("pageviews", 0),
+            totals.get("products", 0),
+        )
+    )
+    if period:
+        lines.append(
+            f"days_with_orders: {metrics.get('days_with_orders', 0)} of "
+            f"{metrics.get('days_in_order_period', 0)} days in the order period"
+        )
+    best = (metrics.get("best_days") or [])[:level["best"]]
+    worst = (metrics.get("worst_days") or [])[:level["best"]]
+    if best:
+        lines.append("best_days_by_revenue (all time): " + "; ".join(
+            f"{r['date']} {hkd(r['revenue'])} ({r['orders']} orders, {r['units']} units)" for r in best))
+        lines.append("worst_days_by_revenue (all time, days with orders): " + "; ".join(
+            f"{r['date']} {hkd(r['revenue'])} ({r['orders']} orders, {r['units']} units)" for r in worst))
+    latest = (metrics.get("latest_day_skus") or [])[:level["top"]]
+    lines.append(f"latest_day {as_of or '-'} products by revenue (sku|name|units|revenue):")
+    lines += [f"- {q(r['sku'])}|{q(r['name'], PROMPT_NAME_CHARS)}|{r['units']}|{hkd(r['revenue'])}"
+              for r in latest] or ["- none"]
+    sales = metrics.get("sales_by_sku") or []
+    lines.append(f"top_products_by_revenue, all time (sku|name|units|revenue|share), "
+                 f"{min(level['top'], len(sales))} of {len(sales)}:")
+    lines += [f"- {q(r['sku'])}|{q(r['name'], PROMPT_NAME_CHARS)}|{r['units']}|{hkd(r['revenue'])}|{r['share_pct']}%"
+              for r in sales[:level["top"]]] or ["- none"]
+    by_units = sorted(sales, key=lambda r: (-r["units"], -r["revenue"], r["sku"]))
+    lines.append(f"top_products_by_units, all time (sku|name|units|revenue), "
+                 f"{min(level['top'], len(by_units))} of {len(by_units)}:")
+    lines += [f"- {q(r['sku'])}|{q(r['name'], PROMPT_NAME_CHARS)}|{r['units']}|{hkd(r['revenue'])}"
+              for r in by_units[:level["top"]]] or ["- none"]
+    weeks = metrics.get("weekly_series") or metrics.get("revenue_by_week") or []
+    shown = weeks[-level["weeks"]:]
+    header = f"weekly_series (ISO week, covered dates; PARTIAL = week not fully inside the data), {len(shown)} of {len(weeks)}"
+    if len(shown) < len(weeks):
+        header += f" (earliest {len(weeks) - len(shown)} omitted)"
+    lines.append(header + ":")
+    for r in shown:
+        flag = (f", PARTIAL: {r['covered_days']} of 7 days" if r.get("partial") else "")
+        lines.append(f"- {r['week']} ({r.get('covered_start', r['week_start'])} to "
+                     f"{r.get('covered_end', '')}{flag}): {hkd(r['revenue'])}, {r['orders']} orders, "
+                     f"{r['units']} units")
+    days = (metrics.get("revenue_by_day") or [])[-level["days"]:]
     if days:
-        lines.append(f"revenue_by_day (last {len(days)} order dates): " + "; ".join(
-            f"{row['date']} {_money(row['revenue'])} ({row['orders']} orders, {row['units']} units)"
-            for row in days))
+        lines.append(f"recent_order_days (last {len(days)} dates with orders): " + "; ".join(
+            f"{r['date']} {hkd(r['revenue'])} ({r['orders']} orders, {r['units']} units)" for r in days))
+    low = [r for r in metrics.get("stock_cover") or [] if r["status"] in {"out", "low"}]
+    lines.append(f"low_stock (sku|name|stock|units_per_day|days_of_cover|status; low = under "
+                 f"{metrics.get('low_cover_days', 14)} days), {min(level['low'], len(low))} of {len(low)}:")
+    lines += [f"- {q(r['sku'])}|{q(r['name'], PROMPT_NAME_CHARS)}|{r['stock']}|{r['velocity_per_day']}|"
+              f"{'-' if r['days_of_cover'] is None else r['days_of_cover']}|{r['status']}"
+              for r in low[:level["low"]]] or ["- none"]
+    traffic_period = metrics.get("traffic_period")
+    sources = metrics.get("traffic_by_source") or []
+    lines.append("traffic_by_source{} (source|pageviews|share), {} of {}:".format(
+        f" ({traffic_period[0]} to {traffic_period[1]})" if traffic_period else "",
+        min(level["sources"], len(sources)), len(sources)))
+    lines += [f"- {q(r['source'])}|{r['pageviews']}|{r['share_pct']}%"
+              for r in sources[:level["sources"]]] or ["- none"]
+    pages = metrics.get("traffic_by_page") or []
+    lines.append(f"top_pages_by_pageviews (page|pageviews|share), {min(level['pages'], len(pages))} of {len(pages)}:")
+    lines += [f"- {q(r['page'], 120)}|{r['pageviews']}|{r['share_pct']}%"
+              for r in pages[:level["pages"]]] or ["- none"]
+    conversion = metrics.get("conversion")
+    lines.append(
+        "conversion: {}% = {} orders / {} pageviews ({} to {}; orders / pageviews, pageviews are not visitors)".format(
+            conversion["rate_pct"], conversion["orders"], conversion["pageviews"],
+            conversion["start"], conversion["end"])
+        if conversion else "conversion: not available (order and traffic dates do not overlap)")
+    unmatched = metrics.get("unmatched_order_lines") or 0
+    if unmatched:
+        lines.append(f"excluded_order_lines (SKU not in products, left out of every figure): {unmatched}")
+    return lines
+
+
+def chat_summary(metrics, as_of, budget=None):
+    """Fit the summary into the budget, shrinking optional sections."""
+    budget = budget or CHAT_SUMMARY_BUDGET_CHARS
+    lines = []
+    for level in CHAT_SUMMARY_LEVELS:
+        lines = _chat_summary_lines(metrics, as_of, level)
+        if sum(len(line) + 1 for line in lines) <= budget:
+            return lines
     return lines
 
 
@@ -606,13 +748,16 @@ def imported_chat_context(question, state, metrics):
     summary builder as the AI insight drafts, plus unit / latest-day /
     daily rankings for time-relative questions)."""
     as_of = (metrics.get("order_period") or [None, None])[1]
-    digest = commerce_import.metrics_digest(metrics)
-    summary = _metrics_lines(digest) + _chat_extra_lines(metrics, as_of)
+    summary = chat_summary(metrics, as_of)
     sample = chat_context(question)
     return {
         "scope": "read_only_store_data",
         "data_source": "imported_store_data",
-        "data_label": "Imported store data (products, orders and traffic uploaded by the store)",
+        # v0.20.1: the Chinese label is in the data so the model echoes it
+        # (匯入 = data import; never 進口 = goods import).
+        "data_label": "匯入數據 / 导入数据 / imported data (products, orders and traffic uploaded by the store)",
+        "data_label_by_language": dict(IMPORTED_LABELS),
+        "currency": "HK$",
         "as_of_date": as_of,
         "as_of_note": (
             f"Figures are as of {as_of}, the latest order date in the imported data. "

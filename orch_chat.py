@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 
@@ -120,6 +121,96 @@ def validate_chat_answer(answer):
     }
 
 
+# v0.20.1: internal labels and file names must never reach the user. The
+# model is told not to use them; this is the server-side safety net applied
+# to ORCH Context replies before they are displayed or stored.
+# Review fix: only the KNOWN internal names are replaced (never any *.json,
+# URL or ordinary word), and the replacement words follow the UI locale.
+_REPLY_PHRASES = {
+    "imported": {"zh-Hant": "匯入數據", "zh-Hans": "导入数据", "en": "the imported data"},
+    "sample": {"zh-Hant": "示範數據", "zh-Hans": "示范数据", "en": "the sample data"},
+    "data": {"zh-Hant": "數據", "zh-Hans": "数据", "en": "the data"},
+}
+# Internal file names, matched as whole tokens only (a URL such as
+# https://example.com/sample_data.json or output/x.json is left alone).
+_FILE_NAMES = {
+    r"(?:state/)?ecom_import\.json": "imported",
+    r"(?:demo/)?sample_data\.json": "sample",
+    r"(?:state/)?ecom_demo_queue\.json": "data",
+}
+# Context labels (the top-level blocks of REFERENCE_DATA).
+_LABELS = {
+    "imported_store_data": "imported",
+    "sample_data": "sample",
+    "sample_reference": "sample",
+    "REFERENCE_DATA": "data",
+    "ORCH_CONTEXT": "data",
+    "USER_QUESTION": "data",
+    "store_data": "data",
+    "data_source": "data",
+}
+# Internal keys inside the context. snake_case keys cannot be prose, so
+# they are replaced as bare tokens; plain words (summary) only in key forms
+# (label.summary, `summary`, "summary":).
+_SNAKE_KEYS = (
+    "sales_ranking", "as_of_date", "as_of_note", "matching_products",
+    "won_order_leads_not_sales_ranking", "won_order_leads_by_sku",
+    "per_product_sales_available", "weekly_order_counts_all_products",
+    "matching_skus", "matching_inquiries", "matching_leads",
+    "matching_kb_entries", "catalog_summary", "approved_facts",
+    "unresolved_ids", "unmatched_order_lines", "data_label",
+    "data_label_by_language", "task_lookup",
+)
+_WORD_KEYS = ("summary", "scope", "currency", "limitations")
+
+_B = r"(?<![\w./:-])"          # token start: not inside a path, URL or word
+_E = r"(?![\w-])"              # token end
+_IDENT = "|".join(sorted(list(_LABELS) + list(_SNAKE_KEYS) + list(_WORD_KEYS),
+                         key=len, reverse=True))
+
+
+def _kind_of(token):
+    head = token.strip('`"').split(".", 1)[0].rstrip(":")
+    return _LABELS.get(head, "data")
+
+
+_REPLY_PATTERNS = [
+    # file names (optionally backticked or quoted)
+    *[(re.compile(r"[`\"]?" + _B + name + _E + r"[`\"]?", re.I), kind)
+      for name, kind in _FILE_NAMES.items()],
+    # dotted forms: store_data.summary, REFERENCE_DATA.store_data.as_of_date
+    (re.compile(r"`?" + _B + r"(?:" + "|".join(_LABELS) + r")(?:\.(?:" + _IDENT
+                + r"))+" + r"`?" + _E), None),
+    # backticked or JSON-quoted keys: `summary`, "summary":
+    (re.compile(r"`(?:" + _IDENT + r")`|\"(?:" + _IDENT + r")\"(?=\s*:)"), None),
+    # bare labels and snake_case keys (never plain words)
+    (re.compile(_B + r"(?:" + "|".join(sorted(list(_LABELS) + list(_SNAKE_KEYS),
+                                               key=len, reverse=True)) + r")" + _E), None),
+]
+
+
+def _reply_locale(locale):
+    return locale if locale in ("zh-Hant", "zh-Hans", "en") else "en"
+
+
+def sanitize_reply(text, locale=None):
+    """Replace internal labels / keys / data file names with plain words in
+    the UI locale."""
+    if not isinstance(text, str) or not text:
+        return text
+    words = {kind: phrases[_reply_locale(locale)] for kind, phrases in _REPLY_PHRASES.items()}
+    for pattern, kind in _REPLY_PATTERNS:
+        text = pattern.sub(lambda m, k=kind: words[k or _kind_of(m.group(0))], text)
+    return text
+
+
+def sanitize_chat_answer(chat, locale=None):
+    chat = dict(chat)
+    chat["answer"] = sanitize_reply(chat.get("answer", ""), locale)
+    chat["limitations"] = [sanitize_reply(item, locale) for item in chat.get("limitations", [])]
+    return chat
+
+
 GENERAL_SYSTEM_PROMPT = """
 You are ORCH Chat in General Conversation mode — a helpful general
 assistant inside the local ORCH Operator Console.
@@ -173,25 +264,42 @@ reference data (or purely off-topic questions with no ORCH data), say
 you cannot answer from the available data and suggest General
 Conversation mode for non-ORCH questions.
 
-store_data holds the read-only e-commerce data. Check data_source:
+store_data holds the e-commerce data (it can be read, not changed).
+Check data_source:
 - "imported_store_data": the store's own imported products, orders and
   traffic. Answer sales, best-seller, stock and traffic questions from
-  summary (top SKUs by revenue and by units, latest-day ranking, recent
-  days and weeks, low stock and days of cover, traffic by source,
-  conversion, excluded order lines) and matching_products. Call it the
-  store's imported data. Knowledge Base policies, inquiries and leads
-  under sample_reference are still sample data; say so if you use them.
-- "sample_data": fictional demo data. Say the values are sample data.
-  Answer SKU, inquiry, lead and policy questions from matching_skus,
-  matching_inquiries, matching_leads, matching_kb_entries and
-  catalog_summary; only cite approved_facts for product claims; if an
+  summary (last 7 / last 30 days totals with the previous period and the
+  change, all-time totals, best and worst days, latest-day ranking, top
+  SKUs by revenue and by units, the weekly series, recent days, low stock
+  and days of cover, traffic by source, top pages, conversion, excluded
+  order lines) and matching_products. Call it the store's imported data:
+  in Traditional Chinese 「匯入數據」, in Simplified Chinese 「导入数据」.
+  Never call it 進口 or 进口 (that means imported goods). Knowledge Base
+  policies, inquiries and leads under sample_reference are still sample
+  data; say so if you use them.
+- "sample_data": fictional demo data. Say the values are sample data
+  (「示範數據」). Answer SKU, inquiry, lead and policy questions from
+  matching_skus, matching_inquiries, matching_leads, matching_kb_entries
+  and catalog_summary; only cite approved_facts for product claims; if an
   ID is listed in unresolved_ids, say it is not in the sample data. For
   best-seller or sales questions use sales_ranking: if
   per_product_sales_available is false, say clearly that the sample has
-  no per-product sales data, and only mention the won order leads and
-  weekly order counts it lists.
+  no per-product sales data, and only mention the won order leads (they
+  are leads, not a best-seller ranking) and weekly order counts it lists.
 Questions about products, sales, stock, inquiries, leads or policies
-ARE in scope. Never invent numbers that are not in the data.
+ARE in scope.
+
+Numbers: quote only figures that appear in the data, exactly as given.
+The data already contains precomputed totals, period comparisons,
+percentages and rankings; use them and do not do your own arithmetic.
+Never estimate, extrapolate, scale up, average or compute a figure that
+is not given (for example do not derive a 30-day figure from 7 days of
+data). If a metric or period is not in the data, say plainly that the
+data does not include it. Weeks marked PARTIAL cover only the dates
+shown; say so when you cite them. Always write money as HK$ (for
+example HK$1,234.50), never another currency symbol. Revenue is
+營業額 in Traditional Chinese and 营业额 in Simplified Chinese; never
+write 營收 or 营收.
 
 Dates and time-relative questions (today, 今日, 今天, this week, 本週,
 本周, this month, 本月, recently, latest): you do not have real-time
@@ -366,8 +474,15 @@ def locale_instruction(locale):
         "the user's message. If that is unclear (for example only IDs or "
         f"mixed text), use {language}. This also applies to refusals, "
         "scope notes and guidance such as suggesting General Conversation "
-        "mode or the Approval Inbox. Cantonese questions may be answered "
-        "in Cantonese-style Traditional Chinese. Keep the JSON keys and "
+        "mode or the Approval Inbox. Match the user's register: if the "
+        "question is written in Cantonese (for example 係、咩、點、嘅、"
+        "唔、邊個、幾多), reply in Cantonese written in Traditional Chinese, "
+        "consistently colloquial Cantonese from start to finish (use 係、"
+        "嘅、咗、唔、冇、啲、喺、佢哋、而家; do not mix in written-Chinese "
+        "forms such as 是、的、了、沒有、這些、現在); if it is written "
+        "standard Traditional Chinese, Simplified Chinese or English, reply "
+        "in that written language. Revenue is 營業額 (Simplified: 营业额), "
+        "never 營收/营收. Currency is always HK$. Keep the JSON keys and "
         "the value "
         '"none" for execution_authority in English.'
     )
@@ -552,6 +667,9 @@ def ask_orch(
         ),
         "response_id": response_json.get("id"),
         "usage": response_json.get("usage", {}),
-        "chat": validate_chat_answer(parsed_answer),
+        "chat": (
+            sanitize_chat_answer(validate_chat_answer(parsed_answer), locale)
+            if mode == "orch_context" else validate_chat_answer(parsed_answer)
+        ),
         "used_vision": use_vision,
     }

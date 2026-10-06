@@ -195,7 +195,7 @@ USERS_BODY = """
         {% for c in done[:30] %}
           <tr><td>{{ t['adm_kind_' ~ c.kind] }}{% if c.params.role %} → {{ t['role_' ~ c.params.role] }}{% endif %}</td><td>{{ c.target }}</td><td>{{ c.requested_by }}</td>
             <td>{{ c.decided_by }} · {{ c.decided_at_utc|local_time }}{% if c.bootstrap_exception %} <span class="legacy-tag">{{ t.adm_bootstrap_exception }}</span>{% endif %}</td>
-            <td>{{ t['adm_status_' ~ c.status] }}</td></tr>
+            <td>{{ t['adm_status_' ~ c.status] }}{% if c.auto_close_reason %} <span class="composer-help" data-auto-close-reason="{{ c.auto_close_reason }}">· {{ t.get('auth_err_' ~ c.auto_close_reason, c.auto_close_reason) }}</span>{% endif %}</td></tr>
         {% endfor %}
       </table></div>
     {% else %}<div class="empty">{{ t.adm_no_history }}</div>{% endif %}
@@ -253,7 +253,8 @@ def decide_change(change_id, decision):
         abort(404)
     return _run(
         lambda: orch_auth.decide_change(actor, change_id, decision),
-        "change_" + decision,
+        lambda change: ("change_auto_closed" if change.get("status") == "auto_closed"
+                        else "change_" + decision),
         "/admin/users",
     )
 
