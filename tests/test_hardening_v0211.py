@@ -124,5 +124,124 @@ class MigrateCliErrorTests(TempState):
         self.assertEqual(len(proc.stderr.strip().splitlines()), 1, proc.stderr)
 
 
+class RestoreValidatesFirstTests(unittest.TestCase):
+    """Item 4: restore.sh validates the archive before it stops the service
+    or takes the safety backup. Docker is stubbed: a fake ``docker`` on PATH
+    logs every call, so "service untouched" means "docker never called"."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        self.app = Path(tempfile.mkdtemp(prefix="orch_restore_v0211_"))
+        self.addCleanup(shutil.rmtree, self.app, True)
+        (self.app / "scripts").mkdir()
+        for name in ("backup.sh", "restore.sh"):
+            shutil.copy2(ROOT / "scripts" / name, self.app / "scripts" / name)
+        shutil.copy2(ROOT / "orch_db.py", self.app / "orch_db.py")
+        self.state = self.app / "state"
+        self.state.mkdir()
+        orch_db.save(self.state / "task_status.json", {"task_a": {"status": "done"}})
+        (self.app / "uploads").mkdir()
+        (self.app / "uploads" / "a.txt").write_text("upload")
+        self.fakebin = self.app / "fakebin"
+        self.fakebin.mkdir()
+        self.docker_log = self.app / "docker.log"
+        fake = self.fakebin / "docker"
+        fake.write_text(f"#!/bin/sh\necho \"$*\" >> '{self.docker_log}'\nexit 0\n")
+        os.chmod(fake, 0o755)
+
+    def run_restore(self, archive, *flags):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ORCH_")}
+        env.update({"PYTHON": sys.executable,
+                    "PATH": f"{self.fakebin}{os.pathsep}{env.get('PATH', '')}"})
+        return subprocess.run(["bash", "scripts/restore.sh", *flags, str(archive)],
+                              cwd=self.app, env=env, capture_output=True, text=True,
+                              timeout=120)
+
+    def make_tar(self, name, members):
+        import tarfile
+        path = self.app / name
+        with tarfile.open(path, "w:gz") as tar:
+            for arcname, data in members.items():
+                info = tarfile.TarInfo(arcname)
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+        return path
+
+    def good_db_bytes(self):
+        src = self.app / "snap.db"
+        orch_db.backup(self.state / "task_status.json", src)
+        return src.read_bytes()
+
+    def bad_archives(self):
+        garbage = self.app / "garbage.tar.gz"
+        garbage.write_bytes(b"this is not a gzip file at all")
+        good = self.make_tar("good.tar.gz", {"./state/.snapshot/orch.db": self.good_db_bytes(),
+                                             "./uploads/a.txt": b"x"})
+        truncated = self.app / "truncated.tar.gz"
+        truncated.write_bytes(good.read_bytes()[:-40])
+        return {
+            "garbage": garbage,
+            "truncated": truncated,
+            "no snapshot": self.make_tar("nosnap.tar.gz", {"./uploads/a.txt": b"x"}),
+            "unsafe path": self.make_tar("unsafe.tar.gz", {
+                "./state/.snapshot/orch.db": self.good_db_bytes(),
+                "./state/../../escape.txt": b"x"}),
+            "foreign dir": self.make_tar("foreign.tar.gz", {
+                "./state/.snapshot/orch.db": self.good_db_bytes(), "./etc/passwd": b"x"}),
+            "not sqlite": self.make_tar("notsqlite.tar.gz", {
+                "./state/.snapshot/orch.db": b"definitely not a database" * 40}),
+            "corrupt sqlite": self.make_tar("corrupt.tar.gz", {
+                "./state/.snapshot/orch.db": b"SQLite format 3\x00" + b"\xff" * 4000}),
+        }
+
+    def assert_untouched(self, result, label):
+        self.assertNotEqual(result.returncode, 0, label)
+        self.assertIn("RESTORE ABORTED", result.stderr, label)
+        self.assertIn("no safety backup was taken", result.stderr, label)
+        self.assertNotIn("Taking a safety backup", result.stdout, label)
+        self.assertFalse(self.docker_log.exists(),
+                         f"{label}: docker was called: "
+                         f"{self.docker_log.read_text() if self.docker_log.exists() else ''}")
+        self.assertFalse((self.app / "backups").exists(), label)
+        self.assertEqual(orch_db.load(self.state / "task_status.json"),
+                         {"task_a": {"status": "done"}}, label)
+        self.assertEqual((self.app / "uploads" / "a.txt").read_text(), "upload", label)
+
+    def test_bad_archive_docker_mode_never_stops_service_or_backs_up(self):
+        for label, archive in self.bad_archives().items():
+            with self.subTest(label):
+                self.assert_untouched(self.run_restore(archive), label)
+
+    def test_bad_archive_local_mode_makes_no_safety_backup(self):
+        for label, archive in self.bad_archives().items():
+            with self.subTest(label):
+                self.assert_untouched(self.run_restore(archive, "--local"), label)
+
+    def test_good_archive_passes_validation_then_backs_up_then_stops(self):
+        archive = self.make_tar("ok.tar.gz", {"./state/.snapshot/orch.db": self.good_db_bytes(),
+                                              "./uploads/a.txt": b"restored"})
+        result = self.run_restore(archive)      # fake docker: the backup step fails
+        self.assertIn("Validating", result.stdout)
+        self.assertIn("Taking a safety backup", result.stdout)
+        self.assertNotIn("RESTORE ABORTED", result.stderr)
+        calls = self.docker_log.read_text().splitlines()
+        self.assertTrue(calls[0].startswith("compose run"), calls)   # the safety backup
+        result = self.run_restore(archive, "--local")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.app / "uploads" / "a.txt").read_text(), "restored")
+        self.assertEqual(len(list((self.app / "backups" / "pre-restore").iterdir())), 1)
+
+    def test_script_order(self):
+        text = (ROOT / "scripts" / "restore.sh").read_text(encoding="utf-8")
+        body = text[text.index('cd "$ROOT"\necho "Validating'):]
+        order = [body.index("validate_archive"), body.index("Taking a safety backup"),
+                 body.index('scripts/backup.sh"'), body.index("docker compose stop orch")]
+        self.assertEqual(order, sorted(order))
+        for check in ("gzip -t", "tar -tzf", './state/.snapshot/orch.db',
+                      "SQLite format 3", "PRAGMA integrity_check"):
+            self.assertIn(check, text)
+
+
 if __name__ == "__main__":
     unittest.main()

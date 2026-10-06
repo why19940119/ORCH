@@ -3,6 +3,11 @@
 # state/ uploads/ data/ artifacts/ (and output/ in Docker); a safety backup
 # is taken first (backups/pre-restore/).
 #
+# The archive is validated on the host FIRST (gzip integrity, tar listing,
+# expected members, safe paths, SQLite header + integrity_check of the DB
+# snapshot). A bad archive aborts before the service is stopped and before
+# the safety backup is taken, so nothing changes.
+#
 #   scripts/restore.sh backups/orch-backup-XXXX.tar.gz            # Docker
 #   scripts/restore.sh --local backups/orch-backup-XXXX.tar.gz    # plain checkout
 #
@@ -42,12 +47,55 @@ rm -rf state/.snapshot
 chmod 600 state/orch.db state/secret_key 2>/dev/null || true
 python orch_db.py --state-dir state check'
 
+fail() {
+  echo "RESTORE ABORTED: $1." >&2
+  echo "Nothing was changed: the service was not stopped and no safety backup was taken." >&2
+  exit 1
+}
+
+PY="${PYTHON:-python3}"
+[[ -x "$ROOT/.venv/bin/python" ]] && PY="$ROOT/.venv/bin/python"
+
+# Host-side validation, before anything is stopped or backed up.
+validate_archive() {
+  CHECK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/orch-restore-check.XXXXXX")"
+  trap 'rm -rf "$CHECK_DIR"' EXIT
+  local list="$CHECK_DIR/list" db="$CHECK_DIR/orch.db"
+  # gzip exit 2 is only a warning (bsdtar pads its stream with zero blocks).
+  gzip -t < "$ARCHIVE" 2>/dev/null || [[ $? -eq 2 ]] \
+    || fail "$ARCHIVE is not a valid gzip file (corrupt or truncated)"
+  tar -tzf "$ARCHIVE" > "$list" 2>/dev/null || fail "$ARCHIVE is not a readable tar archive"
+  grep -x "./state/.snapshot/orch.db" "$list" >/dev/null \
+    || fail "not an ORCH backup (no state/.snapshot/orch.db)"
+  grep -Ev '^\./((state|uploads|data|artifacts|output)(/.*)?)?$' "$list" > "$CHECK_DIR/bad" || true
+  grep -E '(^|/)\.\.(/|$)' "$list" >> "$CHECK_DIR/bad" || true
+  if [[ -s "$CHECK_DIR/bad" ]]; then
+    fail "unexpected or unsafe path in the archive: $(head -n 1 "$CHECK_DIR/bad")"
+  fi
+  tar -xzOf "$ARCHIVE" ./state/.snapshot/orch.db > "$db" 2>/dev/null \
+    || fail "cannot extract state/.snapshot/orch.db"
+  [[ "$(head -c 15 "$db")" == "SQLite format 3" ]] \
+    || fail "state/.snapshot/orch.db is not a SQLite database"
+  if command -v "$PY" >/dev/null 2>&1; then
+    "$PY" - "$db" <<'PY' || fail "state/.snapshot/orch.db failed PRAGMA integrity_check"
+import sqlite3, sys
+try:
+    ok = sqlite3.connect(sys.argv[1]).execute("PRAGMA integrity_check").fetchone()[0]
+except sqlite3.Error:
+    sys.exit(1)
+sys.exit(0 if ok == "ok" else 1)
+PY
+  fi
+  rm -rf "$CHECK_DIR"
+  trap - EXIT
+}
+
 cd "$ROOT"
+echo "Validating $ARCHIVE..."
+validate_archive
 echo "Taking a safety backup of the current data first..."
 if [[ "$MODE" == local ]]; then
   BACKUP_DIR="$ROOT/backups/pre-restore" "$ROOT/scripts/backup.sh" --local
-  PY="${PYTHON:-python3}"
-  [[ -x "$ROOT/.venv/bin/python" ]] && PY="$ROOT/.venv/bin/python"
   DIRS="$DIRS" PATH="$(dirname "$PY"):$PATH" bash -c "$INNER" < "$ARCHIVE"
 else
   command -v docker >/dev/null || { echo "docker not found (use --local)" >&2; exit 1; }
