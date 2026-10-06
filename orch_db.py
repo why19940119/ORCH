@@ -269,16 +269,34 @@ def _warn_refused(db_file, exc):
     LOG.error("%s", exc)
 
 
+def _refusal(directory, files):
+    names = ", ".join(path.name for path in files)
+    return MigrationRefused(
+        f"REFUSED to import legacy JSON ({names}) into {db_path_for(directory)}: "
+        "the database already holds data, so the files were left untouched and "
+        "NOT imported. Move them away, or run `python orch_db.py --state-dir "
+        f"{directory} migrate --force` (backs up orch.db first) to import them "
+        "on purpose.")
+
+
 def _open(db_file):
     created = not db_file.exists()
     conn = _connect(db_file)
     try:
         _ensure_schema(conn)
-        if legacy_files(db_file.parent):
-            try:
-                _migrate_locked(conn, db_file.parent)
-            except MigrationRefused as exc:
-                _warn_refused(db_file, exc)
+        files = legacy_files(db_file.parent)
+        if files:
+            # v0.21.1: decide a refusal with a plain read (WAL reader, no
+            # BEGIN IMMEDIATE), so a stray JSON next to a DB with data never
+            # makes every read queue for the write lock. Only an empty DB
+            # takes the lock (and re-checks under it) to migrate.
+            if not _is_empty(conn):
+                _warn_refused(db_file, _refusal(db_file.parent, files))
+            else:
+                try:
+                    _migrate_locked(conn, db_file.parent)
+                except MigrationRefused as exc:     # filled in meanwhile
+                    _warn_refused(db_file, exc)
     except BaseException:
         conn.close()
         if created:
@@ -646,13 +664,7 @@ def _migrate_locked(conn, directory, force=False):
         db_backup = None
         if not _is_empty(conn):
             if not force:
-                names = ", ".join(path.name for path in files)
-                raise MigrationRefused(
-                    f"REFUSED to import legacy JSON ({names}) into {db_path_for(directory)}: "
-                    "the database already holds data, so the files were left untouched and "
-                    "NOT imported. Move them away, or run `python orch_db.py --state-dir "
-                    f"{directory} migrate --force` (backs up orch.db first) to import them "
-                    "on purpose.")
+                raise _refusal(directory, files)
             db_backup = _db_backup_locked(conn, directory)
         backup = _backup_dir(directory)
         for path in files:
@@ -734,11 +746,24 @@ def migrate(directory, force=False):
 
 def auto_migrate(directory):
     """Startup hook: migrate into an empty DB, otherwise log the refusal
-    loudly and keep serving from the DB (the files stay untouched)."""
+    loudly and keep serving from the DB (the files stay untouched). The
+    refusal is decided read-only (no write lock)."""
+    directory = Path(directory)
+    db_file = db_path_for(directory)
+    files = legacy_files(directory)
+    if files and db_file.exists():
+        conn = _connect(db_file)
+        try:
+            _ensure_schema(conn)
+            if not _is_empty(conn):
+                _warn_refused(db_file, _refusal(directory, files))
+                return []
+        finally:
+            conn.close()
     try:
         return migrate(directory)
     except MigrationRefused as exc:
-        _warn_refused(db_path_for(Path(directory)), exc)
+        _warn_refused(db_file, exc)
         return []
 
 
