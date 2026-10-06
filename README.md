@@ -82,7 +82,18 @@ v0.21.0     SQLite state + Docker: all mutable state in state/orch.db (WAL,
             reverse-proxy (HTTPS) option, zh-Hant docs in docs/;
             phones (<=720px): compact top bar (ORCH, current page, ☰ 選單)
             with nav / language / 登出 in a collapsible menu that works
-            without JavaScript (desktop unchanged)
+            without JavaScript (desktop unchanged);
+            review fixes: legacy JSON auto-imported only into an EMPTY DB
+            (stray files refused + logged; `migrate --force` backs up
+            orch.db first, upserts, dedupes logs), orch.db / -wal / -shm /
+            exports / backups 0600 from creation, no audit record for a
+            decision that rolled back (/audit lists committed ones only),
+            /setup token required on exposed installs (generated + logged
+            if unset), X-Forwarded-* only from ORCH_TRUSTED_PROXY peers,
+            Docker backup / restore streamed (works as uid 10001 on Linux,
+            archives 0600, snapshot cleaned up), task_queue.json + output/
+            persisted in volumes, smoke.sh isolated from a real deployment,
+            app code read-only for the runtime user
 ```
 
 ## Core Architecture
