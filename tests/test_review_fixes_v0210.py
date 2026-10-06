@@ -219,6 +219,16 @@ class DockerPersistenceTests(unittest.TestCase):
         self.assertIsNone(deploy_config.seed_task_queue(self.ROOT))   # this checkout
 
 
+    def test_app_code_not_writable_by_runtime_user(self):
+        text = (self.ROOT / "Dockerfile").read_text(encoding="utf-8")
+        self.assertRegex(text, r"(?m)^COPY \. \.$")
+        self.assertNotIn("--chown", text)
+        self.assertIn("chown -R orch:orch state uploads data artifacts output", text)
+        self.assertNotIn("rm -f .env", text)
+        ignore = (self.ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        self.assertIn(".env", ignore)
+
+
 class SmokeIsolationTests(unittest.TestCase):
     """Review fix 8: smoke never collides with a real deployment."""
 

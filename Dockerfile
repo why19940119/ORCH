@@ -20,7 +20,10 @@ RUN groupadd --system --gid 10001 orch \
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
-COPY --chown=orch:orch . .
+# App code stays owned by root (read-only for the runtime user); only the
+# data directories below are owned by orch. .env never enters the build
+# context (.dockerignore).
+COPY . .
 
 # Volume mount points (owned by the app user so a fresh named volume is writable).
 # task_queue.json (tasks added at runtime, e.g. mini_orch.py add-task) lives in
@@ -29,8 +32,7 @@ COPY --chown=orch:orch . .
 RUN mkdir -p state uploads data/import artifacts output defaults \
     && mv task_queue.json defaults/task_queue.json \
     && ln -s state/task_queue.json task_queue.json \
-    && chown -R orch:orch state uploads data artifacts output \
-    && rm -f .env
+    && chown -R orch:orch state uploads data artifacts output
 
 USER orch
 
